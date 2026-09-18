@@ -4,3 +4,6 @@ shots/
 .DS_Store
 *.log
 .vite/
+
+# scheduler lockfile, not project state
+.claude/scheduled_tasks.lock
