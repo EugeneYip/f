@@ -20,7 +20,7 @@
  *      staircase that the grid bakes into the tangential direction.
  */
 
-const TILE = 8;          // grid points per axis in a cull tile
+const TILE = 4;          // grid points per axis in the leaf cull tile
 const SQRT3 = Math.sqrt(3);
 
 /** 12 cube edges as corner-index pairs; corner bits are (x, y<<1, z<<2). */
@@ -46,41 +46,56 @@ for (let c = 0; c < 8; c++) {
 export function sampleGrid(field, min, h, dims) {
   const [nx, ny, nz] = dims;                // number of grid POINTS
   const g = new Float32Array(nx * ny * nz);
-  const halfDiag = 0.5 * (TILE - 1) * h * SQRT3;
   let evals = 0, culled = 0;
 
-  for (let tz = 0; tz < nz; tz += TILE) {
-    const ez = Math.min(tz + TILE, nz);
-    for (let ty = 0; ty < ny; ty += TILE) {
-      const ey = Math.min(ty + TILE, ny);
-      for (let tx = 0; tx < nx; tx += TILE) {
-        const ex = Math.min(tx + TILE, nx);
-        const cx = min[0] + (tx + (ex - tx - 1) * 0.5) * h;
-        const cy = min[1] + (ty + (ey - ty - 1) * 0.5) * h;
-        const cz = min[2] + (tz + (ez - tz - 1) * 0.5) * h;
-        const dc = field.distance(cx, cy, cz);
-        if (Math.abs(dc) > halfDiag + 1e-6) {
-          const fill = dc > 0 ? dc - halfDiag : dc + halfDiag;
-          for (let k = tz; k < ez; k++) {
-            for (let j = ty; j < ey; j++) {
-              let o = tx + nx * (j + ny * k);
-              for (let i = tx; i < ex; i++) g[o++] = fill;
-            }
-          }
-          culled += (ex - tx) * (ey - ty) * (ez - tz);
-          continue;
-        }
-        for (let k = tz; k < ez; k++) {
-          const pz = min[2] + k * h;
-          for (let j = ty; j < ey; j++) {
-            const py = min[1] + j * h;
-            let o = tx + nx * (j + ny * k);
-            for (let i = tx; i < ex; i++) {
-              g[o++] = field.distance(min[0] + i * h, py, pz);
-            }
-            evals += ex - tx;
+  const fill = (x0, x1, y0, y1, z0, z1, v) => {
+    for (let k = z0; k < z1; k++) {
+      for (let j = y0; j < y1; j++) {
+        let o = x0 + nx * (j + ny * k);
+        for (let i = x0; i < x1; i++) g[o++] = v;
+      }
+    }
+    culled += (x1 - x0) * (y1 - y0) * (z1 - z0);
+  };
+
+  const visit = (x0, x1, y0, y1, z0, z1, span) => {
+    const cx = min[0] + (x0 + (x1 - x0 - 1) * 0.5) * h;
+    const cy = min[1] + (y0 + (y1 - y0 - 1) * 0.5) * h;
+    const cz = min[2] + (z0 + (z1 - z0 - 1) * 0.5) * h;
+    const rad = 0.5 * h * SQRT3 * Math.max(x1 - x0, y1 - y0, z1 - z0);
+    const dc = field.distance(cx, cy, cz);
+    if (Math.abs(dc) > rad + 1e-6) {
+      fill(x0, x1, y0, y1, z0, z1, dc > 0 ? dc - rad : dc + rad);
+      return;
+    }
+    if (span > TILE) {
+      const hs = span >> 1;
+      for (let k = z0; k < z1; k += hs) {
+        for (let j = y0; j < y1; j += hs) {
+          for (let i = x0; i < x1; i += hs) {
+            visit(i, Math.min(i + hs, x1), j, Math.min(j + hs, y1), k, Math.min(k + hs, z1), hs);
           }
         }
+      }
+      return;
+    }
+    for (let k = z0; k < z1; k++) {
+      const pz = min[2] + k * h;
+      for (let j = y0; j < y1; j++) {
+        const py = min[1] + j * h;
+        let o = x0 + nx * (j + ny * k);
+        for (let i = x0; i < x1; i++) g[o++] = field.distance(min[0] + i * h, py, pz);
+        evals += x1 - x0;
+      }
+    }
+  };
+
+  const ROOT = TILE * 8;
+  for (let k = 0; k < nz; k += ROOT) {
+    for (let j = 0; j < ny; j += ROOT) {
+      for (let i = 0; i < nx; i += ROOT) {
+        visit(i, Math.min(i + ROOT, nx), j, Math.min(j + ROOT, ny),
+          k, Math.min(k + ROOT, nz), ROOT);
       }
     }
   }
@@ -234,7 +249,7 @@ export function relax(field, pos, adj, h, iterations = 3, lambda = 0.55) {
     for (let v = 0; v < nv; v++) {
       const o = v * 3;
       p[0] = tmp[o]; p[1] = tmp[o + 1]; p[2] = tmp[o + 2];
-      field.project(p, gradH, 2, h * 0.9);
+      field.project(p, gradH, 1, h * 0.9);
       // Leash to the original dual vertex.
       let dx = p[0] - orig[o], dy = p[1] - orig[o + 1], dz = p[2] - orig[o + 2];
       const l = Math.hypot(dx, dy, dz);
@@ -246,7 +261,7 @@ export function relax(field, pos, adj, h, iterations = 3, lambda = 0.55) {
   for (let v = 0; v < nv; v++) {
     const o = v * 3;
     p[0] = pos[o]; p[1] = pos[o + 1]; p[2] = pos[o + 2];
-    field.project(p, gradH, 3, h * 0.5);
+    field.project(p, gradH, 2, h * 0.5);
     pos[o] = p[0]; pos[o + 1] = p[1]; pos[o + 2] = p[2];
   }
   return pos;

@@ -37,8 +37,8 @@
 // ---------------------------------------------------------------------------
 // primitive memory layout
 // ---------------------------------------------------------------------------
-// ox oy oz | m00 m01 m02 m10 m11 m12 m20 m21 m22 | lbx lby lbz | ra rb | lip k op
-const STRIDE = 20;
+// ox oy oz | m00..m22 | lbx lby lbz | ra rb | lip k op | bbox min[3] max[3]
+const STRIDE = 26;
 const P_O = 0;   // 3 — local-frame origin (== world segment start `a`)
 const P_M = 3;   // 9 — row-major 3x3, q = M * (p - o)
 const P_LB = 12; // 3 — segment end in local space (start is the origin)
@@ -47,6 +47,8 @@ const P_RB = 16;
 const P_LIP = 17; // min(squash) — converts local distance to world distance
 const P_K = 18;   // smooth-blend radius
 const P_OP = 19;  // +1 union, -1 subtract
+const P_MIN = 20; // 3 — world bbox of the swept sphere, for the early-out
+const P_MAX = 23; // 3
 
 /** Polynomial smooth minimum (C1). `k` is the blend width in metres. */
 export function smin(a, b, k) {
@@ -205,7 +207,7 @@ export class Field {
   }
 
   /** Flatten to typed arrays + build the block accelerator. Idempotent. */
-  compile(blockSize = 0.05) {
+  compile(blockSize = 0.035) {
     // Subtractions must run after every union.
     this.prims.sort((a, b) => b.op - a.op);
     this.nUnion = this.prims.filter((p) => p.op > 0).length;
@@ -219,6 +221,7 @@ export class Field {
       d[o + P_LB] = p.lb[0]; d[o + P_LB + 1] = p.lb[1]; d[o + P_LB + 2] = p.lb[2];
       d[o + P_RA] = p.ra; d[o + P_RB] = p.rb;
       d[o + P_LIP] = p.lip; d[o + P_K] = p.k; d[o + P_OP] = p.op;
+      for (let c = 0; c < 3; c++) { d[o + P_MIN + c] = p.min[c]; d[o + P_MAX + c] = p.max[c]; }
     }
     this.data = d;
     this.count = n;
@@ -244,7 +247,6 @@ export class Field {
     const bmax = [hi[0] + pad, hi[1] + pad, hi[2] + pad];
     const dim = [0, 0, 0];
     for (let c = 0; c < 3; c++) dim[c] = Math.max(1, Math.ceil((bmax[c] - bmin[c]) / blockSize));
-    const diag = blockSize * Math.sqrt(3);
 
     const starts = new Int32Array(dim[0] * dim[1] * dim[2] + 1);
     const lists = [];
@@ -257,10 +259,12 @@ export class Field {
           const c = [bmin[0] + (bx + 0.5) * blockSize, bmin[1] + (by + 0.5) * blockSize, bmin[2] + (bz + 0.5) * blockSize];
           for (let i = 0; i < n; i++) {
             const p = this.prims[i];
-            const margin = p.k * 1.5 + diag * 0.5 + 0.012;
+            // Box-vs-box already accounts for the block's extent, so adding
+            // half its diagonal on top double-counted and pulled 2-3x more
+            // primitives into every block than smin can possibly need.
+            const half = blockSize * 0.5 + p.k * 1.5 + 0.012;
             let hit = true;
             for (let a2 = 0; a2 < 3; a2++) {
-              const half = blockSize * 0.5 + margin;
               if (c[a2] + half < p.min[a2] || c[a2] - half > p.max[a2]) { hit = false; break; }
             }
             if (hit) { lists.push(i); cursor++; }
@@ -300,6 +304,26 @@ export class Field {
   }
 
   /**
+   * Conservative distance for a query whose block holds no primitives.
+   *
+   * The block builder only drops a primitive once it is provably further away
+   * than its blend radius, so "empty block" means the surface is at least the
+   * smallest margin term (12 mm) away. Returning the larger of that and the
+   * distance to the whole-field AABB keeps the field Lipschitz-1, which is
+   * exactly what sphere tracing in `raycast`/`project` depends on. Returning
+   * a sentinel here instead (as an earlier revision did) made `raycast` step
+   * straight past the animal.
+   */
+  _emptyDistance(x, y, z) {
+    const lo = this.bounds.min, hi = this.bounds.max;
+    const dx = Math.max(lo[0] - x, 0, x - hi[0]);
+    const dy = Math.max(lo[1] - y, 0, y - hi[1]);
+    const dz = Math.max(lo[2] - z, 0, z - hi[2]);
+    const outside = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return outside > 0.012 ? outside : 0.012;
+  }
+
+  /**
    * Signed distance to the fox skin. The hot path: called ~500k times during
    * meshing, so it is allocation-free and block-culled.
    */
@@ -307,20 +331,57 @@ export class Field {
     const b = this._blocks;
     const bi = this._blockIndex(x, y, z);
     const s = b.starts[bi], e = b.starts[bi + 1];
+    if (s === e) return this._emptyDistance(x, y, z);
     const list = b.list, d = this.data;
     let acc = 1e9;
     for (let t = s; t < e; t++) {
       const i = list[t];
       const o = i * STRIDE;
-      const di = this.primDistance(i, x, y, z);
       const k = d[o + P_K];
-      if (d[o + P_OP] > 0) {
+      const union = d[o + P_OP] > 0;
+
+      // Cheap reject: a union primitive whose bounding box is already further
+      // than (acc + k) cannot change the smooth minimum. ~12 flops against
+      // ~60 for the full round-cone evaluation.
+      if (union && acc < 1e8) {
+        const lim = acc + k;
+        if (lim > 0) {
+          let bx = d[o + P_MIN] - x; const bx2 = x - d[o + P_MAX];
+          if (bx2 > bx) bx = bx2; if (bx < 0) bx = 0;
+          let by = d[o + P_MIN + 1] - y; const by2 = y - d[o + P_MAX + 1];
+          if (by2 > by) by = by2; if (by < 0) by = 0;
+          let bz = d[o + P_MIN + 2] - z; const bz2 = z - d[o + P_MAX + 2];
+          if (bz2 > bz) bz = bz2; if (bz < 0) bz = 0;
+          if (bx * bx + by * by + bz * bz > lim * lim) continue;
+        }
+      }
+
+      const di = this.primDistance(i, x, y, z);
+      if (union) {
         acc = di < acc - k ? di : (di > acc + k ? acc : smin(acc, di, k));
       } else {
         acc = ssub(acc, di, k);
       }
     }
-    return acc;
+    // A block holding only subtractions can leave acc untouched.
+    return acc > 1e8 ? this._emptyDistance(x, y, z) : acc;
+  }
+
+  /**
+   * Tetrahedral 4-tap gradient — 4 field evaluations instead of 6. Used by the
+   * Newton projection in the mesher, where it runs ~500k times; the final
+   * shading normals still use the more accurate central difference.
+   */
+  gradient4(x, y, z, h, out) {
+    const d1 = this.distance(x + h, y - h, z - h);
+    const d2 = this.distance(x - h, y - h, z + h);
+    const d3 = this.distance(x - h, y + h, z - h);
+    const d4 = this.distance(x + h, y + h, z + h);
+    const inv = 1 / (4 * h);          // the tetrahedral basis is 4h long
+    out[0] = (d1 - d2 - d3 + d4) * inv;
+    out[1] = (-d1 - d2 + d3 + d4) * inv;
+    out[2] = (-d1 + d2 - d3 + d4) * inv;
+    return out;
   }
 
   /** Central-difference gradient. Not normalised. */
@@ -347,11 +408,11 @@ export class Field {
    * The field is Lipschitz-1 so this converges fast and monotonically.
    */
   project(p, h, steps = 2, maxStep = 1e9) {
-    const g = [0, 0, 0];
+    const g = this._projG || (this._projG = [0, 0, 0]);
     for (let s = 0; s < steps; s++) {
       const d = this.distance(p[0], p[1], p[2]);
       if (Math.abs(d) < 1e-6) break;
-      this.gradient(p[0], p[1], p[2], h, g);
+      this.gradient4(p[0], p[1], p[2], h, g);
       const g2 = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
       if (g2 < 1e-14) break;
       let t = d / g2;
@@ -396,9 +457,18 @@ export class Field {
   sample(x, y, z, sigma, out) {
     const prims = this.prims;
     const n = this.nUnion;
-    let dmin = 1e9, argmin = 0;
+    const blk = this._blocks;
+    const bi = this._blockIndex(x, y, z);
+    const bs = blk.starts[bi], be = blk.starts[bi + 1];
+    const near = this._nearScratch || (this._nearScratch = new Int32Array(prims.length));
     const ds = this._dsScratch || (this._dsScratch = new Float64Array(prims.length));
-    for (let i = 0; i < n; i++) {
+    let nn = 0;
+    for (let t = bs; t < be; t++) { const i = blk.list[t]; if (i < n) near[nn++] = i; }
+    if (nn === 0) for (let i = 0; i < n; i++) near[nn++] = i;
+
+    let dmin = 1e9, argmin = near[0];
+    for (let k = 0; k < nn; k++) {
+      const i = near[k];
       const di = this.primDistance(i, x, y, z);
       ds[i] = di;
       if (di < dmin) { dmin = di; argmin = i; }
@@ -408,7 +478,8 @@ export class Field {
     let fx = 0, fy = 0, fz = 0;
     let cr = 0, cg = 0, cb = 0;
     const inv = 1 / Math.max(sigma, 1e-4);
-    for (let i = 0; i < n; i++) {
+    for (let k = 0; k < nn; k++) {
+      const i = near[k];
       const t = (ds[i] - dmin) * inv;
       if (t > 6) continue;                   // exp(-6) — negligible
       const w = Math.exp(-t * t * 0.5);      // gaussian in distance excess

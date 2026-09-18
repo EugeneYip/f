@@ -8,28 +8,47 @@ import * as THREE from 'three';
  * frame. Do not change pose names without updating the review baseline.
  */
 export const POSES = {
+  // Authored against MEASURED anatomy (tools/_probe.mjs), not guesswork:
+  //   eyeR (0.027, 0.318, 0.222) · nose (0.001, 0.293, 0.274)
+  //   earTip y 0.382 · withers y ~0.28 · pawF z 0.093 · pawR z -0.143
+  //   tailTip (0.007, 0.055, -0.501) · bbox 0.777 L x 0.158 W x 0.383 H
+  // Re-derive these if the anatomy changes; a pose that misses its subject
+  // silently wastes an entire review round.
+
   // The money shot: 3/4 front, eye level, backlit from camera-left.
-  hero:        { pos: [1.42, 0.30, 1.72], target: [0.02, 0.26, 0.04], fov: 40, focus: 2.25 },
-  // Face. Tests eyes, nose, whisker pads, muzzle fur length gradient.
-  portrait:    { pos: [0.60, 0.38, 0.86], target: [0.015, 0.315, 0.20], fov: 32, focus: 0.95 },
-  // Extreme close on the eye. Tests iris parallax, caustic, lashes, lids.
-  macro_eye:   { pos: [0.235, 0.355, 0.385], target: [0.045, 0.325, 0.215], fov: 20, focus: 0.29 },
-  // Pure backlight profile. THE fur test — rim translucency and silhouette break-up.
-  silhouette:  { pos: [-1.62, 0.26, 1.18], target: [0.0, 0.25, 0.0], fov: 42, focus: 2.05 },
-  // Side elevation. Anatomy/proportion audit.
-  profile:     { pos: [2.30, 0.29, 0.02], target: [0.0, 0.255, 0.02], fov: 36, focus: 2.3 },
-  // Rear three-quarter. Tail volume and flow.
-  tail:        { pos: [-1.22, 0.42, -1.48], target: [-0.05, 0.24, -0.16], fov: 40, focus: 1.95 },
-  // Ground-level. Paw contact, snow compression, footprints.
-  paws:        { pos: [0.95, 0.055, 1.12], target: [0.04, 0.085, 0.02], fov: 34, focus: 1.4 },
+  // Target biased +x so the animal sits left of centre with space to look into.
+  hero:        { pos: [0.904, 0.326, 0.854], target: [0.100, 0.205, 0.020], fov: 40, focus: 1.25 },
+
+  // Head fills ~70% of frame height. Long-ish lens to stay flattering.
+  portrait:    { pos: [0.364, 0.355, 0.610], target: [0.005, 0.310, 0.215], fov: 26, focus: 0.55 },
+
+  // Extreme close on the RIGHT eye — iris parallax, corneal highlight, lids, lashes.
+  macro_eye:   { pos: [0.105, 0.339, 0.324], target: [0.027, 0.318, 0.222], fov: 18, focus: 0.13 },
+
+  // Camera looks almost straight into the sun with the fox between: the
+  // definitive fur test for rim translucency and silhouette break-up.
+  silhouette:  { pos: [0.720, 0.260, 1.420], target: [0.000, 0.210, 0.000], fov: 38, focus: 1.61 },
+
+  // Side elevation on a long lens. Proportion and joint-placement audit.
+  profile:     { pos: [1.900, 0.220, -0.020], target: [0.000, 0.200, -0.020], fov: 24, focus: 1.90 },
+
+  // Rear three-quarter. Tail volume, flow and carriage.
+  tail:        { pos: [-0.716, 0.496, -1.181], target: [0.000, 0.160, -0.300], fov: 38, focus: 1.15 },
+
+  // Ground level at the front paws. Contact, compression, footprints.
+  paws:        { pos: [0.620, 0.055, 0.660], target: [0.000, 0.055, 0.020], fov: 32, focus: 0.89 },
+
   // Environment composition, fox small in frame.
-  wide:        { pos: [5.4, 1.35, 6.2], target: [0.1, 0.30, -0.4], fov: 46, focus: 8.2 },
+  wide:        { pos: [4.200, 1.050, 4.900], target: [0.150, 0.300, -0.300], fov: 44, focus: 6.40 },
+
   // Sky / aurora / atmosphere.
-  aurora:      { pos: [3.1, 0.62, 3.6], target: [-0.6, 2.30, -2.2], fov: 62, focus: 14 },
-  // Top-down-ish. Terrain shading and drift structure.
-  terrain:     { pos: [2.6, 2.05, 2.9], target: [0.0, 0.14, 0.0], fov: 44, focus: 4.3 },
-  // Back of the head / ruff & ear interior.
-  nape:        { pos: [-0.52, 0.56, -0.70], target: [0.0, 0.30, 0.06], fov: 38, focus: 0.98 },
+  aurora:      { pos: [2.600, 0.550, 3.000], target: [-0.500, 2.400, -2.000], fov: 60, focus: 12.0 },
+
+  // Elevated. Terrain shading, sastrugi structure, aerial perspective.
+  terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70 },
+
+  // Behind and above the head: ruff depth and ear interior.
+  nape:        { pos: [-0.231, 0.562, -0.224], target: [0.000, 0.315, 0.160], fov: 34, focus: 0.55 },
 };
 
 export class Debug {

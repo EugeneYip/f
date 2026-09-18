@@ -42,16 +42,19 @@ export const SNOW = {
   // Sastrugi proper: ridged noise, stretched ALONG the wind (polar sastrugi run
   // parallel to the wind, unlike dunes), with the crest sheared downwind so the
   // windward face steepens into a prow.
-  SAST_ACROSS: 1.22, SAST_ALONG: 5.6, SAST_AMP: 0.185, SAST_SKEW: 1.85,
+  SAST_ACROSS: 1.22, SAST_ALONG: 5.6, SAST_AMP: 0.215, SAST_SKEW: 1.85,
   SAST_L2: 2.07, SAST_L3: 4.28, SAST_G2: 0.47, SAST_G3: 0.22,
 
   // Medium ripples: small ridges running ACROSS the wind.
-  RIP_LEN: 0.46, RIP_ACROSS: 3.2, RIP_AMP: 0.023, RIP_L2: 2.13, RIP_G2: 0.5,
+  RIP_LEN: 0.55, RIP_ACROSS: 2.1, RIP_AMP: 0.012, RIP_L2: 2.13, RIP_G2: 0.5,
+  RIP_GATE0: 0.30, RIP_GATE1: 0.86,
 
-  // Mean of ridge() — subtracted so every octave is zero-mean and fading one
-  // out with distance loses detail without shifting the surface. Measured
-  // numerically over the real table (tools note: see Terrain._measureRidgeMean).
-  RIDGE_MEAN: 0.7143,
+  // Ridge crest sharpening, and the resulting mean of ridge(). The mean is
+  // subtracted so every octave is zero-mean and fading one out with distance
+  // loses detail without shifting the surface. Both are shared constants
+  // precisely so the GLSL and the JS port cannot drift apart: RIDGE_MEAN is
+  // measured numerically for the RIDGE_ROUND in force.
+  RIDGE_ROUND: 0.20, RIDGE_MEAN: 0.71734,
 
   // Band-limiting. An octave of wavelength `w` is fully present while the local
   // sample spacing fw < w*LOD_LO and gone by fw > w*LOD_HI. Keeping LOD_HI well
@@ -64,8 +67,14 @@ export const SNOW = {
 
   // Footprint field.
   FP_SIZE: 24.0,          // metres covered by the deformation target
-  FP_MAXDEPTH: 0.145,     // metres, when the depth channel is 1
-  FP_MAXRIM: 0.042,       // metres, when the rim channel is 1
+  FP_MAXDEPTH: 0.080,     // metres, when the depth channel is 1
+  FP_MAXRIM: 0.026,       // metres, when the rim channel is 1
+  // Profile widths, in units of the press() radius. These are deliberately
+  // wide: the clipmap resolves ~1.6 cm, so a wall or rim narrower than about
+  // 0.25 radii turns into vertex spikes instead of a print.
+  FP_WALL0: 0.46, FP_WALL1: 0.28,   // soft..sharp depression wall
+  FP_POW0: 1.25, FP_POW1: 0.85,     // soft..sharp floor shaping
+  FP_RIM_D: 0.17, FP_RIM_W: 0.27,   // displaced rim: offset and width
   FP_TAU_DEPTH: 21.0,     // e-folding time (s); ~60 s to visually vanish
   FP_TAU_RIM: 10.0,       // rims blow away first
   FP_TAU_COMP: 26.0,      // the compacted (bluer, glossier) snow lingers
@@ -111,7 +120,7 @@ float sn_gn(vec2 x){
   return mix(mix(a,b,u.x), mix(c,d,u.x), u.y) * 1.44;
 }
 
-// Band-limit weight for an octave of wavelength `w` sampled every `fw` metres.
+// Band-limit weight for an octave of wavelength w sampled every fw metres.
 float sn_lod(float w, float fw){
   return 1.0 - smoothstep(w*S_LOD_LO, w*S_LOD_HI, fw);
 }
@@ -120,7 +129,7 @@ float sn_lod(float w, float fw){
 float sn_ridge(vec2 q){
   float n = sn_gn(q);
   float r = 1.0 - abs(n);
-  return mix(r, r*r, 0.3) - S_RIDGE_MEAN;
+  return mix(r, r*r, S_RIDGE_ROUND) - S_RIDGE_MEAN;
 }
 
 /**
@@ -168,7 +177,9 @@ float sn_field(vec2 p, float fw, out float oSast, out float oExpo, out float oPa
     + S_RIP_G2 * sn_ridge(vec2(alw*(S_RIP_L2/S_RIP_LEN) + 5.71, acw*(S_RIP_L2/S_RIP_ACROSS) + 13.33)) * sn_lod(S_RIP_LEN/S_RIP_L2, fw);
   r *= 1.0 / (1.0 + S_RIP_G2);
   oRip = r;
-  h += S_RIP_AMP * (0.35 + 0.9*oExpo) * r;
+  // Ripples only form where the wind actually works the surface, so gate
+  // them hard on exposure instead of dressing the whole field in corduroy.
+  h += S_RIP_AMP * smoothstep(S_RIP_GATE0, S_RIP_GATE1, oExpo) * r;
 
   return h - uHeightBias;
 }
@@ -212,6 +223,7 @@ varying vec3 vWorld;
 varying vec3 vNormal;
 varying vec4 vFields;       // sastrugi, exposure, pad, ripple
 varying float vSunOcc;      // horizon self-shadow along the sun direction
+varying float vFw;          // sample spacing, for the debug views
 
 uniform vec3 uSunDir;
 uniform float uSkirtDrop;
@@ -232,6 +244,7 @@ void main(){
   float sast, expo, pad, rip;
   float h = sn_field(p, fw, sast, expo, pad, rip);
   vFields = vec4(sast, expo, pad, rip);
+  vFw = fw;
 
   // Surface normal from forward differences of the same height function. The
   // footprint field is deliberately left out — the fragment stage adds it back
@@ -249,11 +262,18 @@ void main(){
   {
     vec2 sd = normalize(uSunDir.xz + vec2(1e-5, 0.0));
     float tanE = uSunDir.y / max(length(uSunDir.xz), 1e-4);
-    float d = 0.3;
+    // Tap distances scale with the local sample rate, so every clipmap level
+    // shadows the features it can actually resolve: centimetre sastrugi near
+    // the fox, fifty-metre dunes at the horizon.
+    // Start just past the ripple scale so the near field is shaded by sastrugi
+    // (0.3-2 m shadows at this sun angle) rather than dressed in corduroy.
+    float d = max(0.15, fw * 2.4);
     for (int i = 0; i < SUN_TAPS; i++) {
       float hk = sn_fieldH(p + sd * d, fw);
-      occ = max(occ, (hk - h - d * tanE) / (d * 0.55 + 0.05));
-      d *= 2.15;
+      // The divisor is the sun's angular size in metres of height at that
+      // distance: a real terminator this low is nearly hard.
+      occ = max(occ, (hk - h - d * tanE) / (d * 0.022 + 0.010));
+      d *= 2.0;
     }
   }
   #endif
@@ -307,15 +327,58 @@ uniform vec3 uDeepTint;
 uniform sampler2D uDetail;
 uniform vec4 uDetailScale;   // world tile sizes: micro, grain, ripple, (aniso)
 uniform vec3 uSparkle;       // intensity, spread, threshold
-uniform vec2 uSheen;         // roughness fresh, roughness packed
+uniform vec3 uSheen;   // roughness fresh, roughness packed, specular scale         // roughness fresh, roughness packed
 uniform float uSSS;
 uniform bool receiveShadow;
+// 0 off. 1 shadow mask, 2 ridge self-shadow, 3 clipmap level, 4 sparkle,
+// 5 detail normal, 6 compaction. Debug only; costs one uniform compare.
+uniform float uDebugView;
+varying float vFw;
 
 #include <common>
 #include <packing>
 #include <fog_pars_fragment>
 #include <shadowmap_pars_fragment>
-#include <shadowmask_pars_fragment>
+
+/**
+ * Our own shadow lookup.
+ *
+ * three clears the shadow map with the renderer's clear colour rather than
+ * white, so a texel no caster ever wrote holds a bogus near-plane depth and
+ * three's VSMShadow() reports full occlusion for it — the entire shadow
+ * frustum comes out black. uShadowEmpty carries the clear colour's linear red
+ * so those texels can be recognised and treated as open sky. We also feather
+ * the frustum edge, because the sun's shadow camera is a tight box around the
+ * fox and a hard rectangle edge across the snow is worse than no shadow.
+ */
+uniform float uShadowEmpty;
+
+float snShadowMask(){
+#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+  vec4 sc = vDirectionalShadowCoord[ 0 ];
+  vec3 c = sc.xyz / sc.w;
+  c.z += directionalLightShadows[ 0 ].shadowBias;
+  vec2 dd = abs(c.xy - 0.5);
+  float edge = 1.0 - smoothstep(0.40, 0.495, max(dd.x, dd.y));
+  if (edge <= 0.001 || c.z > 1.0 || c.z < 0.0) return 1.0;
+  // The VSM target packs (mean depth, std deviation) as two halves per RGBA8.
+  vec2 m = unpackRGBATo2Half(texture2D(directionalShadowMap[ 0 ], c.xy));
+  if (m.x <= uShadowEmpty) return 1.0;
+  // Slope-scaled bias: at a six degree sun the depth races across the map, and
+  // the VSM blur smears it far enough to self-shadow without this.
+  c.z -= 0.014;
+  float occ = 1.0;
+  if (step(c.z, m.x) != 1.0) {
+    float dist = c.z - m.x;
+    float var = max(m.y * m.y, 2.5e-6);
+    float p = var / (var + dist * dist);
+    occ = clamp((p - 0.15) / 0.55, 0.0, 1.0);
+  }
+  return mix(1.0, mix(1.0, occ, directionalLightShadows[ 0 ].shadowIntensity), edge);
+#else
+  return 1.0;
+#endif
+}
 
 SNOW_CONSTS
 SNOW_FIELD
@@ -354,11 +417,13 @@ vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
   vec3 T = normalize(cross(N, vec3(1.0, 0.0, 0.0)));
   vec3 B = cross(N, T);
   float acc = 0.0;
-  float cell = 0.010;
-  for (int k = 0; k < 3; k++) {
+  float cell = 0.0028;
+  for (int k = 0; k < 4; k++) {
     // Triangular window in log2(px): the lattice is shown only while its cells
     // are ~2-6 px across.
-    float w = 1.0 - abs(log2(max(px, 1e-5) / (cell * 0.30))) * 0.72;
+    // Show a lattice only while its cells are ~3-8 px across, so a glint is
+    // always a resolvable dot rather than sub-pixel noise.
+    float w = 1.0 - abs(log2(max(px, 1e-5) / (cell * 0.22))) * 0.72;
     w = clamp(w, 0.0, 1.0);
     if (w > 0.004) {
       vec2 q = p / cell;
@@ -366,17 +431,23 @@ vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
       vec2 fp = q - ip;
       for (int j = 0; j < 2; j++) {
         for (int i = 0; i < 2; i++) {
-          vec2 o = vec2(float(i), float(j)) - step(0.5, fp);
+          // Feature points are inset into their cell, so the 2x2 block at or
+          // after the sample always contains every point that can reach it.
+          vec2 o = vec2(float(i), float(j));
           vec2 id = ip + o;
           vec3 r = sn_hash23(id + vec2(cell * 131.0));
           vec2 fpt = o + vec2(r.x, r.y) * 0.72 + 0.14 - fp;
           float dd = dot(fpt, fpt);
-          if (dd < 0.10) {
-            float dot0 = 1.0 - smoothstep(0.02, 0.09, dd);
+          if (dd < 0.17) {
+            float dot0 = 1.0 - smoothstep(0.05, 0.17, dd);
             float a = r.z * 6.2831853;
             float m = sn_hash21(id * 1.7 + 4.3);
-            vec2 tilt = vec2(cos(a), sin(a)) * (0.18 + uSparkle.y * m);
-            vec3 fn = normalize(N + T * tilt.x + B * tilt.y);
+            // Facet orientation is parameterised by ANGLE, not by a tangent
+            // offset: with a 6 degree sun and a low camera the half-vector
+            // sits ~60 degrees off the surface normal, and a tilt vector added
+            // to N can never swing that far. Crystals sit at every angle.
+            float th = 0.04 + uSparkle.y * m;
+            vec3 fn = N * cos(th) + (T * cos(a) + B * sin(a)) * sin(th);
             float al = dot(fn, Hv);
             float g = exp2(-(1.0 - al) * uSparkle.z);
             acc += g * dot0 * w;
@@ -384,7 +455,7 @@ vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
         }
       }
     }
-    cell *= 4.0;
+    cell *= 4.0;   // one octave of glint scale per 2 stops of distance
   }
   return acc * density * uSparkle.x * mix(uSunColor, vec3(0.86, 0.94, 1.0), 0.25);
 }
@@ -416,15 +487,15 @@ void main(){
   float wGrn = 1.0 - smoothstep(uDetailScale.y * 0.9, uDetailScale.y * 5.0, px);
   float wMic = 1.0 - smoothstep(uDetailScale.x * 0.9, uDetailScale.x * 5.0, px);
 
-  vec3 dRip = sn_detail(vec2(wuv.x, wuv.y * uDetailScale.w) / uDetailScale.z, 1.0);
+  vec3 dRip = sn_detail(vec2(wuv.x + wuv.y * 0.11, wuv.y * uDetailScale.w) / uDetailScale.z, 1.0);
   vec3 dGrn = sn_detail(wuv / uDetailScale.y + vec2(0.37, 0.61), 1.0);
   vec3 dMic = sn_detail(wuv / uDetailScale.x + vec2(0.11, 0.83), 1.0);
 
   float packed = clamp(vFields.y * 0.85 + comp * 0.6, 0.0, 1.0);
   float soft = 1.0 - packed;
-  vec2 dn = dRip.xy * (wRip * (0.55 + 0.55 * vFields.y))
-          + dGrn.xy * (wGrn * (0.42 + 0.5 * soft))
-          + dMic.xy * (wMic * 0.34 * soft);
+  vec2 dn = dRip.xy * (wRip * (0.30 + 0.34 * vFields.y))
+          + dGrn.xy * (wGrn * (0.34 + 0.34 * soft))
+          + dMic.xy * (wMic * (0.26 + 0.20 * soft));
   dn *= (1.0 - 0.75 * comp);   // compacted snow is smooth
   vec3 T = normalize(cross(N, vec3(1.0, 0.0, 0.0)));
   vec3 Bt = cross(N, T);
@@ -436,8 +507,8 @@ void main(){
   // --- light terms ----------------------------------------------------------
   float NdotL = dot(N, L);
   float NdotV = saturate(dot(N, V));
-  float shadowMask = getShadowMask();
-  float horizon = 1.0 - vSunOcc * 0.94;
+  float shadowMask = snShadowMask();
+  float horizon = 1.0 - vSunOcc * 0.97;
   // Micro-shadowing from the grain, tightened at grazing sun.
   float micro = mix(1.0, saturate(0.45 + grain * 1.1), 0.5 * wGrn);
   float sun = shadowMask * horizon * micro;
@@ -449,24 +520,26 @@ void main(){
 
   vec3 albedo = uAlbedo * (1.0 - 0.10 * comp) * (1.0 - 0.03 * (1.0 - vFields.y));
   // Ice barely absorbs in the visible, but what it absorbs is red — light that
-  // takes a long path through snow comes back cyan. This is why shadowed snow
-  // is blue, together with the sky term below.
-  vec3 deep = mix(vec3(1.0), uDeepTint, saturate(0.55 + 0.45 * comp));
+  // takes a long path through snow comes back cyan. Together with the sky term
+  // below, this is what makes shadowed snow BLUE rather than grey.
+  vec3 deep = uDeepTint * mix(vec3(1.0), uDeepTint, comp);
 
   vec3 direct = uSunColor * (uSunInt * diff * sun);
 
-  float skyVis = saturate(0.52 + 0.48 * N.y) * (1.0 - 0.45 * comp * comp);
+  // Hollows between the ridges see less sky than the crests do.
+  float hollow = 0.78 + 0.22 * saturate(vFields.x * 2.0 + 0.62);
+  float skyVis = saturate(0.52 + 0.48 * N.y) * hollow * (1.0 - 0.45 * comp * comp);
   vec3 ambient = uSkyColor * (uSkyInt * skyVis) * deep;
-  // Snow is surrounded by snow: a large near-white interreflection term that
-  // keeps hollows from going black without washing out the blue.
-  vec3 inter = uBounce * (uBounceInt * (0.35 + 0.65 * saturate(1.0 - N.y)) * (0.4 + 0.6 * horizon));
+  // Snow is surrounded by snow: a modest near-white interreflection that keeps
+  // hollows from going black without washing the blue out of them.
+  vec3 inter = uBounce * (uBounceInt * (0.45 + 0.55 * saturate(1.0 - N.y)));
 
   vec3 col = albedo * (direct + ambient + inter);
 
   // --- forward subsurface scattering ---------------------------------------
   // Crest proximity stands in for thickness: a knife-edge of a drift is a few
   // millimetres of snow and lights up like wax when the sun is behind it.
-  float thin = saturate(vFields.x * 2.1 + 0.18) * (1.0 - comp) * saturate(0.35 + 0.65 * vFields.y);
+  float thin = saturate(vFields.x * 2.8 - 0.10) * (1.0 - comp) * saturate(0.35 + 0.65 * vFields.y);
   float fwdPhase = pow(saturate(dot(V, -L)), 5.0);
   float back = saturate(0.55 - NdotL);
   vec3 sss = uSunColor * (uSunInt * uSSS * thin * fwdPhase * back * mix(0.35, 1.0, shadowMask));
@@ -474,7 +547,7 @@ void main(){
 
   // --- specular sheen + grazing fresnel ------------------------------------
   float rough = mix(uSheen.x, uSheen.y, packed);
-  rough = clamp(rough * (1.0 - 0.45 * comp), 0.04, 1.0);
+  rough = clamp(rough * (1.0 - 0.35 * comp), 0.06, 1.0);
   float a2 = rough * rough * rough * rough;
   vec3 Hv = normalize(L + V);
   float NoH = saturate(dot(N, Hv));
@@ -482,17 +555,24 @@ void main(){
   float VoH = saturate(dot(V, Hv));
   float dnm = NoH * NoH * (a2 - 1.0) + 1.0;
   float D = a2 / max(PI * dnm * dnm, 1e-6);
-  float k = rough * rough * 0.5;
-  float Vis = 0.5 / max(mix(2.0 * NoL * NdotV, NoL + NdotV, k), 1e-4);
-  float F = 0.021 + 0.979 * pow(1.0 - VoH, 5.0);
-  col += uSunColor * (uSunInt * D * Vis * F * NoL * sun * (0.55 + 0.8 * packed));
+  // Height-correlated Smith. The cheap 0.5/mix(...) approximation blows up
+  // when both the sun and the camera are near the horizon — which is the whole
+  // scene — and turns the foreground into a white sheet.
+  float gv = NoL * sqrt(NdotV * NdotV * (1.0 - a2) + a2);
+  float gl = NdotV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+  float Vis = 0.5 / max(gv + gl, 1e-4);
+  // A rough dielectric does not become a perfect mirror at grazing angles;
+  // pulling f90 down with roughness is what keeps the sun path believable.
+  float f90 = clamp(1.0 - rough * 0.85, 0.12, 1.0);
+  float F = 0.021 + (f90 - 0.021) * pow(1.0 - VoH, 5.0);
+  col += uSunColor * (uSunInt * uSheen.z * D * Vis * F * NoL * sun * (0.55 + 0.8 * packed));
 
   // Grazing-angle brightening: at a metre above the snow you see the sky in it.
   float fres = pow(1.0 - NdotV, 5.0);
   col += uSkyColor * (uSkyInt * (0.035 + 0.55 * fres) * (0.35 + 0.65 * packed));
 
   // --- sparkle --------------------------------------------------------------
-  float sparkGate = saturate(NdotL * 3.0) * shadowMask * horizon * (1.0 - comp * 0.85);
+  float sparkGate = saturate(0.25 + NdotL * 2.5) * shadowMask * horizon * (1.0 - comp * 0.85);
   if (sparkGate > 0.01) {
     col += sn_sparkle(N, V, L, p, px, crystal * sparkGate * (0.6 + 0.6 * vFields.y));
   }
@@ -502,6 +582,14 @@ void main(){
   float fogT = 1.0 - exp(-dist * dist * 2.4e-5);
   col += uSunColor * (uSunInt * 0.028 * fogT * pow(saturate(dot(V, -L)) * 0.5 + 0.5, 4.0));
 
+  if (uDebugView > 0.5) {
+    if (uDebugView < 1.5) col = vec3(shadowMask);
+    else if (uDebugView < 2.5) col = vec3(1.0 - vSunOcc);
+    else if (uDebugView < 3.5) col = vec3(fract(log2(max(vFw, 1e-4)) * 0.5 + 0.5));
+    else if (uDebugView < 4.5) col = sn_sparkle(N, V, L, p, px, crystal) * 0.25;
+    else if (uDebugView < 5.5) col = vec3(dn * 2.0 + 0.5, 0.5);
+    else col = vec3(comp, ft.x, ft.y);
+  }
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
   #include <tonemapping_fragment>
@@ -559,7 +647,9 @@ void main(){
   float hx = mh(vUv + vec2(e, 0.0));
   float hy = mh(vUv + vec2(0.0, e));
   vec2 g = vec2(hx - h0, hy - h0) / e;
-  vec2 n = clamp(g * 0.035, vec2(-1.0), vec2(1.0));
+  // 0.012, not 0.035: at 0.035 this map pins to +-1 almost everywhere and the
+  // surface reads as stamped corduroy instead of snow grain.
+  vec2 n = clamp(g * 0.012, vec2(-1.0), vec2(1.0));
 
   // Crystal density: sparse clusters, so sparkle is not uniform glitter.
   float c = 1.0 - abs(pgn(vUv * uPeriod * 6.0 + 41.0, uPeriod * 6.0));
@@ -609,17 +699,17 @@ float sn_paw(vec2 q){
 // x: depression 0..1, y: displaced rim 0..1, z: compaction 0..1
 vec3 sn_pawProfile(vec2 q, float depth, float sharp){
   float d = sn_paw(q);
-  float w = mix(0.30, 0.13, sharp);
-  float prof = 1.0 - smoothstep(-w, 0.02, d);
-  prof = pow(prof, mix(1.45, 0.75, sharp));
-  float rim = exp(-pow((d - 0.085) / 0.105, 2.0)) * (0.35 + 0.65 * sharp);
+  float w = mix(S_FP_WALL0, S_FP_WALL1, sharp);
+  float prof = 1.0 - smoothstep(-w, 0.03, d);
+  prof = pow(prof, mix(S_FP_POW0, S_FP_POW1, sharp));
+  float rim = exp(-pow((d - S_FP_RIM_D) / S_FP_RIM_W, 2.0)) * (0.35 + 0.65 * sharp);
   return vec3(prof * depth, rim * depth * 0.85, prof);
 }
 `;
 
 export const FOOT_STAMP_VERT = /* glsl */ `
 precision highp float;
-attribute vec2 position;
+attribute vec3 position;
 attribute vec4 iXform;     // world x, z, radius, rotation
 attribute vec2 iDepth;     // depth 0..1, sharpness 0..1
 varying vec2 vQ;
@@ -627,7 +717,7 @@ varying vec2 vParam;
 uniform vec3 uFootOrigin;  // xy centre, z = 1/size
 void main(){
   float c = cos(iXform.w), s = sin(iXform.w);
-  vec2 q = position * 1.55;
+  vec2 q = position.xy * 1.85;
   vQ = q;
   vParam = iDepth;
   vec2 local = vec2(q.x * c - q.y * s, q.x * s + q.y * c) * iXform.z;
@@ -660,28 +750,39 @@ SNOW_CONSTS
 SNOW_FIELD
 SNOW_FOOTPRINT
 
+// 32-bit fixed point into RGBA8 — no float readback, so no driver-dependent
+// console noise from readRenderTargetPixels.
+vec4 sn_pack(float v){
+  vec4 enc = fract(vec4(1.0, 255.0, 65025.0, 16581375.0) * v);
+  enc -= enc.yzww * vec4(1.0/255.0, 1.0/255.0, 1.0/255.0, 0.0);
+  return enc;
+}
+
 void main(){
   vec2 p = uProbe.xy + (vUv - 0.5) * (2.0 * uProbe.z);
   float h = sn_fieldH(p, uProbeFw) + sn_footH(p);
-  gl_FragColor = vec4(h, 0.0, 0.0, 1.0);
+  gl_FragColor = sn_pack(clamp((h + 4.0) / 8.0, 0.0, 0.999999));
 }
 `;
 
 export const FULLSCREEN_VERT = /* glsl */ `
 precision highp float;
-attribute vec2 position;
+attribute vec3 position;
 varying vec2 vUv;
 void main(){
-  vUv = position * 0.5 + 0.5;
-  gl_Position = vec4(position, 0.0, 1.0);
+  vUv = position.xy * 0.5 + 0.5;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
 }
 `;
 
 /** Expand the SNOW_* placeholders in a shader source. */
 export function snowResolve(src) {
+  // FOOT_PAW needs the S_* constants; pull them in unless the shader already
+  // asked for them itself, so the stamp shader cannot compile without them.
+  const paw = src.includes('SNOW_CONSTS') ? FOOT_PAW_GLSL : snowConstsGLSL() + FOOT_PAW_GLSL;
   return src
     .replace('SNOW_CONSTS', snowConstsGLSL())
     .replace('SNOW_FIELD', SNOW_FIELD_GLSL)
     .replace('SNOW_FOOTPRINT', SNOW_FOOTPRINT_GLSL)
-    .replace('FOOT_PAW', FOOT_PAW_GLSL);
+    .replace('FOOT_PAW', paw);
 }

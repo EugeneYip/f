@@ -220,7 +220,10 @@ export class FoxSkeleton {
 
   bone(name) { return this.bones[name]; }
 
-  /** Squared distance from p to bone i's segment. */
+  /**
+   * Distance from p to bone i's segment. Writes `_segLen` as a side channel
+   * rather than returning an object — this runs ~1M times during binding.
+   */
   _segDist(i, x, y, z) {
     const A = this._segA, B = this._segB, o = i * 3;
     const ax = A[o], ay = A[o + 1], az = A[o + 2];
@@ -232,7 +235,8 @@ export class FoxSkeleton {
       t = t < 0 ? 0 : t > 1 ? 1 : t;
     }
     const dx = x - (ax + bx * t), dy = y - (ay + by * t), dz = z - (az + bz * t);
-    return { d: Math.sqrt(dx * dx + dy * dy + dz * dz), len: Math.sqrt(l2) };
+    this._segLen = Math.sqrt(l2);
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   /** Bones this vertex is permitted to use. */
@@ -252,83 +256,136 @@ export class FoxSkeleton {
    * @param region Float32Array of region ids (one per vertex)
    * @param adj    {start, nb} CSR adjacency for the smoothing pass
    */
-  computeWeights(pos, region, adj, { smoothIters = 5, lambda = 0.45 } = {}) {
+  computeWeights(pos, region, adj, { smoothIters = 4, lambda = 0.45 } = {}) {
     const nv = pos.length / 3;
     const nb = this.boneList.length;
-    /** sparse per-vertex weights: Map<boneIndex, weight> */
-    const maps = new Array(nv);
+    const SLOTS = 10;                       // per-vertex sparse capacity
+
+    // Flat arrays rather than a Map per vertex: with ~14k vertices and 4
+    // smoothing passes the Map version spent more time in GC than in maths.
+    let idx = new Int16Array(nv * SLOTS).fill(-1);
+    let wts = new Float32Array(nv * SLOTS);
     const cand = [];
+    const allowed = new Uint8Array(nb);
 
     for (let v = 0; v < nv; v++) {
       const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
       this._candidates(region[v] | 0, x, cand);
-      const m = new Map();
-      let total = 0;
+      let n = 0, total = 0;
       for (const i of cand) {
-        if (i === undefined) continue;
-        const { d, len } = this._segDist(i, x, y, z);
-        const Rb = len * 1.55 + 0.055;
+        if (i === undefined || n >= SLOTS) continue;
+        const d = this._segDist(i, x, y, z);
+        const Rb = this._segLen * 1.55 + 0.055;
         if (d >= Rb) continue;
         const t = 1 - d / Rb;
         const w = (t * t) / (d + 0.004);
-        if (w <= 0) continue;
-        m.set(i, w);
-        total += w;
+        idx[v * SLOTS + n] = i;
+        wts[v * SLOTS + n] = w;
+        total += w; n++;
       }
-      if (total <= 0) {
-        // Should not happen; fall back to the nearest allowed bone.
+      if (n === 0) {
         let best = -1, bd = Infinity;
         for (const i of cand) {
           if (i === undefined) continue;
-          const { d } = this._segDist(i, x, y, z);
+          const d = this._segDist(i, x, y, z);
           if (d < bd) { bd = d; best = i; }
         }
-        m.set(best < 0 ? this.index.get('hips') : best, 1);
-        total = 1;
+        idx[v * SLOTS] = best < 0 ? this.index.get('hips') : best;
+        wts[v * SLOTS] = 1; total = 1; n = 1;
       }
-      for (const [k, w] of m) m.set(k, w / total);
-      maps[v] = m;
+      for (let k = 0; k < n; k++) wts[v * SLOTS + k] /= total;
     }
 
     // --- smooth over adjacency, re-masking every iteration ------------------
+    // Without the re-mask, four rounds of averaging quietly reintroduce
+    // exactly the bleeding the region masks exist to prevent.
+    const acc = new Float32Array(nb);
+    const touched = new Int32Array(nb);
+    let nIdx = new Int16Array(nv * SLOTS);
+    let nWts = new Float32Array(nv * SLOTS);
     for (let it = 0; it < smoothIters; it++) {
-      const next = new Array(nv);
+      nIdx.fill(-1); nWts.fill(0);
       for (let v = 0; v < nv; v++) {
-        const s = adj.start[v], e = adj.start[v + 1];
-        const src = maps[v];
-        if (e === s) { next[v] = src; continue; }
-        const acc = new Map();
-        for (const [k, w] of src) acc.set(k, w * (1 - lambda));
-        const f = lambda / (e - s);
-        for (let t = s; t < e; t++) {
-          for (const [k, w] of maps[adj.nb[t]]) acc.set(k, (acc.get(k) ?? 0) + w * f);
+        const s0 = adj.start[v], e0 = adj.start[v + 1];
+        let nt = 0;
+        const add = (bi, w) => {
+          if (w <= 0) return;
+          if (acc[bi] === 0) touched[nt++] = bi;
+          acc[bi] += w;
+        };
+        for (let k = 0; k < SLOTS; k++) {
+          const bi = idx[v * SLOTS + k]; if (bi < 0) break;
+          add(bi, wts[v * SLOTS + k] * (1 - lambda));
         }
-        // re-mask: smoothing must not leak a forbidden bone in
+        if (e0 > s0) {
+          const f = lambda / (e0 - s0);
+          for (let t = s0; t < e0; t++) {
+            const u = adj.nb[t];
+            for (let k = 0; k < SLOTS; k++) {
+              const bi = idx[u * SLOTS + k]; if (bi < 0) break;
+              add(bi, wts[u * SLOTS + k] * f);
+            }
+          }
+        }
         this._candidates(region[v] | 0, pos[v * 3], cand);
-        let total = 0;
-        for (const [k] of acc) if (!cand.includes(k)) acc.delete(k);
-        for (const [, w] of acc) total += w;
-        if (total <= 1e-9) { next[v] = src; continue; }
-        for (const [k, w] of acc) acc.set(k, w / total);
-        next[v] = acc;
+        allowed.fill(0);
+        for (const i of cand) if (i !== undefined) allowed[i] = 1;
+
+        // keep the strongest permitted influences
+        let count = 0, total = 0;
+        for (let k = 0; k < nt; k++) {
+          const bi = touched[k];
+          if (!allowed[bi]) continue;
+          const w = acc[bi];
+          if (count < SLOTS) {
+            nIdx[v * SLOTS + count] = bi; nWts[v * SLOTS + count] = w; count++; total += w;
+          } else {
+            let mn = 0;
+            for (let q = 1; q < SLOTS; q++) if (nWts[v * SLOTS + q] < nWts[v * SLOTS + mn]) mn = q;
+            if (w > nWts[v * SLOTS + mn]) {
+              total += w - nWts[v * SLOTS + mn];
+              nIdx[v * SLOTS + mn] = bi; nWts[v * SLOTS + mn] = w;
+            }
+          }
+        }
+        for (let k = 0; k < nt; k++) acc[touched[k]] = 0;
+        if (count === 0 || total <= 1e-9) {
+          for (let k = 0; k < SLOTS; k++) {
+            nIdx[v * SLOTS + k] = idx[v * SLOTS + k];
+            nWts[v * SLOTS + k] = wts[v * SLOTS + k];
+          }
+          continue;
+        }
+        for (let k = 0; k < count; k++) nWts[v * SLOTS + k] /= total;
       }
-      for (let v = 0; v < nv; v++) maps[v] = next[v];
+      const ti = idx; idx = nIdx; nIdx = ti;
+      const tw = wts; wts = nWts; nWts = tw;
     }
 
     // --- truncate to 4 and normalise ---------------------------------------
     const skinIndex = new Uint16Array(nv * 4);
     const skinWeight = new Float32Array(nv * 4);
     let maxInf = 0;
+    const order = new Int32Array(SLOTS);
     for (let v = 0; v < nv; v++) {
-      const entries = [...maps[v]].sort((a, b) => b[1] - a[1]);
-      maxInf = Math.max(maxInf, entries.length);
+      let n = 0;
+      for (let k = 0; k < SLOTS; k++) { if (idx[v * SLOTS + k] < 0) break; order[n++] = k; }
+      maxInf = Math.max(maxInf, n);
+      // partial selection sort for the top 4
+      const top = Math.min(4, n);
+      for (let a = 0; a < top; a++) {
+        let best = a;
+        for (let b = a + 1; b < n; b++) {
+          if (wts[v * SLOTS + order[b]] > wts[v * SLOTS + order[best]]) best = b;
+        }
+        const t = order[a]; order[a] = order[best]; order[best] = t;
+      }
       let sum = 0;
-      const k = Math.min(4, entries.length);
-      for (let i = 0; i < k; i++) sum += entries[i][1];
+      for (let a = 0; a < top; a++) sum += wts[v * SLOTS + order[a]];
       if (sum <= 1e-9) { skinIndex[v * 4] = 1; skinWeight[v * 4] = 1; continue; }
-      for (let i = 0; i < k; i++) {
-        skinIndex[v * 4 + i] = entries[i][0];
-        skinWeight[v * 4 + i] = entries[i][1] / sum;
+      for (let a = 0; a < top; a++) {
+        skinIndex[v * 4 + a] = idx[v * SLOTS + order[a]];
+        skinWeight[v * 4 + a] = wts[v * SLOTS + order[a]] / sum;
       }
     }
     this.weightStats = { nv, bones: nb, maxInfluencesBeforeTruncation: maxInf };

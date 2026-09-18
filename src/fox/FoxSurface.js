@@ -22,7 +22,7 @@
  */
 import * as THREE from 'three';
 import { smoothstep, saturate } from '../util/math.js';
-import { buildField, REGION as R, FUR, TORSO_REGIONS } from './FoxAnatomy.js';
+import { buildField, REGION as R, FUR, TORSO_REGIONS, EAR_NORMAL } from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
   sampleGrid, surfaceNets, buildAdjacency, relax,
@@ -30,7 +30,7 @@ import {
 } from './AnatMesher.js';
 
 /** Grid cells along the longest domain axis, per quality tier. */
-export const GRID_LONG = { low: 104, medium: 124, high: 140, ultra: 148 };
+export const GRID_LONG = { low: 100, medium: 116, high: 132, ultra: 140 };
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -99,7 +99,11 @@ export async function buildFoxSurface(skeleton, {
   const regionArr = new Float32Array(nv);
   const colorArr = new Float32Array(nv * 3);
   const s = Field.newSample();
-  const sigma = 0.020;
+  // Blend falloff for the fur fields. 20 mm let the 28 mm cheek ruff and the
+  // 45 mm neck bleed onto the muzzle and forehead, which must stay at 2-6 mm
+  // per the bible. 12 mm keeps the gradients smooth without crossing a whole
+  // anatomical zone.
+  const sigma = 0.012;
 
   for (let v = 0; v < nv; v++) {
     const o = v * 3;
@@ -137,6 +141,31 @@ export async function buildFoxSurface(skeleton, {
       fy -= down;
       const l = Math.hypot(fx, fy, fz) || 1;
       fx /= l; fy /= l; fz /= l;
+    }
+
+    // --- ear interior ------------------------------------------------------
+    // The concha is carved by a subtraction, and subtractions own no surface,
+    // so `earInner` would never be assigned from primitives alone. Split the
+    // pinna by which way the surface faces instead.
+    if (reg === R.earOuter) {
+      const sx = x >= 0 ? 1 : -1;
+      const dot = nx * EAR_NORMAL[0] * sx + ny * EAR_NORMAL[1] + nz * EAR_NORMAL[2];
+      const w = smoothstep(0.15, 0.58, dot);
+      if (w > 0) {
+        len = len + (FUR[R.earInner][0] - len) * w;
+        stiff = stiff + (FUR[R.earInner][1] - stiff) * w;
+        if (w > 0.5) reg = R.earInner;
+      }
+    }
+
+    // --- throat ------------------------------------------------------------
+    // Soft underfur below the jaw and down the front of the neck. Same story:
+    // the throat primitive is almost entirely buried inside the ruff.
+    if ((reg === R.ruff || reg === R.neck || reg === R.cheek) && z > 0.09 && ny < -0.30) {
+      const w = smoothstep(0.30, 0.72, -ny);
+      len = len + (FUR[R.throat][0] - len) * w;
+      stiff = stiff + (FUR[R.throat][1] - stiff) * w;
+      if (w > 0.5) reg = R.throat;
     }
 
     // Never let a hair point into the body.

@@ -82,6 +82,21 @@ async function startServer(args) {
   return { url: `http://127.0.0.1:${addr.port}/`, close: () => server.close() };
 }
 
+/** Screenshots occasionally lose a race with compositing; one retry is cheap
+ *  and turns a flaky red run into a green one. */
+async function shotWithRetry(page, file, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await page.screenshot({ path: file, caret: 'hide', timeout: 20000 });
+    } catch (e) {
+      lastErr = e;
+      await page.evaluate(() => window.FoxDebug?.render?.());
+    }
+  }
+  throw lastErr;
+}
+
 const main = async () => {
   const args = parseArgs(process.argv);
   const outDir = path.resolve(ROOT, args.out);
@@ -96,6 +111,19 @@ const main = async () => {
     viewport: { width: args.width, height: args.height },
     deviceScaleFactor: args.dsf,
     colorScheme: 'dark',
+  });
+
+  // Hermetic: the project rule is "no CDN fetches, everything generated in
+  // code". Blocking off-origin requests both enforces that and stops an
+  // unresolvable external load from stalling screenshot stabilisation.
+  const blockedRequests = [];
+  await page.route('**/*', (route) => {
+    const url = route.request().url();
+    if (/^https?:\/\//.test(url) && !url.startsWith(server.url) && !url.startsWith('http://127.0.0.1')) {
+      blockedRequests.push(url);
+      return route.abort();
+    }
+    return route.continue();
   });
 
   const consoleErrors = [];
@@ -114,7 +142,8 @@ const main = async () => {
     }
   });
 
-  const report = { ok: false, url: server.url, build: !!args.build, poses: {}, errors: consoleErrors, warnings: consoleWarnings };
+  const report = { ok: false, url: server.url, build: !!args.build, poses: {},
+                   errors: consoleErrors, warnings: consoleWarnings, blockedRequests };
 
   try {
     await page.goto(server.url, { waitUntil: 'load', timeout: args.timeout });
@@ -172,7 +201,11 @@ const main = async () => {
         }, { name, taa: args.taa });
 
         const file = path.join(outDir, `${name}.png`);
-        await page.screenshot({ path: file, animations: 'disabled' });
+        // No `animations: 'disabled'` — that makes Playwright wait on
+        // document.fonts.ready and on CSS animations (the loading screen has
+        // one), which hung roughly 1 run in 3. We already own determinism:
+        // the render loop is paused and we drive frames by hand.
+        await shotWithRetry(page, file);
         report.poses[name] = { ok: true, ms: Date.now() - t0, ...info };
         console.log(`[shoot] ${name.padEnd(12)} ${info.drawCalls} calls, ${(info.triangles / 1000).toFixed(0)}k tris`);
       } catch (e) {

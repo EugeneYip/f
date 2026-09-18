@@ -32,13 +32,22 @@ const float Hr = 8.0;             // Rayleigh scale height (km)
 const float Hm = 1.2;             // Mie scale height (km)
 
 const vec3  BETA_R  = vec3(5.802e-3, 13.558e-3, 33.100e-3);  // 1/km
-const float BETA_MS = 3.996e-3;
-const float BETA_ME = 4.440e-3;
-const vec3  BETA_O  = vec3(0.650e-3, 1.881e-3, 0.085e-3);
+// Clean polar aerosol. The textbook 3.996e-3 / 4.440e-3 pair is a
+// mid-latitude continental value; used here it lays a grey Mie veil over the
+// whole lower sky and the twilight goes khaki. Arctic air is exceptionally
+// low in aerosol, and that is precisely why polar twilight is so saturated.
+const float BETA_MS = 1.300e-3;
+const float BETA_ME = 1.450e-3;
+// Ozone, scaled 1.4x for a high-latitude autumn/winter column (real polar
+// columns run 380-450 DU against a 300 DU global mean). The Chappuis band
+// eats green hardest, which is exactly what turns the upper twilight sky
+// indigo rather than plain blue. Nothing else in the model can do that.
+const vec3  BETA_O  = vec3(0.910e-3, 2.6334e-3, 0.119e-3);
 const float OZ_C = 25.0;
 const float OZ_W = 15.0;
 
-const float BAND_K = 0.75;        // RGB band-averaging compression
+const float BAND_K = 0.805;       // RGB band-averaging compression (calibrated,
+                                  // see Sky.js: lands the 5 deg sun on #ffd0a2)
 const float VPOW   = 0.6;         // sky LUT elevation warp
 
 vec2 raySphere(vec3 ro, vec3 rd, float R) {
@@ -154,7 +163,7 @@ uniform float uMieG;
 uniform vec3  uGroundAlbedo;
 uniform vec3  uGroundAmbient;
 
-vec3 atmoScatter(vec3 ro, vec3 rd, vec3 sunDir, const int N) {
+vec3 atmoScatter(vec3 ro, vec3 rd, vec3 sunDir, int N) {
   vec2 top = raySphere(ro, rd, Rt);
   if (top.y <= 0.0) return vec3(0.0);
   float t0 = max(top.x, 0.0);
@@ -223,6 +232,25 @@ vec3 sampleSky(vec3 dir, vec3 sunDir) {
   vec2 uv = skyViewUv(dir, sunDir);
   uv = uv * (1.0 - uSkyTexel) + 0.5 * uSkyTexel;
   return texture2D(uSkyLut, uv).rgb;
+}
+
+/**
+ * Sky only, never the lit ground the LUT stores below the horizon.
+ *
+ * The LUT's lower hemisphere exists for the IBL, where the snow bounce has to
+ * be real. Showing it in the *visible* sky puts a hard brown seam right under
+ * the horizon line, because a scattering integral that terminates on a snow
+ * albedo will never agree with whatever the lighting rig is actually doing to
+ * the terrain. Terrain and the horizon band cover that region in every real
+ * view; where they leave a sliver, continuing the horizon haze downward is
+ * what aerial perspective would give anyway.
+ */
+vec3 sampleSkyAbove(vec3 dir, vec3 sunDir) {
+  vec2 uv = skyViewUv(dir, sunDir);
+  float below = smoothstep(0.5, 0.47, uv.y);
+  uv.y = max(uv.y, 0.5);
+  uv = uv * (1.0 - uSkyTexel) + 0.5 * uSkyTexel;
+  return texture2D(uSkyLut, uv).rgb * (1.0 - 0.10 * below);
 }
 `;
 
