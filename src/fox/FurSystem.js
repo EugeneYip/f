@@ -83,6 +83,12 @@ export class FurSystem {
       this.uniforms.uEyeL.value.fromArray(eyes.L.centre);
       this.uniforms.uEyeR.value.fromArray(eyes.R.centre);
     }
+    // Same for the rhinarium — measured off the SDF by the anatomy agent.
+    const noseAnchor = fox.anchors?.nose;
+    if (noseAnchor) {
+      noseAnchor.updateWorldMatrix(true, false);
+      this.uniforms.uNose.value.setFromMatrixPosition(noseAnchor.matrixWorld);
+    }
 
     // ------------------------------------------------------------ base ---
     this.baseMaterial = makeBaseMaterial(this.uniforms);
@@ -160,8 +166,8 @@ export class FurSystem {
     // Fewer shells means each one covers more depth, so widen the strands and
     // deepen the undercoat fill — otherwise `low` reads as a stack of nets.
     const thin = clamp(18 / this.shellCount, 0.6, 3.2);
-    this.uniforms.uStrandRoot.value = FUR_DEFAULTS.strandRoot * lerp(1, 1.22, clamp(thin - 1, 0, 1));
-    this.uniforms.uFill.value = clamp(FUR_DEFAULTS.fill * lerp(1, 1.1, clamp(thin - 1, 0, 1)), 0, 1);
+    this.uniforms.uStrandRoot.value = FUR_DEFAULTS.strandRoot * lerp(1, 1.10, clamp(thin - 1, 0, 1));
+    this.uniforms.uFill.value = clamp(FUR_DEFAULTS.fill, 0, 1);
   }
 
   onQuality(e, ctx) {

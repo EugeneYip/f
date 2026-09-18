@@ -24,7 +24,7 @@
  *   3. Gravity and wind are applied AFTER skinning, in world space, because
  *      that is where they actually act.
  */
-import { HASH, SIMPLEX3, WORLEY3, IGN, UTIL } from './noise.glsl.js';
+import { HASH, SIMPLEX3, IGN, UTIL } from './noise.glsl.js';
 
 export const REGION_COUNT = 27;
 
@@ -51,6 +51,8 @@ uniform vec3  uGravity;        // world down
 uniform vec3  uEyeL;           // bind-space eyeball centres: the coat has to
 uniform vec3  uEyeR;           // part around the eye or it buries the face
 uniform vec2  uEyeFade;        // x inner radius (bald), y outer radius
+uniform vec3  uNose;           // nose pad centre, bind space
+uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
 uniform float uCoatScale;
 uniform float uLay;
@@ -92,6 +94,7 @@ uniform float uAOInner;
 uniform float uAOPow;
 uniform float uAOBake;
 uniform float uAOFloor;
+uniform float uShellJitter;
 uniform float uTuftAmt;
 uniform float uClumpAO;
 uniform float uAniso;
@@ -150,7 +153,11 @@ const COATLEN_FN = /* glsl */ `
 float furCoatLength(vec3 p, float lengthScale){
   float de = min(distance(p, uEyeL), distance(p, uEyeR));
   float eye = smoothstep(uEyeFade.x, uEyeFade.y, de);
-  return furLength * uCoatScale * lengthScale * eye;
+  // The nose pad is bare wet skin. Region 0 already has zero density, but the
+  // muzzle shells around it interpolate straight over the pad and bury it
+  // under pale fur, which turns a black nose into a blue jellybean.
+  float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
+  return furLength * uCoatScale * lengthScale * eye * nose;
 }
 `;
 
@@ -178,16 +185,17 @@ vec3 furDynamics(vec3 rootW, float bendable, float seed, float boost){
 
 /* ------------------------------------------------------------------- noise */
 
-export const FUR_NOISE = HASH + SIMPLEX3 + WORLEY3 + IGN + UTIL + /* glsl */ `
+export const FUR_NOISE = HASH + SIMPLEX3 + IGN + UTIL + /* glsl */ `
 /**
  * Exact cellular F1 over a 2x2x2 neighbourhood.
  *
  * Sites are confined to the middle half of their cell ([0.25,0.75]^3), which
- * makes the 8-cell search provably exact — for any query inside the block the
- * winning site is always one of those eight, so there are no seams — while
- * being 3.4x cheaper than the 27-cell worley3. Used for the dense strand and
- * micro layers where the reduced jitter is invisible; the clump layer keeps
- * full worley3 because clump irregularity is the thing you actually see.
+ * makes the 8-cell search provably exact: for any query inside the block the
+ * winning site is always one of those eight, so there are no seams. That makes
+ * it ~3.4x cheaper than the shared 27-cell worley3, which the clump layer used
+ * until the occlusion term was rewritten to need only F1. All three fur scales
+ * (clump, strand, micro) run on this; the jitter range lost by confining the
+ * sites is bought back by warping the lookup with the coat-variation noise.
  */
 float cell8(vec3 q, out vec3 site){
   vec3 ip = floor(q - 0.5);
@@ -228,10 +236,9 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   float coatVar = snoise(p * uCoatVarFreq);
 
   // ---- clumps ------------------------------------------------------------
-  // cell8, not worley3: the occlusion term was rewritten to use F1 only, so
-  // the 27-cell search bought nothing and cost ~200 ALU per fragment per
-  // shell — by far the most expensive thing in the coat. The lost jitter
-  // range is bought back by warping the lookup with coatVar.
+  // The occlusion term needs only F1, so the 27-cell worley3 that used to
+  // sit here bought nothing and cost ~200 ALU per fragment per shell — by
+  // far the most expensive thing in the coat.
   float fc = uClumpFreq * clumpScale * (1.0 + 0.14 * coatVar);
   vec3  csiteC;
   vec2  cd = vec2(cell8(p * fc + coatVar * 0.35, csiteC), 0.0);
@@ -287,7 +294,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // to a point at the tip, so the gaps between tufts open up as you climb
   // through the coat. This is the difference between fur and carpet, and it is
   // what breaks the shells' long parallel comb strokes into separate locks.
-  float tuftR = mix(1.06, 0.34, t) * (0.72 + 0.56 * cRand);
+  float tuftR = mix(1.15, 0.34, t * t) * (0.72 + 0.56 * cRand);
   float taa   = max(px * fc * 1.2, 0.015);
   float tuft  = 1.0 - smoothstep(tuftR - taa, tuftR + taa, cd.x);
   tuft = mix(1.0, tuft, smoothstep(0.0, 0.18, t) * uTuftAmt);
@@ -367,7 +374,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
 
   // 1/PI so the fox sits at the same exposure as everything three lights with
   // the standard BRDF (the snow, chiefly) — without it the animal blows out.
-  vec3 direct = uSunColor * uSunIntensity * wrapD * mix(ao, 1.0, 0.35) * RECIPROCAL_PI;
+  vec3 direct = uSunColor * uSunIntensity * wrapD * mix(ao, 1.0, 0.62) * RECIPROCAL_PI;
 
   // ---- ambient: cool sky above, snow bounce below -------------------------
   float up = N.y * 0.5 + 0.5;
@@ -400,7 +407,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
          (uTrans * RECIPROCAL_PI * fwd * thin * (0.06 + 1.85 * graze) * (0.30 + 0.95 * shell));
 
   // A cool sky rim keeps the shadow side alive on the silhouette.
-  col += uSkyColor * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
+  col += uSkyColor * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
 
   return col;
 }
@@ -514,18 +521,29 @@ void main(){
 ${isShell ? /* glsl */ `
   // Bind-space pixel footprint — the LOD signal for every noise scale.
   float px = max(length(fwidth(vRoot)), 1e-7);
-  float shellFill = clamp(3.0 / max(uShellCount, 1.0) + 0.58, 0.34, 0.98);
+  float shellFill = clamp(0.34 + 3.6 / max(uShellCount, 1.0), 0.34, 0.80);
+
+  // Per-fragment shell-depth dither.
+  //
+  // A shell is a discrete slice of a continuous coat, so the alpha steps
+  // between consecutive shells show up as concentric contour rings around the
+  // animal — ruinous at 6 shells, where the rings are 7 mm apart. Jittering
+  // the depth by up to half a shell spacing, from an OBJECT-space hash so it
+  // is perfectly stable in motion, dissolves those steps into the hair noise
+  // and lets the undercoat stay opaque at every tier.
+  float tJ = clamp(t + (hash13(vRoot * 57.31) - 0.5) * uShellJitter / max(uShellCount, 1.0),
+                   0.0, 1.0);
 
   float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, 6.0);
 
   // Shells this deep are solid felt and almost entirely hidden behind the coat
   // above them. Neither the strand/micro/clump field nor the specular and
   // transmission lobes can change what you see, so skip all of it.
-  bool deep = t < shellFill * 0.40;
+  bool deep = tJ < shellFill * 0.40;
 
   vec3 site = vRoot;
   vec4 hair = vec4(1.0, 0.45, hash13(vRoot * 131.7), 1.0);
-  if (!deep) hair = furHair(vRoot, t, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, site);
+  if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, site);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -552,12 +570,12 @@ ${isShell ? /* glsl */ `
 
   // Depth-attenuated occlusion: the inside of the coat must be markedly darker
   // than the tips, or it reads as a flat decal instead of a deep coat.
-  ao *= mix(uAOInner, 1.0, pow(t, uAOPow));
+  ao *= mix(uAOInner, 1.0, pow(tJ, uAOPow));
   ao *= mix(0.60, 1.0, 1.0 - hair.y * 0.5);
   ao = max(ao, uAOFloor);
 ` : /* glsl */ `
   // Base layer: skin under the coat — dark, occluded, faintly cool.
-  ao = max(ao * uAOInner * 0.8, uAOFloor * 0.8);
+  ao = max(ao * mix(uAOInner, 1.0, 0.58), uAOFloor);
   #ifdef USE_COLOR
     // Pad leather and the nose come through the vertex colour. Under a dense
     // paw coat almost none of it should read, or the fox grows teddy-bear feet.
@@ -740,7 +758,7 @@ void main(){
   a = mix(clamp(rad * 0.70, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
 
   // Strongest exactly where the surface turns away — the silhouette.
-  float edge = mix(uCardInner, 1.0, pow(clamp(vEdge, 0.0, 1.0), 2.2));
+  float edge = mix(uCardInner, 1.0, pow(clamp(vEdge, 0.0, 1.0), 2.6));
   a *= edge * uCardOpacity * vP0.w;
   if (a < 0.004) discard;
 
@@ -755,7 +773,13 @@ void main(){
     vec3 Vp = normalize(cross(B, T));
     float x = clamp((fr - 0.5) * 2.0 / max(rad, 1e-3), -1.0, 1.0);
     vec3 Ncyl = normalize(B * x + Vp * sqrt(max(0.0, 1.0 - x * x)));
-    N = normalize(mix(N, Ncyl, 0.25 + 0.7 * lod));
+    // Only let the per-hair cylinder normal take over near the SILHOUETTE.
+    // A card lying against the body that shades by its own tube normal is
+    // lit quite differently from the shells right underneath it, and where
+    // those cards overlap the mismatch pools into grey patches — the flank
+    // went visibly mottled at sun 14,-30 while the shells alone stayed clean.
+    // In the interior the card must shade like the coat it sits in.
+    N = normalize(mix(N, Ncyl, (0.12 + 0.82 * clamp(vEdge, 0.0, 1.0)) * lod));
   }
 
   float ao = (1.0 - vP0.z * uAOBake) *

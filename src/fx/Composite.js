@@ -20,6 +20,8 @@ uniform vec2  uAOTexel;
 uniform float uAOIntensity;
 uniform float uAOPower;
 uniform float uAOBrightRelief;
+uniform float uAOReliefLo;
+uniform float uAOReliefHi;
 uniform float uAOFadeStart;
 uniform float uAOFadeEnd;
 uniform vec3  uAOColor;
@@ -79,7 +81,7 @@ void main() {
     // Post AO multiplies everything, but occlusion physically modulates only
     // indirect light. Relieve it where the pixel is far above diffuse white —
     // those are sun-lit or specular, and darkening them reads as dirt.
-    k = mix(k, 1.0, smoothstep(1.0, 4.5, fxLum(c)) * uAOBrightRelief);
+    k = mix(k, 1.0, smoothstep(uAOReliefLo, uAOReliefHi, fxLum(c)) * uAOBrightRelief);
     // Distance fade: this is contact occlusion on a 0.55 m animal, not haze.
     k = mix(k, 1.0, smoothstep(uAOFadeStart, uAOFadeEnd, vz));
     // Tint instead of pure grey. White fur and snow in occlusion go BLUE
@@ -137,6 +139,8 @@ export function makeComposite(flags) {
     uAOIntensity: { value: 0.7 },
     uAOPower: { value: 1.4 },
     uAOBrightRelief: { value: 0.65 },
+    uAOReliefLo: { value: 3 },
+    uAOReliefHi: { value: 14 },
     uAOFadeStart: { value: 6 },
     uAOFadeEnd: { value: 22 },
     uAOColor: { value: new THREE.Color(0x5a7099) },

@@ -198,19 +198,29 @@ export class TAA {
    */
   checkCut(camera) {
     const e = camera.matrixWorld.elements;
-    const key = [e[12], e[13], e[14], e[0], e[4], e[8], e[2], e[6], e[10], camera.fov];
+    // position, then the camera's own basis columns (col 2 is +Z = backward).
+    const key = [e[12], e[13], e[14], e[8], e[9], e[10], e[0], e[1], e[2], camera.fov];
     const prev = this._camKey;
     let cut = false;
     let still = false;
     if (!prev) {
       cut = true;
     } else {
+      // "Still" has to be an exact test, not a tolerance: it gates the
+      // unbounded accumulation that gives the review harness its 18-sample
+      // convergence, and a near-1 dot product of a unit vector with itself is
+      // only accurate to ~1e-7, which no sane epsilon distinguishes from a
+      // one-arcsecond drift.
+      still = true;
+      for (let i = 0; i < key.length; i++) {
+        if (key[i] !== prev[i]) { still = false; break; }
+      }
       const dx = e[12] - prev[0], dy = e[13] - prev[1], dz = e[14] - prev[2];
       const move = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      // forward-axis agreement (matrixWorld col 2 is the camera's +Z = backward)
-      const dot = key[6] * prev[6] + key[7] * prev[7] + key[8] * prev[8];
+      const dot = key[3] * prev[3] + key[4] * prev[4] + key[5] * prev[5];
+      // Generous thresholds: a cinematic drift must keep its history (that is
+      // what reprojection is for); only a pose CUT may throw it away.
       cut = move > 0.25 || dot < 0.99 || key[9] !== prev[9];
-      still = move === 0 && dot >= 1 - 1e-9 && key[9] === prev[9];
     }
     this._camKey = key;
     return { cut, still };

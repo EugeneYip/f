@@ -116,7 +116,8 @@ uniform float uFocus;
 uniform float uCoCScale;
 uniform float uMaxCoC;
 uniform float uNearGain;
-uniform float uBlendPx;
+uniform float uBlendLo;
+uniform float uBlendHi;
 varying vec2 vUv;
 
 // 4-tap tent on the half-res layers: hides the spiral dither for the price of
@@ -137,7 +138,11 @@ void main() {
   vec3 far = fxSafe(tent(tFar, vUv).rgb);
   vec4 near = tent(tNear, vUv);
 
-  float fb = fxSat((max(coc, 0.0) - 0.35) / max(uBlendPx, 1e-3));
+  // The blurred layers live at half resolution, so below ~2 px of CoC the
+  // sharp full-res image is strictly closer to the truth than the "correct"
+  // blurred one. Ramping in over 1..3 px keeps the subject genuinely sharp
+  // instead of paying a resolution tax for a blur nobody can see.
+  float fb = smoothstep(uBlendLo, uBlendHi, coc);
   vec3 c = mix(sharp, far, fb);
   c = mix(c, fxSafe(near.rgb), fxSat(near.a * uNearGain));
 
@@ -178,7 +183,8 @@ export class DoF {
       uHalfTexel: { value: new THREE.Vector2(1 / hw, 1 / hh) },
       uNear: { value: 0.05 }, uFar: { value: 900 },
       uFocus: { value: 2.5 }, uCoCScale: { value: 10 }, uMaxCoC: { value: 16 },
-      uNearGain: { value: 1.15 }, uBlendPx: { value: 1.1 },
+      uNearGain: { value: 1.15 },
+      uBlendLo: { value: 1.0 }, uBlendHi: { value: 3.0 },
     });
   }
 
@@ -241,7 +247,8 @@ export class DoF {
     c.uCoCScale.value = cocScale;
     c.uMaxCoC.value = maxCoC;
     c.uNearGain.value = cfg.nearGain;
-    c.uBlendPx.value = cfg.blendPx;
+    c.uBlendLo.value = cfg.blendLo;
+    c.uBlendHi.value = cfg.blendHi;
     this.composite.render(r, this.rtOut);
     return this.rtOut.texture;
   }

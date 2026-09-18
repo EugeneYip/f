@@ -39,14 +39,14 @@ const c = (hex) => new THREE.Color(hex);
  * every side-on framing.
  * ------------------------------------------------------------------------ */
 export const REGION_TABLE = [
-  /* 0 nose          */ { a: [0.00, 0.30, 0.00, 0.00], b: [1.00, 2.40, 0.90, 0.00] },
-  /* 1 muzzle        */ { a: [0.85, 0.95, 0.60, 0.10], b: [1.70, 2.10, 0.90, 0.15] },
-  /* 2 jawLower      */ { a: [0.92, 1.00, 0.80, 0.18], b: [1.50, 1.90, 0.90, 0.30] },
-  /* 3 cheek         */ { a: [1.00, 1.05, 1.15, 0.50], b: [0.85, 1.05, 1.00, 1.15] },
-  /* 4 forehead      */ { a: [0.94, 0.95, 0.90, 0.10], b: [1.60, 2.00, 0.90, 0.20] },
-  /* 5 skull         */ { a: [0.96, 0.92, 0.95, 0.16], b: [1.30, 1.60, 1.00, 0.35] },
-  /* 6 earOuter      */ { a: [0.94, 0.88, 0.85, 0.26], b: [1.40, 1.80, 0.90, 0.85] },
-  /* 7 earInner      */ { a: [0.84, 0.95, 1.30, 0.55], b: [1.20, 1.50, 0.80, 1.05] },
+  /* 0 nose          */ { a: [0.00, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
+  /* 1 muzzle        */ { a: [0.95, 1.20, 0.60, 0.10], b: [1.55, 1.40, 0.90, 0.40] },
+  /* 2 jawLower      */ { a: [0.98, 1.25, 0.80, 0.18], b: [1.40, 1.30, 0.90, 0.55] },
+  /* 3 cheek         */ { a: [1.00, 1.08, 1.15, 0.50], b: [0.85, 1.05, 1.00, 1.30] },
+  /* 4 forehead      */ { a: [1.00, 1.40, 0.90, 0.10], b: [1.40, 1.20, 0.90, 0.60] },
+  /* 5 skull         */ { a: [1.00, 1.28, 0.95, 0.16], b: [1.20, 1.10, 1.00, 0.75] },
+  /* 6 earOuter      */ { a: [1.00, 1.15, 0.85, 0.26], b: [1.25, 1.25, 0.90, 1.05] },
+  /* 7 earInner      */ { a: [0.90, 1.10, 1.30, 0.55], b: [1.10, 1.15, 0.80, 1.20] },
   /* 8 throat        */ { a: [1.00, 1.05, 1.20, 0.45], b: [0.95, 1.10, 1.00, 0.85] },
   /* 9 neck          */ { a: [1.00, 1.04, 1.05, 0.35], b: [0.90, 1.00, 1.00, 0.85] },
   /* 10 ruff          */ { a: [1.05, 1.06, 1.20, 0.55], b: [0.72, 0.95, 1.00, 1.70] },
@@ -96,12 +96,13 @@ export const FUR_DEFAULTS = {
   wrap: 0.40,
   trans: 2.60,        // divided by PI in the shader
   transPow: 3.4,
-  aoInner: 0.46,
+  aoInner: 0.60,
   aoPow: 0.90,
-  aoFloor: 0.30,
+  aoFloor: 0.38,
+  shellJitter: 1.15,
   tuftAmt: 1.0,
   clumpAO: 0.75,
-  aoBake: 0.50,
+  aoBake: 0.42,
   rim: 0.30,
   strandRound: 0.60,
 
@@ -116,7 +117,7 @@ export const FUR_DEFAULTS = {
   // cards
   cardWidth: 0.15,
   cardLength: 1.80,
-  cardInner: 0.07,
+  cardInner: 0.05,
   cardJitter: 1.05,
   cardOpacity: 1.0,
 };
@@ -150,7 +151,9 @@ export function buildFurUniforms(ctx) {
 
     uEyeL: { value: new THREE.Vector3(-0.027, 0.318, 0.222) },
     uEyeR: { value: new THREE.Vector3(0.027, 0.318, 0.222) },
-    uEyeFade: { value: new THREE.Vector2(0.0125, 0.0345) },
+    uEyeFade: { value: new THREE.Vector2(0.0092, 0.0190) },
+    uNose: { value: new THREE.Vector3(0.001, 0.293, 0.274) },
+    uNoseFade: { value: new THREE.Vector2(0.0085, 0.0180) },
     uShellCount: { value: 18 },
     uCoatScale: { value: d.coatScale },
     uLay: { value: d.lay },
@@ -190,6 +193,7 @@ export function buildFurUniforms(ctx) {
     uAOPow: { value: d.aoPow },
     uAOBake: { value: d.aoBake },
     uAOFloor: { value: d.aoFloor },
+    uShellJitter: { value: d.shellJitter },
     uTuftAmt: { value: d.tuftAmt },
     uClumpAO: { value: d.clumpAO },
     uAniso: { value: 1 },

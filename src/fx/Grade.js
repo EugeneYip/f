@@ -9,6 +9,7 @@ uniform sampler2D tSrc;
 uniform sampler2D tBloom;
 uniform vec2  uTexel;
 uniform float uExposure;
+uniform vec3  uWhiteBalance;
 uniform float uBloomStrength;
 uniform float uChroma;
 uniform float uVignette;
@@ -23,6 +24,8 @@ uniform vec3  uHighlightTint;
 uniform float uHighlightAmount;
 uniform float uContrast;
 uniform float uSaturation;
+uniform float uHighlightDesat;
+uniform vec3  uBlackLift;
 uniform float uGrain;
 uniform float uGrainSize;
 uniform float uGrainSeed;
@@ -50,6 +53,10 @@ void main() {
   hdr += fxSafe(texture2D(tBloom, vUv).rgb) * uBloomStrength;
 
   hdr *= uExposure;
+  // White balance in scene-linear. The key is a 5-degree sun at #ffd2a1, so
+  // without a cooling trim the white fur grades out salmon rather than the
+  // bible's warm-white #fdfcfa.
+  hdr *= uWhiteBalance;
 
   // Barely-there vignette, applied in scene-linear so it behaves like light
   // falloff rather than a painted-on dark ring. Bible: no heavy vignette.
@@ -59,6 +66,12 @@ void main() {
   vec3 c = agxToneMap(hdr, uShoulder, uLookSlope, uLookOffset, uLookPower, uLookSat);
 
   // --- grade ---------------------------------------------------------------
+  /* Chromatic black floor. Bible SS2.3: shadows must never crush to 0. A
+     tinted lift that pins white guarantees a minimum, and makes the darkest
+     part of the frame BLUE rather than dead — which is also what a real
+     twilight zenith looks like through an atmosphere. */
+  c = uBlackLift + c * (1.0 - uBlackLift);
+  c = gradeHighlightDesat(c, uHighlightDesat);
   c = gradeSplitTone(c, uShadowTint, uShadowAmount, uHighlightTint, uHighlightAmount);
   c = gradeContrastSat(c, uContrast, uSaturation);
 
@@ -87,6 +100,7 @@ export function makeGrade() {
     tBloom: { value: null },
     uTexel: { value: new THREE.Vector2() },
     uExposure: { value: 1 },
+    uWhiteBalance: { value: new THREE.Vector3(1, 1, 1) },
     uBloomStrength: { value: 0.05 },
     uChroma: { value: 0.0016 },
     uVignette: { value: 0.11 },
@@ -101,6 +115,8 @@ export function makeGrade() {
     uHighlightAmount: { value: 1 },
     uContrast: { value: 1.02 },
     uSaturation: { value: 1.05 },
+    uHighlightDesat: { value: 0.25 },
+    uBlackLift: { value: new THREE.Vector3(0.006, 0.009, 0.020) },
     uGrain: { value: 0.016 },
     uGrainSize: { value: 1.9 },
     uGrainSeed: { value: 0 },

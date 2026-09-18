@@ -104,6 +104,15 @@ vec3 gradeSplitTone(vec3 c, vec3 shadowTint, float shadowAmt,
   return max(c, vec3(0.0));
 }
 
+/* Highlight desaturation. Every real emulsion and every sensor pipeline bleeds
+   colour out of the brightest values, because at least one channel saturates
+   first. Without it, a white animal under a #ffd2a1 sun grades out salmon
+   rather than the bible's warm-white #fdfcfa. */
+vec3 gradeHighlightDesat(vec3 c, float amount) {
+  float l = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+  return mix(c, vec3(l), amount * l * l * l);
+}
+
 vec3 gradeContrastSat(vec3 c, float contrast, float sat) {
   // Contrast about 0.5 in display-linear; gentle, AgX already carries the S.
   c = (c - 0.5) * contrast + 0.5;
