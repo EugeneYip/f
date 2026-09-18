@@ -1,9 +1,4 @@
 import { App } from './core/App.js';
-import { Debug } from './core/Debug.js';
-import { Environment } from './core/Environment.js';
-import { Terrain } from './world/Terrain.js';
-import { Fox } from './fox/Fox.js';
-import { CameraRig } from './camera/CameraRig.js';
 
 window.__FOX_ERRORS = [];
 const note = (where, e) => {
@@ -15,20 +10,30 @@ window.addEventListener('unhandledrejection', (e) => note('promise', e.reason));
 
 const canvas = document.getElementById('stage');
 const app = new App(canvas);
+window.__app = app;
 
-// --- system manifest -----------------------------------------------------
-// Order is resolved from each system's `order` field, not this list.
-for (const S of [Environment, Terrain, Fox, CameraRig, Debug]) {
-  try { app.register(new S()); } catch (e) { note(`register ${S.name}`, e); }
+/**
+ * Systems are discovered from src/manifest/*.js, loaded in filename order.
+ * Each manifest module exports `systems`: an array of classes or instances.
+ * One file per feature area means parallel contributors never collide.
+ */
+const mods = import.meta.glob('./manifest/*.js', { eager: true });
+for (const key of Object.keys(mods).sort()) {
+  const list = mods[key].systems ?? [];
+  for (const S of list) {
+    try {
+      app.register(typeof S === 'function' ? new S() : S);
+    } catch (e) {
+      note(`register ${key}:${S?.name ?? '?'}`, e);
+    }
+  }
 }
 
 await app.init((p, name) => {
+  window.__FOX_PROGRESS = { p, name };
   if (import.meta.env?.DEV) console.debug(`[init ${(p * 100) | 0}%] ${name}`);
 });
 
 app.start();
-
-if (import.meta.env?.DEV) {
-  window.__app = app;
-  console.info('[fox] ready —', app.ctx.systemsByName.size, 'systems');
-}
+console.info('[fox] ready —', app.ctx.systemsByName.size, 'systems:',
+  [...app.ctx.systemsByName.keys()].join(', '));
