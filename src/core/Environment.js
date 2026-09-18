@@ -1,0 +1,107 @@
+import * as THREE from 'three';
+
+/**
+ * Lighting backbone. Owns the sun, the sky fill, the snow bounce and the
+ * shadow camera. Systems that need light data read it off `ctx` (sunDirection,
+ * sunColor, …) rather than digging into this object.
+ *
+ * Art bible §3: warm low sun + cool sky fill + bright upward snow bounce.
+ * That three-way split is what makes white fur read as white-in-cold-light
+ * instead of grey.
+ */
+export class Environment {
+  name = 'environment';
+  order = -100; // before anything that wants to read light state
+
+  init(ctx) {
+    this.ctx = ctx;
+    const { scene } = ctx;
+
+    scene.background = null;
+    // Aerial perspective. Distance target from the bible (#aac4e0).
+    scene.fog = new THREE.FogExp2(0x9fbcdc, 0.0125);
+
+    // --- sun ---------------------------------------------------------------
+    this.sun = new THREE.DirectionalLight(ctx.sunColor.clone(), ctx.sunIntensity);
+    this.sun.castShadow = true;
+    this.sun.shadow.bias = -0.0006;
+    this.sun.shadow.normalBias = 0.022;
+    this.sun.shadow.radius = 4.5;
+    this.sun.shadow.blurSamples = 16;
+    scene.add(this.sun);
+    this.sunTarget = new THREE.Object3D();
+    scene.add(this.sunTarget);
+    this.sun.target = this.sunTarget;
+
+    // --- sky fill (cool, from above) --------------------------------------
+    this.hemi = new THREE.HemisphereLight(ctx.skyColor.clone(), ctx.groundBounce.clone(), 1.25);
+    scene.add(this.hemi);
+
+    // --- snow bounce (warm-cool, from below/front) ------------------------
+    // A real snowfield throws a LOT of light back up. Without this the belly,
+    // jaw and tail underside go dead and the fox reads as pasted-on.
+    this.bounce = new THREE.DirectionalLight(ctx.groundBounce.clone(), 0.85);
+    this.bounce.position.set(0.5, -1, 0.6);
+    this.bounce.castShadow = false;
+    scene.add(this.bounce);
+
+    // --- a cool kicker opposite the sun, standing in for sky occlusion ----
+    this.rim = new THREE.DirectionalLight(new THREE.Color(0xa8c8f0), 0.55);
+    this.rim.castShadow = false;
+    scene.add(this.rim);
+
+    this.applyQuality(ctx);
+    this._placeLights(ctx);
+    ctx.environment = this;
+  }
+
+  applyQuality(ctx) {
+    const size = ctx.quality.get('shadowMapSize');
+    this.sun.shadow.mapSize.set(size, size);
+    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    this.sun.shadow.radius = ctx.quality.get('softShadow') ? 4.5 : 1;
+  }
+
+  onQuality(e, ctx) { if (e.type === 'tier') this.applyQuality(ctx); }
+
+  /** Shadow frustum follows the subject so we spend every texel on the fox. */
+  _placeLights(ctx) {
+    const d = ctx.sunDirection;
+    const focus = ctx.subjectPosition ?? new THREE.Vector3(0, 0.25, 0);
+
+    this.sunTarget.position.copy(focus);
+    this.sun.position.copy(focus).addScaledVector(d, 22);
+
+    // Tight frustum around the animal + a little ground for contact shadow.
+    const cam = this.sun.shadow.camera;
+    const half = 1.55;
+    cam.left = -half; cam.right = half;
+    cam.top = half; cam.bottom = -half;
+    cam.near = 18; cam.far = 27.5;
+    cam.updateProjectionMatrix();
+
+    this.rim.position.copy(focus).add(new THREE.Vector3(-d.x, 0.55, -d.z).multiplyScalar(10));
+    this.rim.target = this.sunTarget;
+    this.bounce.position.copy(focus).add(new THREE.Vector3(d.x * 0.3, -1, d.z * 0.3).multiplyScalar(8));
+    this.bounce.target = this.sunTarget;
+  }
+
+  update(dt, ctx) {
+    // Keep the sun's colour/intensity authoritative on ctx so a UI slider or
+    // the debug API can drive the whole scene from one place.
+    this.sun.color.copy(ctx.sunColor);
+    this.sun.intensity = ctx.sunIntensity;
+    this.hemi.color.copy(ctx.skyColor);
+    this.hemi.groundColor.copy(ctx.groundBounce);
+
+    if (ctx.sunDirty || ctx.frame < 3 || ctx.frame % 6 === 0) {
+      this._placeLights(ctx);
+      ctx.sunDirty = false;
+    }
+    ctx.renderer.toneMappingExposure = ctx.exposure;
+  }
+
+  dispose() {
+    this.sun.shadow.map?.dispose();
+  }
+}
