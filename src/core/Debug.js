@@ -91,6 +91,65 @@ export class Debug {
         ctx.sunDirty = true;
       },
 
+      /** Numeric probes for tools/audit.mjs — see REVIEW.md category E/H. */
+      probe: () => {
+        const f = ctx.fox;
+        const out = { t: +ctx.time.toFixed(4), paws: {}, ground: {}, root: null };
+        if (!f) return out;
+        f.root?.updateWorldMatrix?.(true, true);
+        out.root = f.root ? f.root.position.toArray() : null;
+        const v = new THREE.Vector3();
+        for (const k of ['pawFL', 'pawFR', 'pawRL', 'pawRR']) {
+          const a = f.anchors?.[k];
+          if (!a) continue;
+          a.updateWorldMatrix(true, false);
+          out.paws[k] = v.setFromMatrixPosition(a.matrixWorld).toArray().map((n) => +n.toFixed(6));
+          out.ground[k] = +(ctx.terrain?.heightAt?.(out.paws[k][0], out.paws[k][2]) ?? 0).toFixed(6);
+        }
+        out.state = ctx.systemsByName.get('foxBrain')?.state ?? null;
+        out.speed = ctx.fox?.velocity?.length?.() ?? null;
+        return out;
+      },
+
+      /** Hunt for NaN/Infinity leaking into transforms — one bad frame poisons
+       *  the whole skeleton and the symptom (invisible mesh) is baffling. */
+      scanNaN: () => {
+        const bad = [];
+        const fin = (o) => Number.isFinite(o);
+        ctx.scene.traverse((o) => {
+          const p = o.position, q = o.quaternion, s = o.scale;
+          if (![p.x, p.y, p.z, q.x, q.y, q.z, q.w, s.x, s.y, s.z].every(fin)) {
+            bad.push(`${o.type}:${o.name || '(unnamed)'}`);
+          }
+        });
+        const sk = ctx.fox?.skeleton;
+        if (sk) {
+          for (let i = 0; i < sk.bones.length; i++) {
+            const e = sk.boneMatrices?.[i * 16];
+            if (e !== undefined && !fin(e)) bad.push(`bone:${sk.bones[i].name}`);
+          }
+        }
+        return bad;
+      },
+
+      /** Every material in the scene, for a shading audit. */
+      materials: () => {
+        const seen = new Map();
+        ctx.scene.traverse((o) => {
+          for (const m of [].concat(o.material ?? [])) {
+            if (m && !seen.has(m.uuid)) {
+              seen.set(m.uuid, {
+                name: m.name || m.type, type: m.type,
+                transparent: !!m.transparent, blending: m.blending,
+                depthWrite: !!m.depthWrite, side: m.side,
+                toneMapped: m.toneMapped !== false,
+              });
+            }
+          }
+        });
+        return [...seen.values()];
+      },
+
       stats: () => {
         const i = ctx.renderer.info;
         return {
@@ -116,11 +175,10 @@ export class Debug {
     };
 
     window.FoxDebug = api;
-    // A plain boolean the harness can poll without touching promises.
-    window.__FOX_READY = false;
-    queueMicrotask(() => {
-      window.__FOX_READY = true;
-      this._readyResolve?.(api);
-    });
+    this._api = api;
+    // NOTE: __FOX_READY is raised by src/main.js once App.init() has fully
+    // resolved. Raising it here would let the review harness photograph a
+    // half-booted scene whenever a later system throws.
+    this._readyResolve?.(api);
   }
 }

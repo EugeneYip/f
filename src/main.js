@@ -29,11 +29,29 @@ for (const key of Object.keys(mods).sort()) {
   }
 }
 
-await app.init((p, name) => {
-  window.__FOX_PROGRESS = { p, name };
-  if (import.meta.env?.DEV) console.debug(`[init ${(p * 100) | 0}%] ${name}`);
-});
+window.__FOX_READY = false;
+
+let initErrors = [];
+try {
+  initErrors = await app.init((p, name) => {
+    window.__FOX_PROGRESS = { p, name };
+    if (import.meta.env?.DEV) console.debug(`[init ${(p * 100) | 0}%] ${name}`);
+  });
+} catch (e) {
+  note('app.init', e);
+}
 
 app.start();
+
+// Raise the flag last, and raise it even on partial failure: the review harness
+// and the loading screen both wait on it, and a hard hang is worse than a
+// screenshot of a broken scene plus a loud error list.
+window.__FOX_READY = true;
+window.__FOX_PROGRESS = { p: 1, name: 'ready' };
+
 console.info('[fox] ready —', app.ctx.systemsByName.size, 'systems:',
   [...app.ctx.systemsByName.keys()].join(', '));
+if (initErrors.length) {
+  console.error(`[fox] ${initErrors.length} system(s) failed to init:`,
+    initErrors.map((e) => e.system).join(', '));
+}

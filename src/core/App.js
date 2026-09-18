@@ -26,6 +26,14 @@ export class App {
     this.canvas = canvas;
     this.systems = [];
     this.running = false;
+    this.initErrors = [];
+
+    // Populated by _prerenderSort(); pre-seeded so step() can never explode
+    // if a system throws during init and boot ends early.
+    this._updaters = [];
+    this._fixers = [];
+    this._prerenderers = [];
+    this._renderer = null;
 
     this.FIXED_STEP = 1 / 120;
     this._accum = 0;
@@ -122,19 +130,36 @@ export class App {
     for (let i = 0; i < n; i++) {
       const s = this.systems[i];
       onProgress(i / n, s.name);
-      await s.init?.(this.ctx);
+      try {
+        await s.init?.(this.ctx);
+      } catch (e) {
+        // Isolate the failure: record it, drop the system, keep booting. With
+        // several people landing systems at once, one broken module must not
+        // take the whole page down.
+        this.initErrors.push({ system: s.name, error: String(e?.stack ?? e) });
+        console.error(`[App] system "${s.name}" failed to init — disabling it`, e);
+        window.__FOX_ERRORS?.push(`init ${s.name}: ${e?.message ?? e}`);
+        this.systems[i] = { name: s.name, order: s.order, _failed: true };
+        this.ctx.systemsByName.set(s.name, this.systems[i]);
+      }
       // Yield so the loading UI can paint and we never block > a frame or two.
       await new Promise((r) => requestAnimationFrame(() => r()));
     }
-    onProgress(1, 'ready');
     this._prerenderSort();
+    onProgress(1, 'ready');
+    return this.initErrors;
   }
 
   _prerenderSort() {
     this._updaters = this.systems.filter((s) => s.update);
     this._fixers = this.systems.filter((s) => s.fixed);
     this._prerenderers = this.systems.filter((s) => s.prerender);
-    this._renderer = this.systems.find((s) => s.renderFrame) || null;
+    const claimants = this.systems.filter((s) => s.renderFrame);
+    if (claimants.length > 1) {
+      console.error('[App] more than one system defines renderFrame — only ' +
+        `"${claimants[0].name}" will run. Offenders: ${claimants.map((c) => c.name).join(', ')}`);
+    }
+    this._renderer = claimants[0] ?? null;
   }
 
   _applyRenderSize() {
@@ -178,8 +203,21 @@ export class App {
 
   render() {
     this.renderer.info.reset();
-    if (this._renderer) this._renderer.renderFrame(this.ctx);
-    else this.renderer.render(this.scene, this.camera);
+    if (this._renderer) {
+      try {
+        this._renderer.renderFrame(this.ctx);
+        return;
+      } catch (e) {
+        if (!this._renderFrameFailed) {
+          this._renderFrameFailed = true;
+          console.error(`[App] renderFrame from "${this._renderer.name}" threw; ` +
+            'falling back to a direct scene render for the rest of the session', e);
+          window.__FOX_ERRORS?.push(`renderFrame ${this._renderer.name}: ${e?.message ?? e}`);
+        }
+        this._renderer = null;
+      }
+    }
+    this.renderer.render(this.scene, this.camera);
   }
 
   _loop = (now) => {

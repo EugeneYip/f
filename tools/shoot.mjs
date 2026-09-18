@@ -57,6 +57,13 @@ const CHROME_ARGS = [
   '--disable-partial-raster',
   '--js-flags=--max-old-space-size=4096',
   '--autoplay-policy=no-user-gesture-required',
+  '--disable-gpu-vsync',
+  '--disable-frame-rate-limit',
+  '--run-all-compositor-stages-before-draw',
+  '--disable-new-content-rendering-timeout',
+  '--disable-background-timer-throttling',
+  '--disable-renderer-backgrounding',
+  '--disable-backgrounding-occluded-windows',
 ];
 
 async function startServer(args) {
