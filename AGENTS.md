@@ -111,6 +111,15 @@ Then **look at the PNGs with the Read tool.** Do not declare success on a green
 exit code alone — a black frame also exits 0. Read `shots/<you>/report.json` for
 draw calls, triangle counts and per-tier frame times.
 
+## Measuring performance honestly
+
+Several agents run headless Chromium against the same GPU at once. When that
+happens your frame time measures **queue wait**, not your own work, and every
+tier reports nearly the same number regardless of its triangle count.
+`tools/audit.mjs` detects this and prints a contention warning; when it fires,
+treat the numbers as a floor, say so in your report, and do not tune against
+them. A clean measurement pass happens at the end with nothing else running.
+
 ## Performance budget (per system, at `high`, 1280×800)
 
 Whole frame ≤ 16 ms. Fur ≤ 6 ms · terrain ≤ 2 ms · atmosphere ≤ 2.5 ms ·

@@ -21,6 +21,37 @@ import { clamp } from '../util/math.js';
  * Systems must not reach into each other directly; publish on `ctx` instead
  * (e.g. `ctx.fox`, `ctx.terrain`) and read defensively.
  */
+/**
+ * three clears the shadow map with whatever clear colour the app happens to
+ * have set (WebGLShadowMap.render -> renderer.clear(), around line 169 of
+ * src/renderers/webgl/WebGLShadowMap.js). Under VSM the map stores depth
+ * moments, so a DARK clear colour means every texel that no caster wrote to
+ * reads as an occluder sitting at the near plane, and the entire shadow
+ * frustum comes out shadowed. Our clear colour is a dark blue, so we hit this
+ * squarely.
+ *
+ * three exposes no hook for it, so wrap the shadow pass and force a white
+ * clear (= nothing in front of anything) for its duration only. Callers see
+ * no change: the previous clear colour and alpha are restored either way.
+ */
+function patchShadowClear(renderer) {
+  const shadowMap = renderer.shadowMap;
+  if (shadowMap.__clearPatched) return;
+  const inner = shadowMap.render.bind(shadowMap);
+  const prevColor = new THREE.Color();
+  shadowMap.render = function (lights, scene, camera) {
+    renderer.getClearColor(prevColor);
+    const prevAlpha = renderer.getClearAlpha();
+    renderer.setClearColor(0xffffff, 1);
+    try {
+      inner(lights, scene, camera);
+    } finally {
+      renderer.setClearColor(prevColor, prevAlpha);
+    }
+  };
+  shadowMap.__clearPatched = true;
+}
+
 export class App {
   constructor(canvas) {
     this.canvas = canvas;
@@ -108,6 +139,7 @@ export class App {
     r.shadowMap.autoUpdate = true;
     r.setClearColor(0x0a1220, 1);
     r.info.autoReset = false;
+    patchShadowClear(r);
     return r;
   }
 
