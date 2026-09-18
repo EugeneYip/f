@@ -1,0 +1,721 @@
+/**
+ * Fur GLSL. OWNER: fur agent.
+ *
+ * One shading model, three geometry variants:
+ *
+ *   base   the fox's own skin mesh, opaque. The floor of the coat: dark cream
+ *          undercoat, plus the dark wet nose/pads carried by the vertex colour.
+ *   shell  concentric offset shells drawn INSTANCED — one draw call, N shells,
+ *          `aShell` is the instance index. Alpha-cut by a cellular hair field
+ *          evaluated in BIND space, so it can never swim when the animal
+ *          deforms or the camera moves.
+ *   card   hair-card tufts that break the mesh silhouette into strands.
+ *
+ * Everything that varies through the coat is a function of `t` — normalised
+ * depth, 0 at the skin, 1 at the outermost shell / hair tip.
+ *
+ * Coordinate conventions, in order of importance:
+ *   1. The hair PATTERN is evaluated at `vRoot`, the bind-space position of the
+ *      hair's root. Bind space is rigid with respect to the skin, so a hair
+ *      keeps its identity through any skeletal deformation. This is the single
+ *      most important decision in the file.
+ *   2. The hair SHAPE (normal rise + tangential lay) is built in bind space and
+ *      then skinned, so the comb follows the body.
+ *   3. Gravity and wind are applied AFTER skinning, in world space, because
+ *      that is where they actually act.
+ */
+import { HASH, SIMPLEX3, WORLEY3, IGN, UTIL } from './noise.glsl.js';
+
+export const REGION_COUNT = 27;
+
+/* ------------------------------------------------------------------ uniforms */
+
+export const FUR_UNIFORMS = /* glsl */ `
+// --- light (rewritten every frame from ctx.*) ------------------------------
+uniform vec3  uSunDir;         // TOWARDS the sun, world space
+uniform vec3  uSunColor;
+uniform float uSunIntensity;
+uniform vec3  uSkyColor;
+uniform vec3  uGroundBounce;
+uniform float uAmbient;
+uniform float uAmbientSat;
+
+// --- dynamics --------------------------------------------------------------
+uniform float uTime;
+uniform vec3  uWindDir;        // ctx.wind, unit — the same vector the snow uses
+uniform float uWindSpeed;      // ctx.windSpeed * (1 + 1.4*gust), as SnowParticles
+uniform float uWindGust;
+uniform vec3  uGravity;        // world down
+
+// --- coat shape ------------------------------------------------------------
+uniform vec3  uEyeL;           // bind-space eyeball centres: the coat has to
+uniform vec3  uEyeR;           // part around the eye or it buries the face
+uniform vec2  uEyeFade;        // x inner radius (bald), y outer radius
+uniform float uShellCount;
+uniform float uCoatScale;
+uniform float uLay;
+uniform float uDroop;
+uniform float uWindBend;
+uniform float uWaveFreq;
+uniform float uWaveSpeed;
+
+// --- hair field ------------------------------------------------------------
+uniform float uClumpFreq;      // clumps per metre
+uniform float uStrandFreq;     // strands per metre
+uniform float uMicroFreq;
+uniform float uClumpPull;
+uniform float uStrandRoot;
+uniform float uStrandTip;
+uniform float uHairLenMin;
+uniform float uDensity;
+uniform float uFill;
+uniform float uCoatVarFreq;
+
+// --- shading ---------------------------------------------------------------
+uniform vec3  uFurLit;
+uniform vec3  uFurUnder;
+uniform vec3  uShadowTint;
+uniform vec3  uSpecTintA;
+uniform vec3  uSpecTintB;
+uniform vec3  uTransTint;
+uniform float uSpecShiftA;
+uniform float uSpecShiftB;
+uniform float uSpecPowA;
+uniform float uSpecPowB;
+uniform float uSpecGainA;
+uniform float uSpecGainB;
+uniform float uSpecJitter;
+uniform float uWrap;
+uniform float uTrans;
+uniform float uTransPow;
+uniform float uAOInner;
+uniform float uAOPow;
+uniform float uAOBake;
+uniform float uAniso;
+uniform float uStrandRound;
+uniform float uRim;
+
+// --- stochastic / TAA ------------------------------------------------------
+uniform float uStochastic;     // 0 = smooth alpha · 1 = IGN dithered cut-out
+uniform float uFrameSeed;
+
+// --- per-region tables -----------------------------------------------------
+// A: x density   y length     z lay     w tipWhite
+// B: x clumpScale  y freqScale  z aoScale  w cardWeight
+uniform vec4 uRegionA[${REGION_COUNT}];
+uniform vec4 uRegionB[${REGION_COUNT}];
+`;
+
+export const FUR_VARYINGS = /* glsl */ `
+varying vec3 vRoot;   // BIND-space hair root — the stable noise domain
+varying vec3 vWPos;
+varying vec3 vNrm;    // world surface normal
+varying vec3 vTan;    // world hair direction at this depth
+varying vec4 vP0;     // x t · y baseTint · z bakedOcclusion · w density
+varying vec4 vP1;     // x clumpScale · y freqScale · z tipWhite · w coatLen
+`;
+
+/* ------------------------------------------------------------ vertex helpers */
+
+const SKIN_FN = /* glsl */ `
+/** Object-space skin matrix for the current vertex. */
+mat4 furSkinMatrix(){
+  #ifdef USE_SKINNING
+    mat4 bx = getBoneMatrix(skinIndex.x);
+    mat4 by = getBoneMatrix(skinIndex.y);
+    mat4 bz = getBoneMatrix(skinIndex.z);
+    mat4 bw = getBoneMatrix(skinIndex.w);
+    mat4 s = skinWeight.x * bx + skinWeight.y * by + skinWeight.z * bz + skinWeight.w * bw;
+    return bindMatrixInverse * s * bindMatrix;
+  #else
+    return mat4(1.0);
+  #endif
+}
+`;
+
+const COATLEN_FN = /* glsl */ `
+/**
+ * Coat thickness at this vertex, in metres.
+ *
+ * furLength from the anatomy agent is COAT THICKNESS, not hair length, so it
+ * maps straight onto the outermost shell's normal offset. The eye mask is the
+ * one thing it does not know about: 24 mm of cheek ruff 15 mm from the cornea
+ * swallows the whole face at macro range, and real canids are bald to the
+ * lid margin.
+ */
+float furCoatLength(vec3 p, float lengthScale){
+  float de = min(distance(p, uEyeL), distance(p, uEyeR));
+  float eye = smoothstep(uEyeFade.x, uEyeFade.y, de);
+  return furLength * uCoatScale * lengthScale * eye;
+}
+`;
+
+const DYNAMICS_FN = /* glsl */ `
+/**
+ * World-space displacement coefficient W: the hair's offset is t*t * W.
+ * Quadratic in t is the small-deflection cantilever shape — a hair pinned at
+ * the root and free at the tip. Gravity and wind both act here, after skinning,
+ * and both are scaled by (1 - stiffness) through the bendable term.
+ *
+ * Gusts arrive as a travelling plane wave along the wind direction, with a
+ * per-strand phase offset so the coat ripples instead of pulsing as one sheet.
+ */
+vec3 furDynamics(vec3 rootW, float bendable, float seed, float boost){
+  vec3 W = uGravity * (uDroop * bendable * boost);
+  float phase = dot(rootW, uWindDir) * uWaveFreq - uTime * uWaveSpeed + seed * 6.2831853;
+  float gust  = 0.5 + 0.5 * sin(phase);
+  float flick = sin(phase * 2.17 + seed * 11.0);
+  float amt   = (uWindSpeed * 0.030 + uWindGust * 0.26 * gust) * uWindBend * bendable * boost;
+  W += uWindDir * amt;
+  W += vec3(0.0, 1.0, 0.0) * (amt * flick * 0.35);
+  return W;
+}
+`;
+
+/* ------------------------------------------------------------------- noise */
+
+export const FUR_NOISE = HASH + SIMPLEX3 + WORLEY3 + IGN + UTIL + /* glsl */ `
+/**
+ * Exact cellular F1 over a 2x2x2 neighbourhood.
+ *
+ * Sites are confined to the middle half of their cell ([0.25,0.75]^3), which
+ * makes the 8-cell search provably exact — for any query inside the block the
+ * winning site is always one of those eight, so there are no seams — while
+ * being 3.4x cheaper than the 27-cell worley3. Used for the dense strand and
+ * micro layers where the reduced jitter is invisible; the clump layer keeps
+ * full worley3 because clump irregularity is the thing you actually see.
+ */
+float cell8(vec3 q, out vec3 site){
+  vec3 ip = floor(q - 0.5);
+  float best = 1e9;
+  vec3 bs = ip;
+  for (int k = 0; k < 2; k++)
+  for (int j = 0; j < 2; j++)
+  for (int i = 0; i < 2; i++){
+    vec3 c = ip + vec3(float(i), float(j), float(k));
+    vec3 s = c + 0.25 + 0.5 * hash33(c);
+    vec3 d = s - q;
+    float dd = dot(d, d);
+    if (dd < best){ best = dd; bs = s; }
+  }
+  site = bs;
+  return sqrt(best);
+}
+`;
+
+/* -------------------------------------------------------------- hair field */
+
+export const FUR_FIELD = /* glsl */ `
+/**
+ * The coat.
+ *
+ * Returns  .x alpha · .y radial position in the strand (0 axis, 1 edge)
+ *          .z per-strand random · .w occlusion from the clump structure,
+ * and writes the strand axis position (bind space) to the site out-param.
+ *
+ * px is the bind-space size of one screen pixel — the LOD signal. Scales
+ * finer than a pixel are dissolved into their analytic mean coverage instead
+ * of being point-sampled, which is what stops the coat crawling at distance.
+ */
+vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
+             float freqScale, float shellFill, out vec3 site)
+{
+  // Large-scale variation: real fur is not uniformly dense.
+  float coatVar = snoise(p * uCoatVarFreq);
+
+  // ---- clumps ------------------------------------------------------------
+  float fc = uClumpFreq * clumpScale * (1.0 + 0.14 * coatVar);
+  vec3  cid;
+  vec2  cd = worley3(p * fc, cid);
+  vec3  csite = (cid + hash33(cid)) / fc;
+  float cRand = hash13(cid * 1.913);
+
+  // Hairs converge on their clump tip as they rise. This is what turns an even
+  // carpet into tufts, and evenness is an instant tell.
+  float pull = uClumpPull * (0.35 + 0.85 * cRand) * t * t;
+  vec3  pPull = mix(p, csite, clamp(pull, 0.0, 0.95));
+
+  // ---- strands -----------------------------------------------------------
+  float fs = uStrandFreq * freqScale * (1.0 - 0.10 * coatVar);
+  vec3  ssite;
+  float ds = cell8(pPull * fs, ssite);
+  site = ssite / fs;
+  float sRand = hash13(ssite * 2.371);
+
+  // Per-strand length. Without this every hair ends on the same shell and the
+  // coat gets a hard outer boundary — the shrink-wrapped shag-carpet tell.
+  float hairLen = uHairLenMin + (1.0 - uHairLenMin) *
+                  clamp(mix(cRand, 0.25 + 0.75 * sRand * sRand, 0.42), 0.0, 1.0);
+  float lenFade = 1.0 - smoothstep(hairLen - 0.30, hairLen + 0.04, t);
+
+  // Strand cross-section, tapering to a point.
+  float r  = mix(uStrandRoot, uStrandTip, t * t) * (0.62 + 0.72 * sRand);
+  float aa = max(px * fs * 1.6, 0.012);
+  float a  = 1.0 - smoothstep(r - aa, r + aa, ds);
+
+  float sLod = 1.0 - smoothstep(0.16, 0.46, px * fs);
+  float mean = clamp(3.1416 * r * r * 1.15, 0.0, 1.0);
+  a = mix(mean, a, sLod);
+
+  // ---- micro strands: only where a pixel can resolve them -----------------
+  float fm = uMicroFreq * freqScale;
+  float mLod = 1.0 - smoothstep(0.05, 0.17, px * fm);
+  if (mLod > 0.004){
+    vec3  msite;
+    float dm  = cell8(pPull * fm + vec3(11.3, 5.7, 2.9), msite);
+    float maa = max(px * fm * 1.6, 0.02);
+    float mr  = mix(0.34, 0.16, t) * (0.7 + 0.6 * hash13(msite * 3.1));
+    float ma  = 1.0 - smoothstep(mr - maa, mr + maa, dm);
+    a *= mix(1.0, mix(0.30, 1.0, ma), mLod);
+  }
+
+  // ---- undercoat fill -----------------------------------------------------
+  // Near the skin the coat is dense felt, not separate hairs. Without this the
+  // shells read as a stack of nets and you see straight through to the body.
+  float fill = 1.0 - smoothstep(shellFill * 0.42, shellFill * 1.18, t);
+  a = max(a, fill * uFill * (0.84 + 0.16 * cRand));
+
+  // ---- the tuft --------------------------------------------------------
+  // Each clump is a CONE: wide enough at the root to cover the skin, narrowing
+  // to a point at the tip, so the gaps between tufts open up as you climb
+  // through the coat. This is the difference between fur and carpet, and it is
+  // what breaks the shells' long parallel comb strokes into separate locks.
+  float tuftR = mix(1.00, 0.26, t * t) * (0.70 + 0.62 * cRand);
+  float taa   = max(px * fc * 1.6, 0.02);
+  float tuft  = 1.0 - smoothstep(tuftR - taa, tuftR + taa, cd.x);
+  tuft = mix(1.0, tuft, smoothstep(0.0, 0.22, t));
+
+  a *= tuft * lenFade * densityScale * uDensity;
+
+  // Gaps between tufts are deep, so they are dark.
+  float clumpAO = mix(0.66, 1.0, smoothstep(0.02, 0.40, cd.y - cd.x) * 0.45
+                                + smoothstep(0.55, 0.10, cd.x) * 0.55);
+
+  return vec4(clamp(a, 0.0, 1.0), clamp(ds / max(r, 1e-4), 0.0, 1.0), sRand, clumpAO);
+}
+`;
+
+/* ----------------------------------------------------------------- shading */
+
+export const FUR_SHADE = /* glsl */ `
+/** Kajiya-Kay lobe about a tangent shifted along the surface normal. */
+float kkLobe(vec3 T, vec3 N, vec3 H, float shift, float power){
+  vec3 t = normalize(T + N * shift);
+  float dotTH = dot(t, H);
+  float sinTH = sqrt(max(0.0, 1.0 - dotTH * dotTH));
+  return pow(sinTH, power);
+}
+
+/**
+ * The fur BRDF.
+ *   N    shading normal, already bent to the per-strand cylinder
+ *   T    hair direction, world
+ *   V    towards the camera
+ *   t    depth through the coat
+ *   ao   combined occlusion
+ *   rnd  per-strand random — breaks the specular into individual hairs
+ */
+vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
+              float tipWhite, vec3 tintMul)
+{
+  vec3  L = uSunDir;
+  vec3  H = normalize(L + V);
+  float ndl = dot(N, L);
+  float ndv = abs(dot(N, V));
+
+  // ---- albedo: cream undercoat -> warm-white tips ------------------------
+  vec3 albedo = mix(uFurUnder, uFurLit, smoothstep(0.0, 0.34, t));
+  albedo = mix(albedo, uFurLit, tipWhite * smoothstep(0.35, 1.0, t) * 0.55);
+  albedo *= tintMul;
+
+  // ---- wrapped diffuse: fur scatters, so the terminator is soft and wide --
+  float wrapD = clamp((ndl + uWrap) / (1.0 + uWrap), 0.0, 1.0);
+  wrapD *= wrapD;
+  float lit = clamp(wrapD * 1.9, 0.0, 1.0);
+
+  // White fur in shade is BLUE, never grey (bible §3). Two mechanisms, both
+  // needed: a hue shift on the albedo and a sky-coloured ambient.
+  albedo *= mix(uShadowTint, vec3(1.0), lit);
+
+  // 1/PI so the fox sits at the same exposure as everything three lights with
+  // the standard BRDF (the snow, chiefly) — without it the animal blows out.
+  vec3 direct = uSunColor * uSunIntensity * wrapD * mix(ao, 1.0, 0.35) * RECIPROCAL_PI;
+
+  // ---- ambient: cool sky above, snow bounce below -------------------------
+  float up = N.y * 0.5 + 0.5;
+  vec3 amb = mix(uGroundBounce, uSkyColor, up);
+  amb = mix(vec3(luma(amb)), amb, uAmbientSat);
+  vec3 ambient = amb * (uAmbient * RECIPROCAL_PI) * ao;
+
+  vec3 col = albedo * (direct + ambient);
+
+  // ---- anisotropic specular, two shifted lobes ---------------------------
+  if (uAniso > 0.5){
+    float j  = (rnd - 0.5) * uSpecJitter;
+    float s1 = kkLobe(T, N, H, uSpecShiftA + j, uSpecPowA);
+    float s2 = kkLobe(T, N, H, uSpecShiftB + j * 1.7, uSpecPowB);
+    s2 *= 0.35 + 0.95 * rnd;   // the secondary lobe glints hair by hair
+    float vis = clamp(ndl * 2.2 + 0.30, 0.0, 1.0) * mix(0.25, 1.0, t);
+    col += uSunColor * uSunIntensity * vis * ao *
+           (s1 * uSpecGainA * uSpecTintA + s2 * uSpecGainB * uSpecTintB);
+  }
+
+  // ---- forward scattering: this is the shot -------------------------------
+  // Light that entered the far side of the coat and kept going. Peaks when the
+  // camera looks into the sun, strongest in the thin outer coat and at grazing
+  // angles — i.e. exactly along the rim.
+  float fwd   = pow(clamp(-dot(V, L), 0.0, 1.0), uTransPow);
+  float thin  = mix(0.10, 1.0, t * t);
+  float graze = pow(1.0 - ndv, 1.3);
+  float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
+  col += uSunColor * uSunIntensity * uTransTint * albedo *
+         (uTrans * RECIPROCAL_PI * fwd * thin * (0.06 + 1.85 * graze) * (0.30 + 0.95 * shell));
+
+  // A cool sky rim keeps the shadow side alive on the silhouette.
+  col += uSkyColor * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
+
+  return col;
+}
+`;
+
+/* ------------------------------------------------------- shell / base pass */
+
+export function furVertexShader(variant) {
+  const isShell = variant === 'shell';
+  return /* glsl */ `
+#include <common>
+#include <skinning_pars_vertex>
+#include <color_pars_vertex>
+#include <fog_pars_vertex>
+${FUR_UNIFORMS}
+${FUR_VARYINGS}
+${HASH}
+${SKIN_FN}
+
+attribute float furLength;
+attribute float furStiffness;
+attribute vec3  furTangent;
+attribute float region;
+attribute float aFurAO;        // 0 = open, 1 = fully occluded (safe default 0)
+${COATLEN_FN}
+${DYNAMICS_FN}
+${isShell ? 'attribute float aShell;' : ''}
+
+void main(){
+  #include <color_vertex>
+
+  int  ri = int(clamp(region, 0.0, ${REGION_COUNT - 1}.0) + 0.5);
+  vec4 ra = uRegionA[ri];
+  vec4 rb = uRegionB[ri];
+
+  float t = 0.0;
+  ${isShell ? 't = (aShell + 1.0) / max(uShellCount, 1.0);' : ''}
+
+  float L    = furCoatLength(position, ra.y);
+  float soft = 1.0 - furStiffness;
+  vec3  nb   = normalize(normal);
+  vec3  tb   = furTangent;
+
+  // --- the comb ------------------------------------------------------------
+  // Rise along the normal preserves the coat's measured thickness; the
+  // tangential term shears the shells so hairs LIE DOWN along furFlow instead
+  // of standing off like a sea urchin. Soft fur lies flatter than guard hair.
+  float lay  = uLay * ra.z * (0.30 + 1.05 * soft);
+  vec3  offB = nb * (L * t) + tb * (L * lay * t * t);
+  vec3  hdir = normalize(nb + tb * (2.0 * lay * t));
+
+  // --- skin ----------------------------------------------------------------
+  mat4 sk  = furSkinMatrix();
+  mat3 sk3 = mat3(sk);
+  vec3 posO  = (sk * vec4(position + offB, 1.0)).xyz;
+  vec3 rootO = (sk * vec4(position, 1.0)).xyz;
+  vec3 nO    = normalize(sk3 * nb);
+  vec3 hO    = normalize(sk3 * hdir);
+
+  mat3 m3 = mat3(modelMatrix);
+  vec4 wp = modelMatrix * vec4(posO, 1.0);
+  vec3 wn = normalize(m3 * nO);
+  vec3 wh = normalize(m3 * hO);
+
+  // --- gravity + wind, world space, after skinning -------------------------
+  vec3 rootW = (modelMatrix * vec4(rootO, 1.0)).xyz;
+  vec3 W = furDynamics(rootW, L * (0.25 + 0.95 * soft), hash13(position * 53.17), 1.0);
+  wp.xyz += W * (t * t);
+
+  vRoot = position;
+  vWPos = wp.xyz;
+  vNrm  = wn;
+  vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
+  vP0   = vec4(t, rb.z, aFurAO, ra.x);
+  vP1   = vec4(rb.x, rb.y, ra.w, L);
+
+  vec4 mvPosition = viewMatrix * wp;
+  gl_Position = projectionMatrix * mvPosition;
+
+  #ifdef USE_FOG
+    vFogDepth = -mvPosition.z;
+  #endif
+}
+`;
+}
+
+export function furFragmentShader(variant) {
+  const isShell = variant === 'shell';
+  return /* glsl */ `
+precision highp float;
+#include <common>
+#include <fog_pars_fragment>
+${FUR_UNIFORMS}
+${FUR_VARYINGS}
+${isShell ? FUR_NOISE + FUR_FIELD : HASH + UTIL}
+${FUR_SHADE}
+#ifdef USE_COLOR
+  varying vec3 vColor;
+#endif
+
+void main(){
+  float t   = vP0.x;
+  vec3  V   = normalize(cameraPosition - vWPos);
+  vec3  N   = normalize(vNrm);
+  vec3  T   = normalize(vTan);
+  float ao  = 1.0 - vP0.z * uAOBake;
+  float rnd = 0.5;
+  vec3  tint = vec3(1.0);
+  float alpha = 1.0;
+
+${isShell ? /* glsl */ `
+  // Bind-space pixel footprint — the LOD signal for every noise scale.
+  float px = max(length(fwidth(vRoot)), 1e-7);
+  float shellFill = clamp(3.0 / max(uShellCount, 1.0) + 0.46, 0.30, 0.95);
+
+  vec3 site;
+  vec4 hair = furHair(vRoot, t, px, vP0.w, vP1.x, vP1.y, shellFill, site);
+  alpha = hair.x;
+  if (alpha < 0.004) discard;
+
+  rnd = hair.z;
+  ao *= hair.w;
+
+  // Per-strand cylinder normal. Without this every hair in a tuft shades
+  // identically and the macro shot turns to mush.
+  float sLod = 1.0 - smoothstep(0.16, 0.5, px * uStrandFreq * vP1.y);
+  if (uStrandRound > 0.001 && sLod > 0.01){
+    vec3 B = cross(T, V);
+    float bl = length(B);
+    if (bl > 1e-5){
+      B /= bl;
+      vec3 Vp = normalize(cross(B, T));
+      vec3 toAxis = vRoot - site;
+      float sgn = dot(toAxis, B) < 0.0 ? -1.0 : 1.0;
+      float x = clamp(sgn * hair.y, -1.0, 1.0);
+      vec3 Ncyl = normalize(B * x + Vp * sqrt(max(0.0, 1.0 - x * x)));
+      N = normalize(mix(N, Ncyl, uStrandRound * sLod));
+    }
+  }
+
+  // Depth-attenuated occlusion: the inside of the coat must be markedly darker
+  // than the tips, or it reads as a flat decal instead of a deep coat.
+  ao *= mix(uAOInner, 1.0, pow(t, uAOPow));
+  ao *= mix(0.60, 1.0, 1.0 - hair.y * 0.5);
+` : /* glsl */ `
+  // Base layer: skin under the coat — dark, occluded, faintly cool.
+  ao *= uAOInner * 0.8;
+  #ifdef USE_COLOR
+    // Pad leather and the nose come through the vertex colour. Under a dense
+    // paw coat almost none of it should read, or the fox grows teddy-bear feet.
+    tint = mix(vec3(1.0), vColor, vP0.y);
+  #endif
+`}
+
+  vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint);
+
+${isShell ? /* glsl */ `
+  // Stochastic cut-out. The threshold is hashed in OBJECT space, so it is
+  // temporally stable with or without TAA; interleaved-gradient screen noise is
+  // blended in only when a TAA resolve is actually running.
+  if (uStochastic > 0.001){
+    float d = mix(hash13(site * 91.7 + t * 3.1),
+                  ign(gl_FragCoord.xy + uFrameSeed * 5.588238), uStochastic);
+    if (alpha < d * 0.92) discard;
+    alpha = min(1.0, alpha + 0.55 * uStochastic);
+  }
+` : ''}
+
+  gl_FragColor = vec4(col, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}
+`;
+}
+
+/* ------------------------------------------------------------- hair cards */
+
+/**
+ * Cards are cylindrical billboards: each tuft rotates about its own hair axis
+ * to face the camera, so it always presents full width. Shells alone can never
+ * remove the mesh's smooth outline — these are what turn that outline into
+ * individual strands against the sky.
+ */
+export function cardVertexShader() {
+  return /* glsl */ `
+#include <common>
+#include <skinning_pars_vertex>
+#include <fog_pars_vertex>
+${FUR_UNIFORMS}
+${FUR_VARYINGS}
+${HASH}
+${SKIN_FN}
+
+uniform float uCardWidth;
+uniform float uCardLength;
+
+attribute float furLength;
+attribute float furStiffness;
+attribute vec3  furTangent;
+attribute float region;
+attribute float aFurAO;
+attribute vec4  aCard;   // x v along card · y side -1/+1 · z rand · w lengthMul
+${COATLEN_FN}
+${DYNAMICS_FN}
+
+varying vec3  vCard;     // x across 0..1 · y along 0..1 · z rand
+varying float vEdge;     // silhouette weight
+
+void main(){
+  int  ri = int(clamp(region, 0.0, ${REGION_COUNT - 1}.0) + 0.5);
+  vec4 ra = uRegionA[ri];
+  vec4 rb = uRegionB[ri];
+
+  float v    = aCard.x;
+  float side = aCard.y;
+  float rnd  = aCard.z;
+  float soft = 1.0 - furStiffness;
+  float L    = furCoatLength(position, ra.y) * uCardLength * aCard.w;
+
+  vec3  nb   = normalize(normal);
+  vec3  tb   = furTangent;
+  // Cards fold over much harder than the shells do, and rise less far along
+  // the normal. A tuft that stands perpendicular to the skin is a quill.
+  float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * 1.9;
+  float rise = 0.58;
+  vec3  offB = nb * (L * v * rise) + tb * (L * lay * v * (0.42 + 0.58 * v));
+  vec3  hdir = normalize(nb * rise + tb * (lay * (0.42 + 1.16 * v)));
+
+  mat4 sk  = furSkinMatrix();
+  mat3 sk3 = mat3(sk);
+  vec3 posO  = (sk * vec4(position + offB, 1.0)).xyz;
+  vec3 rootO = (sk * vec4(position, 1.0)).xyz;
+  vec3 nO    = normalize(sk3 * nb);
+  vec3 hO    = normalize(sk3 * hdir);
+
+  mat3 m3 = mat3(modelMatrix);
+  vec4 wp = modelMatrix * vec4(posO, 1.0);
+  vec3 wn = normalize(m3 * nO);
+  vec3 wh = normalize(m3 * hO);
+
+  vec3 rootW = (modelMatrix * vec4(rootO, 1.0)).xyz;
+  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), rnd, 1.3);
+  wp.xyz += W * (v * v);
+  vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
+
+  vec3 toCam = normalize(cameraPosition - wp.xyz);
+  vec3 B = cross(hairW, toCam);
+  float bl = length(B);
+  B = bl > 1e-5 ? B / bl : normalize(cross(hairW, vec3(0.0, 1.0, 0.0)));
+
+  float w = uCardWidth * clamp(furLength * uCoatScale, 0.004, 0.06)
+          * (0.55 + 0.9 * rnd) * pow(max(1.0 - v, 0.0), 0.5);
+  wp.xyz += B * (side * w);
+
+  vRoot = position;
+  vWPos = wp.xyz;
+  vNrm  = wn;
+  vTan  = hairW;
+  vP0   = vec4(v, rb.z, aFurAO, ra.x);
+  vP1   = vec4(rb.x, rb.y, ra.w, L);
+  vCard = vec3(side * 0.5 + 0.5, v, rnd);
+  vEdge = 1.0 - abs(dot(wn, toCam));
+
+  vec4 mvPosition = viewMatrix * wp;
+  gl_Position = projectionMatrix * mvPosition;
+  #ifdef USE_FOG
+    vFogDepth = -mvPosition.z;
+  #endif
+}
+`;
+}
+
+export function cardFragmentShader() {
+  return /* glsl */ `
+precision highp float;
+#include <common>
+#include <fog_pars_fragment>
+${FUR_UNIFORMS}
+${FUR_VARYINGS}
+${HASH}
+${UTIL}
+${FUR_SHADE}
+
+uniform float uCardInner;
+uniform float uCardOpacity;
+
+varying vec3  vCard;
+varying float vEdge;
+
+void main(){
+  float v   = vCard.y;
+  float rnd = vCard.z;
+
+  // Several hairs per card, each with its own radius, length and phase.
+  float n  = 2.0 + floor(rnd * 3.99);
+  float s  = vCard.x * n + rnd * 7.31;
+  float fi = floor(s);
+  float fr = fract(s);
+  float hr = hash11(fi * 1.7 + rnd * 31.0);
+
+  float d   = abs(fr - 0.5) * 2.0;
+  float rad = 0.30 + 0.52 * hr;
+  float aa  = clamp(fwidth(s) * 1.6, 0.02, 1.2);
+  float a   = 1.0 - smoothstep(rad - aa, rad + aa, d);
+
+  // Per-hair length, so the card never ends on a straight edge.
+  float hlen = 0.42 + 0.58 * hash11(fi * 3.3 + rnd * 11.0);
+  float tipFade = 1.0 - smoothstep(hlen - 0.30, hlen, v);
+  a *= tipFade;
+  a *= smoothstep(0.0, 0.12, v);           // hide the root inside the shells
+
+  // Sub-pixel cards dissolve to their mean instead of flickering.
+  float lod = 1.0 - smoothstep(0.30, 0.85, fwidth(s));
+  a = mix(clamp(rad * 0.8, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
+
+  // Strongest exactly where the surface turns away — the silhouette.
+  float edge = mix(uCardInner, 1.0, pow(clamp(vEdge, 0.0, 1.0), 1.4));
+  a *= edge * uCardOpacity * vP0.w;
+  if (a < 0.004) discard;
+
+  vec3 V = normalize(cameraPosition - vWPos);
+  vec3 T = normalize(vTan);
+  vec3 N = normalize(vNrm);
+
+  vec3 B = cross(T, V);
+  float bl = length(B);
+  if (bl > 1e-5){
+    B /= bl;
+    vec3 Vp = normalize(cross(B, T));
+    float x = clamp((fr - 0.5) * 2.0 / max(rad, 1e-3), -1.0, 1.0);
+    vec3 Ncyl = normalize(B * x + Vp * sqrt(max(0.0, 1.0 - x * x)));
+    N = normalize(mix(N, Ncyl, 0.25 + 0.7 * lod));
+  }
+
+  float ao = (1.0 - vP0.z * uAOBake) *
+             mix(uAOInner + 0.3, 1.05, pow(clamp(v, 0.0, 1.0), uAOPow * 0.6));
+  vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0));
+
+  gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}
+`;
+}

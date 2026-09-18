@@ -9,7 +9,7 @@ import {
 // CPU mirror of the GPU atmosphere.
 //
 // The same numbers, the same band compression. This exists so that
-// `sunColorAt()` and the palette written back onto ctx are *provably* the same
+// sunColorAt() and the palette written back onto ctx are *provably* the same
 // atmosphere the sky shader draws, with no GPU readback and no stall. If these
 // constants ever diverge from src/shaders/sky.glsl.js the sun will stop
 // matching the sky it hangs in.
@@ -64,10 +64,10 @@ function opticalDepth(h0, mu, N = 64) {
 }
 
 /** Band-compressed transmittance to space. Linear RGB, 0..1. */
-function transmittance(h0, mu) {
+function transmittance(h0, mu, k = BAND_K) {
   const t = opticalDepth(h0, mu);
   if (!t) return [0, 0, 0];
-  return t.map((v) => Math.exp(-Math.log(1 + BAND_K * v) / BAND_K));
+  return t.map((v) => Math.exp(-Math.log(1 + k * v) / k));
 }
 
 const LUM = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -119,6 +119,11 @@ export class Sky {
       sunDiscScale: 42.0,
       sunGlowScale: 3.0,
       envGlowScale: 1.1,
+      /** Anti-solar backscatter strength (Belt of Venus). See ATMO_SCATTER.
+       *  Comparable in magnitude to the isotropic MS term it sits beside,
+       *  which works out around 0.01; at 0.4 the whole anti-solar sky goes
+       *  terracotta. A blush, not a stripe. */
+      beltScale: 0.060,
       /** Relative dither amplitude. ~1 code value at 8 bit in the midtones. */
       dither: 0.010,
       scatterSteps: 40,
@@ -368,6 +373,8 @@ export class Sky {
             .multiplyScalar(this.params.groundAlbedo),
         },
         uGroundAmbient: { value: new THREE.Vector3() },
+        uBeltTint: { value: new THREE.Vector3(1, 0.5, 0.35) },
+        uBeltScale: { value: 0 },
       },
       vertexShader: VS,
       fragmentShader: /* glsl */ `
@@ -418,6 +425,17 @@ export class Sky {
     const groundBoost = 2.4;
     const amb = 0.10 * I * groundBoost * Math.max(0.28, Math.sin(elev) + 0.34);
     su.uGroundAmbient.value.set(0.175 * amb, 0.410 * amb, 1.0 * amb);
+
+    // Grazing-limb colour: the transmittance of a ray skimming the limb at
+    // 5 km. Normalised to peak 1 so beltScale alone sets the strength, and
+    // faded out as the sun climbs -- there is no Belt of Venus at midday, and
+    // barely one until the sun is near the horizon.
+    const bt = transmittance(5.0, 0.012, 0.805);
+    const bm = Math.max(bt[0], bt[1], bt[2], 1e-6);
+    su.uBeltTint.value.set(bt[0] / bm, bt[1] / bm, bt[2] / bm);
+    const elevDeg = elev / DEG;
+    su.uBeltScale.value = this.params.beltScale *
+      (1 - Math.min(1, Math.max(0, (elevDeg - 1) / 13)));
 
     this._passMesh.material = this._transMat;
     r.setRenderTarget(this._transRT);

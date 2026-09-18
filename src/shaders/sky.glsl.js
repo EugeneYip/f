@@ -162,6 +162,8 @@ uniform float uMsScale;
 uniform float uMieG;
 uniform vec3  uGroundAlbedo;
 uniform vec3  uGroundAmbient;
+uniform vec3  uBeltTint;
+uniform float uBeltScale;
 
 vec3 atmoScatter(vec3 ro, vec3 rd, vec3 sunDir, int N) {
   vec2 top = raySphere(ro, rd, Rt);
@@ -203,8 +205,26 @@ vec3 atmoScatter(vec3 ro, vec3 rd, vec3 sunDir, int N) {
     vec3 Tsun = sampleTrans(h, muS);
     vec3 Tms  = sampleTrans(h, clamp(muS * 0.42 + 0.44, -1.0, 1.0));
 
+    // Belt of Venus.
+    //
+    // The isotropic MS term above comes out spectrally NEUTRAL at the
+    // anti-solar horizon, because Rayleigh's lambda^-4 bias almost exactly
+    // cancels the reddening of the grazing sunlight feeding it. Real
+    // backscatter there is dominated by light that has crossed the entire
+    // illuminated limb and arrives far redder than a one-bounce estimate; the
+    // band compression that keeps the direct solar beam from looking like a
+    // cartoon also caps the ratio well below what pink needs. uBeltTint is
+    // that grazing-limb colour computed with much weaker compression, added
+    // back only where we are looking away from a low sun.
+    // NOTE: multiplying the tint by sR cancels it -- Rayleigh's blue bias is
+    // stronger than any plausible reddening. The belt carries its OWN
+    // spectrum and only borrows Rayleigh's altitude profile and magnitude.
+    float back = smoothstep(0.30, -0.55, mu);
+    vec3 belt = uBeltTint * (BETA_R.r * dens.x * back * uBeltScale);
+
     vec3 S = ((sR * pR + sM * pM) * Tsun
-           + (sR + sM) * Tms * uMsScale * 0.0795775) * uSunIrradiance;
+           + (sR + sM) * Tms * uMsScale * 0.0795775
+           + belt) * uSunIrradiance;
 
     vec3 segT = exp(-ext * ds);
     // Energy-conserving analytic integration of the segment (Hillaire 2020).

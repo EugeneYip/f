@@ -148,7 +148,10 @@ export class Aurora {
   _applySteps(steps) {
     const k = this._stepLod(steps);
     const u = this.uniforms;
-    u.uBandThick.value.set(4.5 * k, 7.0 * k, 11.0 * k);
+    const t = u.uBandThick.value.set(4.5 * k, 7.0 * k, 11.0 * k);
+    u.uInvThick2.value.set(1 / (t.x * t.x), 1 / (t.y * t.y), 1 / (t.z * t.z));
+    const f = u.uFoldW.value;
+    u.uInvFoldW2.value.set(1 / (f.x * f.x), 1 / (f.y * f.y));
     u.uScale.value = this.BASE_SCALE / k;
   }
 
@@ -157,7 +160,7 @@ export class Aurora {
     this._steps = steps;
     this.BASE_SCALE = 0.0125;
 
-    // Arc frame. Rotated so the bands run ACROSS the `aurora` pose's view
+    // Arc frame. Rotated so the bands run ACROSS the aurora pose's view
     // rather than straight away from it.
     const th = 33 * Math.PI / 180;
 
@@ -177,6 +180,8 @@ export class Aurora {
       // 39/24/15 degrees, so the top band clears the sun's glow.
       uBandZ: { value: new THREE.Vector3(-110, -200, -340) },
       uBandThick: { value: new THREE.Vector3(4.5, 7.0, 11.0) },
+      uInvThick2: { value: new THREE.Vector3() },
+      uInvFoldW2: { value: new THREE.Vector2() },
       uBandAmp: { value: new THREE.Vector3(1.0, 0.72, 0.45) },
       uFoldPos: { value: new THREE.Vector2(0, 0) },
       uFoldW: { value: new THREE.Vector2(150, 230) },
@@ -205,8 +210,8 @@ export class Aurora {
         uniform sampler2D uCurtain;
         uniform vec3 uSunDir;
         uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill;
-        uniform vec2 uArcRot, uFoldPos, uFoldW;
-        uniform vec3 uBandZ, uBandThick, uBandAmp;
+        uniform vec2 uArcRot, uFoldPos, uFoldW, uInvFoldW2;
+        uniform vec3 uBandZ, uBandThick, uBandAmp, uInvThick2;
         uniform vec3 uColLow, uColMid, uColHigh, uColTop;
         varying vec3 vDir;
         ${ATMO_PARS}
@@ -214,86 +219,126 @@ export class Aurora {
 
         const float AUR_H0 = 90.0;
         const float AUR_H1 = 150.0;
+        const float AUR_INVH = 1.0 / (AUR_H1 - AUR_H0);
 
         float ign(vec2 px){ return fract(52.9829189 * fract(0.06711056*px.x + 0.00583715*px.y)); }
+
+        // Drop-in for exp(-x*x), taking x*x. A cubed parabola matches the
+        // Gaussian to within a few percent over the range that is visible and
+        // costs no transcendental. With 16 steps x 3 bands x 2 folds that is
+        // the difference between this effect fitting its budget and not.
+        float bump(float x2) {
+          float g = max(0.0, 1.0 - 0.283 * x2);
+          return g * g * g;
+        }
 
         void main() {
           vec3 dir = normalize(vDir);
           if (dir.y < -0.02 || uIntensity <= 0.0) discard;
+
+          // Cheap attenuation FIRST. Near the horizon the air kills it and
+          // beside the sun the twilight drowns it, and in the aurora pose
+          // that is a third of the dome. No point marching those pixels.
+          float am = 1.0 / max(dir.y + 0.06, 0.06);
+          float ext = exp(-0.28 * (am - 1.0));
+          float lum = dot(sampleSky(dir, uSunDir), vec3(0.2126, 0.7152, 0.0722));
+          float atten = ext / (1.0 + lum * uSkyKill);
+          if (atten < 0.035) discard;
 
           vec3 ro = vec3(0.0, Rg + 0.002, 0.0);
           float t0 = raySphere(ro, dir, Rg + AUR_H0).y;
           float t1 = raySphere(ro, dir, Rg + AUR_H1).y;
           if (t1 <= t0) discard;
 
+          // The camera sits on the polar axis, so the across-arc coordinate
+          // along the ray is exactly linear: q.y(t) = m * t. That means we can
+          // solve for the slab of t that could possibly contain a curtain and
+          // put all our steps there, instead of spreading them over a 300 km
+          // shell traversal that is mostly empty. Rays that can never reach a
+          // band -- the whole half-sky on the far side of the arc system --
+          // leave without marching at all.
+          float m = dir.x * uArcRot.y + dir.z * uArcRot.x;
+          float W = 3.0 * uBandThick.z + 95.0;
+          float lo = min(min(uBandZ.x, uBandZ.y), uBandZ.z) - W;
+          float hi = max(max(uBandZ.x, uBandZ.y), uBandZ.z) + W;
+          if (abs(m) > 1e-4) {
+            float ta = lo / m, tb = hi / m;
+            float nt0 = max(t0, min(ta, tb));
+            float nt1 = min(t1, max(ta, tb));
+            if (nt1 <= nt0) discard;
+            t0 = nt0; t1 = nt1;
+          } else if (0.0 < lo || 0.0 > hi) {
+            discard;
+          }
+
           float dt = (t1 - t0) / float(AUR_STEPS);
           float jit = ign(gl_FragCoord.xy);
-          vec3 acc = vec3(0.0);
+
+          // Accumulate emission and emission-weighted altitude, then look the
+          // colour up ONCE. Per-step colour ramping was three smoothsteps and
+          // three vec3 mixes for a gradient that is across pixels, not along
+          // the ray.
+          float accD = 0.0;
+          float accV = 0.0;
+
+          // Along-arc state, refreshed every other step. s moves slowly
+          // along the ray -- the view crosses the curtains, it does not run
+          // down them -- so the filament fetch and the warp sines can be held
+          // for two steps. The altitude term still updates every step, which
+          // is where the visible structure is. This roughly halves the texture
+          // traffic, which is what the march is actually bound by.
+          vec4 F = vec4(0.0);
+          float sA = 0.0, sB = 0.0, sC = 0.0;
 
           for (int i = 0; i < AUR_STEPS; i++) {
             vec3 p = ro + dir * (t0 + dt * (float(i) + jit));
-            float v = clamp((length(p) - Rg - AUR_H0) / (AUR_H1 - AUR_H0), 0.0, 1.0);
+            float v = clamp((length(p) - Rg - AUR_H0) * AUR_INVH, 0.0, 1.0);
 
             vec2 q = vec2(p.x * uArcRot.x - p.z * uArcRot.y,
                           p.x * uArcRot.y + p.z * uArcRot.x);
             float s = q.x;
 
-            // One fetch: R/G/B are three independent curtain fields, A is the
-            // along-arc envelope. uShear twists the filaments slightly with
-            // altitude so they are not perfectly parallel.
-            vec4 F = texture2D(uCurtain, vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07));
+            if (i % 2 == 0) {
+              F = texture2D(uCurtain, vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07));
+              sA = sin(s * 0.0042 + uDrift * 9.0);
+              sB = sin(s * 0.0131 - uDrift * 5.0);
+              sC = sin(s * 0.0027 - uDrift * 6.0 + 1.9);
+            }
 
-            // Travelling curtain folds.
-            float f1 = exp(-pow((s - uFoldPos.x) / uFoldW.x, 2.0));
-            float f2 = exp(-pow((s - uFoldPos.y) / uFoldW.y, 2.0));
-            float fold = f1 + 0.7 * f2;
+            float f1 = (s - uFoldPos.x);
+            float f2 = (s - uFoldPos.y);
+            float fold = bump(f1 * f1 * uInvFoldW2.x) + 0.7 * bump(f2 * f2 * uInvFoldW2.y);
             float foldWarp = fold * 26.0;
 
-            float dens = 0.0;
-            float w1 = 16.0 * sin(s * 0.0042 + uDrift * 9.0) + 7.0 * sin(s * 0.0131 - uDrift * 5.0);
-            float d1 = q.y - uBandZ.x - w1 - foldWarp;
-            dens += exp(-d1 * d1 / (uBandThick.x * uBandThick.x)) * F.r * uBandAmp.x;
+            float d1 = q.y - uBandZ.x - (16.0 * sA + 7.0 * sB) - foldWarp;
+            float d2 = q.y - uBandZ.y - (26.0 * sC + 11.0 * sB) - foldWarp * 0.7;
+            float d3 = q.y - uBandZ.z - (40.0 * sC);
 
-            float w2 = 26.0 * sin(s * 0.0027 - uDrift * 6.0 + 1.9) + 11.0 * sin(s * 0.0093 + uDrift * 3.0);
-            float d2 = q.y - uBandZ.y - w2 - foldWarp * 0.7;
-            dens += exp(-d2 * d2 / (uBandThick.y * uBandThick.y)) * F.g * uBandAmp.y;
-
-            float w3 = 40.0 * sin(s * 0.0018 + uDrift * 4.0 + 4.1);
-            float d3 = q.y - uBandZ.z - w3;
-            dens += exp(-d3 * d3 / (uBandThick.z * uBandThick.z)) * F.b * uBandAmp.z;
-
+            float dens = bump(d1 * d1 * uInvThick2.x) * F.r * uBandAmp.x
+                       + bump(d2 * d2 * uInvThick2.y) * F.g * uBandAmp.y
+                       + bump(d3 * d3 * uInvThick2.z) * F.b * uBandAmp.z;
             dens *= F.a * (1.0 + 1.25 * fold);
+            if (dens <= 0.0) continue;
 
-            // The lower border has to RIPPLE along the arc. Leaving it at a
-            // constant altitude draws a dead-straight line across the whole
-            // frame, which is the most synthetic thing an aurora can do.
-            float bw = 0.075 * sin(s * 0.0155 + uDrift * 11.0)
-                     + 0.045 * sin(s * 0.0361 - uDrift * 7.0);
-            float vv = clamp(v - bw, 0.0, 1.0);
-
-            // Bright lower border, diffuse fade to the top.
-            // Weighted hard toward the lower border. A curtain that spends its
-            // energy on a diffuse body reads as green cloud; concentrating it
-            // into the border is what makes the eye see an edge-on sheet.
+            // Rippling lower border -- a constant-altitude border draws a
+            // dead-straight line across the frame.
+            float vv = clamp(v - (0.075 * sB + 0.045 * sA), 0.0, 1.0);
+            float b = (vv - 0.045) * 29.41;
             float vert = smoothstep(0.0, 0.03, vv) * (0.10 + 0.55 * exp(-vv * 3.4))
-                       + 1.90 * exp(-pow((vv - 0.045) / 0.034, 2.0));
+                       + 1.90 * bump(b * b);
 
-            vec3 col = mix(uColLow, uColMid, smoothstep(0.0, 0.45, vv));
-            col = mix(col, uColHigh, smoothstep(0.42, 0.88, vv));
-            col = mix(col, uColTop, smoothstep(0.86, 1.0, vv) * 0.6);
-
-            acc += col * dens * vert;
+            float w = dens * vert;
+            accD += w;
+            accV += w * vv;
           }
 
-          acc *= dt * uScale * uIntensity;
+          if (accD <= 1e-6) discard;
+          float vv = accV / accD;
+          vec3 col = mix(uColLow, uColMid, smoothstep(0.0, 0.45, vv));
+          col = mix(col, uColHigh, smoothstep(0.42, 0.88, vv));
+          col = mix(col, uColTop, smoothstep(0.86, 1.0, vv) * 0.6);
 
-          // Extinction through the air below it, and suppression wherever the
-          // twilight is bright -- aurora is invisible next to the sun.
-          float am = 1.0 / max(dir.y + 0.06, 0.06);
-          acc *= exp(-0.28 * (am - 1.0));
-          float lum = dot(sampleSky(dir, uSunDir), vec3(0.2126, 0.7152, 0.0722));
-          acc *= 1.0 / (1.0 + lum * uSkyKill);
-
+          vec3 acc = col * (accD * dt * uScale * uIntensity * atten);
           gl_FragColor = vec4(max(acc, 0.0), 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>

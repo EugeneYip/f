@@ -24,6 +24,8 @@ import { Footprints } from './Footprints.js';
 import { SnowTufts } from './SnowTufts.js';
 
 const TABLE = SNOW.TABLE;
+const PAWS = ['pawFL', 'pawFR', 'pawRL', 'pawRR'];
+const _v = new THREE.Vector3();
 
 export class Terrain {
   name = 'terrain';
@@ -62,7 +64,7 @@ export class Terrain {
     this._padX = 0;
     this._padZ = 0;
     this._bias = 0;
-    this._bias = this._fieldRaw(this._padX, this._padZ, 0);
+    this._bias = this._fieldRaw(this._padX, this._padZ, 0, true);
 
     this.foot = new Footprints();
     this.foot.init(ctx);
@@ -89,11 +91,11 @@ export class Terrain {
   _clipmapParams(ctx) {
     const seg = ctx.quality.get('terrainSegments') | 0;
     const radius = ctx.quality.get('terrainRadius');
-    const K = Math.max(32, Math.min(112, 4 * Math.round(seg / 16)));
+    const K = Math.max(32, Math.min(108, 4 * Math.round(seg / 19.2)));
     // Base spacing tracks the footprint target's texel size: there is no point
     // tessellating finer than the deformation we sample.
     const texel = SNOW.FP_SIZE / Math.max(256, ctx.quality.get('footprintRes') | 0);
-    const s0 = Math.max(0.014, texel * 1.4);
+    const s0 = Math.max(0.016, texel * 1.75);
     let L = 1;
     while (K * s0 * Math.pow(2, L - 1) * 0.5 < radius && L < 11) L++;
     return { K, s0, L, radius };
@@ -259,7 +261,7 @@ export class Terrain {
    */
   press(x, z, radius = 0.05, depth = 0.7, sharpness = 0.5) {
     if (!this._ready) return;
-    this.foot.press(x, z, radius, depth, sharpness, this._heading, this.ctx.time);
+    this.foot.press(x, z, radius, depth, sharpness, this._heading, this.ctx.time, true);
   }
 
   // -------------------------------------------------------------------------
@@ -270,7 +272,7 @@ export class Terrain {
     if (!this._ready) return;
     if (this._syncWind(ctx)) {
       this._bias = 0;
-      this._bias = this._fieldRaw(this._padX, this._padZ, 0);
+      this._bias = this._fieldRaw(this._padX, this._padZ, 0, true);
       this.snow.field.uHeightBias.value = this._bias;
     }
     this.snow.update(ctx);
@@ -293,6 +295,7 @@ export class Terrain {
       if (dx * dx + dz * dz > 1e-8) this._heading = Math.atan2(-dx, dz);
     }
 
+    this._contactPrints(ctx);
     this.tufts?.update(dt, ctx);
 
     if (import.meta.env?.DEV && this._ready) {
@@ -301,8 +304,39 @@ export class Terrain {
 
     // Keep a trail under the animal if nothing else is driving footprints, so
     // the snow is never a pristine sheet the fox is pasted onto.
-    if (this.foot.pressCount <= this._seeded && ctx.time - this._trailAt > 42) {
+    if (this.foot.externalCount === 0 && ctx.time - this._trailAt > 42) {
       this._seedTrail(ctx);
+    }
+  }
+
+  /**
+   * Fallback contact compression.
+   *
+   * Footprints are supposed to arrive through ctx.terrain.press() from whoever
+   * drives the gait. Until that happens the animal stands on an undisturbed
+   * sheet with no depression and no contact darkening, which reads as floating
+   * even when the paws are geometrically touching to a third of a millimetre.
+   * So: while nothing external has pressed, stamp where the paws actually are.
+   * The moment a real press() arrives this stops for good.
+   */
+  _contactPrints(ctx) {
+    if (this.foot.externalCount > 0) return;
+    const anchors = ctx.fox?.anchors;
+    if (!anchors) return;
+    for (let i = 0; i < PAWS.length; i++) {
+      const a = anchors[PAWS[i]];
+      if (!a || !a.matrixWorld) continue;
+      a.updateWorldMatrix(true, false);
+      _v.setFromMatrixPosition(a.matrixWorld);
+      // Deliberately shallow. The compaction channel is written at full
+      // strength regardless of depth, so the paw gets its darker, glossier,
+      // unsparkling contact patch while the surface only drops a few
+      // millimetres — pressing deeper would just open a visible gap under a
+      // paw the rig is holding at a fixed height.
+      const pen = this.heightAt(_v.x, _v.z) + 0.004 - _v.y;
+      if (pen <= 0) continue;
+      this.foot.press(_v.x, _v.z, 0.052, Math.min(0.35, 0.05 + pen * 5),
+        0.55, this._heading, ctx.time, false);
     }
   }
 
@@ -360,9 +394,8 @@ export class Terrain {
       // the JS mirror disagree with the texture.
       const age = (1 - t) * 6.0;
       this.foot.press(x, z, 0.047, (0.66 + 0.18 * t) * Math.exp(-age / SNOW.FP_TAU_DEPTH),
-        0.55, 0.06, ctx.time);
+        0.55, 0.06, ctx.time, false);
     }
-    this._seeded = this.foot.pressCount;
   }
 
   _selfCheck(ctx) {
@@ -437,8 +470,11 @@ export class Terrain {
     return r + SNOW.RIDGE_ROUND * (r * r - r) - SNOW.RIDGE_MEAN;
   }
 
-  /** Height before the pad-centre bias. Mirrors sn_field() exactly. */
-  _fieldRaw(x, z, fw) {
+  /**
+   * Mirrors sn_field() exactly. Callers subtract `_bias`; pass raw=true to
+   * get the unbiased, un-cored value (only used to measure the bias itself).
+   */
+  _fieldRaw(x, z, fw, raw) {
     const S = SNOW;
     const wx = this._windX, wz = this._windZ;
     const ax = -wz, az = wx;
@@ -447,9 +483,10 @@ export class Terrain {
 
     let h = 0;
     h += S.DUNE1_AMP * this._gn(ac * S.DUNE1_AC, al * S.DUNE1_AL) * this._lod(S.DUNE1_SIZE, fw);
-    h += S.DUNE2_AMP * this._gn(ac * S.DUNE2_AC + 13.71, al * S.DUNE2_AL + 5.13) * this._lod(S.DUNE2_SIZE, fw);
 
-    let expo = 0.5 + 0.5 * this._gn(ac * S.EXPO_AC + 71.3, al * S.EXPO_AL + 41.7) * this._lod(S.EXPO_SIZE, fw);
+    const d2 = this._gn(ac * S.DUNE2_AC + 13.71, al * S.DUNE2_AL + 5.13) * this._lod(S.DUNE2_SIZE, fw);
+    h += S.DUNE2_AMP * d2;
+    let expo = 0.5 + 0.5 * d2;
     expo = expo < 0 ? 0 : expo > 1 ? 1 : expo;
     this._oExpo = expo;
 
@@ -459,11 +496,14 @@ export class Terrain {
     let pt = (pr - S.PAD_R0) / (S.PAD_R1 - S.PAD_R0);
     pt = pt < 0 ? 0 : pt > 1 ? 1 : pt;
     const pad = S.PAD_MIN + (pt * pt * (3 - 2 * pt)) * (1 - S.PAD_MIN);
-    this._oPad = pad;
+    let ct = (pr - S.CORE_R0) / (S.CORE_R1 - S.CORE_R0);
+    ct = ct < 0 ? 0 : ct > 1 ? 1 : ct;
+    const core = S.CORE_MIN + (ct * ct * (3 - 2 * ct)) * (1 - S.CORE_MIN);
+    this._oPad = pad * core;
 
     const mnd = this._gn(ac * S.MEAND_AC + 31.13, al * S.MEAND_AL + 7.31) * this._lod(S.MEAND_SIZE, fw);
     const alw = al + S.MEAND_AMP * mnd;
-    const acw = ac + S.MEAND_AMP2 * this._gn(al * S.MEAND2_AL + 3.37, ac * S.MEAND2_AC + 19.41) * this._lod(S.MEAND2_SIZE, fw);
+    const acw = ac;
 
     const s0 = this._ridge(acw * (1 / S.SAST_ACROSS), alw * (1 / S.SAST_ALONG)) * this._lod(S.SAST_ACROSS, fw);
     const alS = alw - S.SAST_SKEW * s0;
@@ -475,14 +515,15 @@ export class Terrain {
     this._oSast = s;
     h += S.SAST_AMP * pad * (0.55 + 0.8 * expo) * s;
 
-    let r = this._ridge(alw * (1 / S.RIP_LEN), acw * (1 / S.RIP_ACROSS)) * this._lod(S.RIP_LEN, fw)
-      + S.RIP_G2 * this._ridge(alw * (S.RIP_L2 / S.RIP_LEN) + 5.71, acw * (S.RIP_L2 / S.RIP_ACROSS) + 13.33) * this._lod(S.RIP_LEN / S.RIP_L2, fw);
-    r *= 1 / (1 + S.RIP_G2);
+    const r = this._ridge(alw * (1 / S.RIP_LEN), acw * (1 / S.RIP_ACROSS)) * this._lod(S.RIP_LEN, fw);
     this._oRip = r;
     let rg = (expo - S.RIP_GATE0) / (S.RIP_GATE1 - S.RIP_GATE0);
     rg = rg < 0 ? 0 : rg > 1 ? 1 : rg;
     h += S.RIP_AMP * (rg * rg * (3 - 2 * rg)) * r;
 
-    return h;
+    if (raw) return h;
+    // Flat core under the animal — see CORE_* in snow.glsl.js. Note this is
+    // applied to the BIASED height, so heightAt(padCentre) is exactly 0.
+    return (h - this._bias) * core + this._bias;
   }
 }

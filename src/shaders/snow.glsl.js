@@ -26,18 +26,21 @@ export const SNOW = {
   DUNE1_AC: 0.0168, DUNE1_AL: 0.0071, DUNE1_AMP: 0.78, DUNE1_SIZE: 58.0,
   DUNE2_AC: 0.0525, DUNE2_AL: 0.0232, DUNE2_AMP: 0.215, DUNE2_SIZE: 18.0,
 
-  // Wind exposure field: scoured/packed on the windward crests, soft drift in
-  // the lee hollows. Drives sastrugi amplitude, roughness and sparkle density.
-  EXPO_AC: 0.0315, EXPO_AL: 0.0175, EXPO_SIZE: 30.0,
 
   // The calm pad the fox stands on. Radius is modulated by noise so the
   // boundary is not a circle.
   PAD_R0: 1.05, PAD_R1: 5.2, PAD_MIN: 0.22,
   PAD_WOBBLE: 0.46, PAD_WOB_F: 0.30, PAD_WOB_SIZE: 3.4,
+  // Inside CORE_R0 of the pad centre the field is scaled to CORE_MIN of its
+  // deviation, i.e. the snow is flat at exactly y=0 where the animal stands.
+  // Without this, paws spread over half a metre sit on +-2 cm of relief and a
+  // rig placed at y=0 visibly floats. The scaled radius carries the same noisy
+  // wobble as the pad, so there is no circle to see — and there is nothing to
+  // see anyway, since the deviation being removed is only a couple of cm.
+  CORE_R0: 0.36, CORE_R1: 1.95, CORE_MIN: 0.05,
 
   // Sastrugi meander: the ridges are not straight, they snake downwind.
   MEAND_AC: 0.086, MEAND_AL: 0.037, MEAND_SIZE: 11.0, MEAND_AMP: 2.45,
-  MEAND2_AL: 0.062, MEAND2_AC: 0.078, MEAND2_SIZE: 13.0, MEAND_AMP2: 0.44,
 
   // Sastrugi proper: ridged noise, stretched ALONG the wind (polar sastrugi run
   // parallel to the wind, unlike dunes), with the crest sheared downwind so the
@@ -46,7 +49,7 @@ export const SNOW = {
   SAST_L2: 2.07, SAST_L3: 4.28, SAST_G2: 0.47, SAST_G3: 0.22,
 
   // Medium ripples: small ridges running ACROSS the wind.
-  RIP_LEN: 0.55, RIP_ACROSS: 2.1, RIP_AMP: 0.012, RIP_L2: 2.13, RIP_G2: 0.5,
+  RIP_LEN: 0.55, RIP_ACROSS: 2.1, RIP_AMP: 0.012,
   RIP_GATE0: 0.30, RIP_GATE1: 0.86,
 
   // Ridge crest sharpening, and the resulting mean of ridge(). The mean is
@@ -146,20 +149,26 @@ float sn_field(vec2 p, float fw, out float oSast, out float oExpo, out float oPa
   float ac = dot(p, A);
 
   float h = 0.0;
-  h += S_DUNE1_AMP * sn_gn(vec2(ac*S_DUNE1_AC,          al*S_DUNE1_AL))         * sn_lod(S_DUNE1_SIZE, fw);
-  h += S_DUNE2_AMP * sn_gn(vec2(ac*S_DUNE2_AC + 13.71,  al*S_DUNE2_AL + 5.13))  * sn_lod(S_DUNE2_SIZE, fw);
-
-  float expo = 0.5 + 0.5 * sn_gn(vec2(ac*S_EXPO_AC + 71.3, al*S_EXPO_AL + 41.7)) * sn_lod(S_EXPO_SIZE, fw);
-  oExpo = clamp(expo, 0.0, 1.0);
+  h += S_DUNE1_AMP * sn_gn(vec2(ac*S_DUNE1_AC, al*S_DUNE1_AL)) * sn_lod(S_DUNE1_SIZE, fw);
+  // The second dune scale doubles as the wind-exposure field: the surface is
+  // scoured on the drift crests and collects soft snow in the hollows, so one
+  // noise sample legitimately serves both. Every sample here costs four vertex
+  // texture fetches and this function runs seven times per vertex.
+  float d2 = sn_gn(vec2(ac*S_DUNE2_AC + 13.71, al*S_DUNE2_AL + 5.13)) * sn_lod(S_DUNE2_SIZE, fw);
+  h += S_DUNE2_AMP * d2;
+  oExpo = clamp(0.5 + 0.5 * d2, 0.0, 1.0);
 
   float wob = sn_gn(p*S_PAD_WOB_F + vec2(57.2, 23.8)) * sn_lod(S_PAD_WOB_SIZE, fw);
   float pr  = length(p - uPadCenter) * (1.0 + S_PAD_WOBBLE * wob);
   float pad = mix(S_PAD_MIN, 1.0, smoothstep(S_PAD_R0, S_PAD_R1, pr));
-  oPad = pad;
+  float core = mix(S_CORE_MIN, 1.0, smoothstep(S_CORE_R0, S_CORE_R1, pr));
+  // oPad carries pad * core: that product is what the shadow taps need, and
+  // it is the only form the shading uses.
+  oPad = pad * core;
 
   float mnd = sn_gn(vec2(ac*S_MEAND_AC + 31.13, al*S_MEAND_AL + 7.31)) * sn_lod(S_MEAND_SIZE, fw);
   float alw = al + S_MEAND_AMP * mnd;
-  float acw = ac + S_MEAND_AMP2 * sn_gn(vec2(al*S_MEAND2_AL + 3.37, ac*S_MEAND2_AC + 19.41)) * sn_lod(S_MEAND2_SIZE, fw);
+  float acw = ac;
 
   // Shear the along-wind coordinate by the coarse ridge value: crests migrate
   // upwind, which compresses the windward face and stretches the lee slope.
@@ -171,22 +180,43 @@ float sn_field(vec2 p, float fw, out float oSast, out float oExpo, out float oPa
     + S_SAST_G3 * sn_ridge(vec2(acw*(S_SAST_L3/S_SAST_ACROSS) + 27.53, alS*(S_SAST_L3/S_SAST_ALONG) + 8.19)) * sn_lod(S_SAST_ACROSS/S_SAST_L3, fw);
   s *= 1.0 / (1.0 + S_SAST_G2 + S_SAST_G3);
   oSast = s;
-  h += S_SAST_AMP * oPad * (0.55 + 0.8*oExpo) * s;
+  h += S_SAST_AMP * pad * (0.55 + 0.8*oExpo) * s;
 
-  float r = sn_ridge(vec2(alw*(1.0/S_RIP_LEN), acw*(1.0/S_RIP_ACROSS))) * sn_lod(S_RIP_LEN, fw)
-    + S_RIP_G2 * sn_ridge(vec2(alw*(S_RIP_L2/S_RIP_LEN) + 5.71, acw*(S_RIP_L2/S_RIP_ACROSS) + 13.33)) * sn_lod(S_RIP_LEN/S_RIP_L2, fw);
-  r *= 1.0 / (1.0 + S_RIP_G2);
+  float r = sn_ridge(vec2(alw*(1.0/S_RIP_LEN), acw*(1.0/S_RIP_ACROSS))) * sn_lod(S_RIP_LEN, fw);
   oRip = r;
   // Ripples only form where the wind actually works the surface, so gate
   // them hard on exposure instead of dressing the whole field in corduroy.
   h += S_RIP_AMP * smoothstep(S_RIP_GATE0, S_RIP_GATE1, oExpo) * r;
 
-  return h - uHeightBias;
+  return (h - uHeightBias) * core;
 }
 
 float sn_fieldH(vec2 p, float fw){
   float a, b, c, d;
   return sn_field(p, fw, a, b, c, d);
+}
+
+/**
+ * Reduced height for the horizon-shadow taps: the two drift scales and the two
+ * coarse sastrugi octaves, with the calm-pad factor passed in from the centre
+ * sample rather than re-derived. Everything omitted is either slower-varying
+ * than the tap spacing or shallower than the terminator's own softness — and
+ * this runs once per tap per vertex, so it is worth halving.
+ */
+float sn_tapH(vec2 p, float fw, float padCore){
+  vec2 W = uWindXZ;
+  vec2 A = vec2(-W.y, W.x);
+  float al = dot(p, W);
+  float ac = dot(p, A);
+  float h = S_DUNE1_AMP * sn_gn(vec2(ac*S_DUNE1_AC, al*S_DUNE1_AL)) * sn_lod(S_DUNE1_SIZE, fw);
+  float d2 = sn_gn(vec2(ac*S_DUNE2_AC + 13.71, al*S_DUNE2_AL + 5.13)) * sn_lod(S_DUNE2_SIZE, fw);
+  h += S_DUNE2_AMP * d2;
+  float expo = clamp(0.5 + 0.5 * d2, 0.0, 1.0);
+  float s = sn_ridge(vec2(ac*(1.0/S_SAST_ACROSS), al*(1.0/S_SAST_ALONG))) * sn_lod(S_SAST_ACROSS, fw)
+    + S_SAST_G2 * sn_ridge(vec2(ac*(S_SAST_L2/S_SAST_ACROSS) + 11.21, al*(S_SAST_L2/S_SAST_ALONG) + 3.77)) * sn_lod(S_SAST_ACROSS/S_SAST_L2, fw);
+  s *= 1.0 / (1.0 + S_SAST_G2);
+  h += S_SAST_AMP * padCore * (0.55 + 0.8 * expo) * s;
+  return h * padCore;
 }
 `;
 
@@ -268,11 +298,15 @@ void main(){
     // Start just past the ripple scale so the near field is shaded by sastrugi
     // (0.3-2 m shadows at this sun angle) rather than dressed in corduroy.
     float d = max(0.15, fw * 2.4);
+    // Compare like with like: the reduced tap height is also evaluated at the
+    // centre, so the omitted terms cannot bias the occlusion.
+    float padCore = vFields.z;
+    float h0 = sn_tapH(p, fw, padCore);
     for (int i = 0; i < SUN_TAPS; i++) {
-      float hk = sn_fieldH(p + sd * d, fw);
+      float hk = sn_tapH(p + sd * d, fw, padCore);
       // The divisor is the sun's angular size in metres of height at that
       // distance: a real terminator this low is nearly hard.
-      occ = max(occ, (hk - h - d * tanE) / (d * 0.022 + 0.010));
+      occ = max(occ, (hk - h0 - d * tanE) / (d * 0.022 + 0.010));
       d *= 2.0;
     }
   }
@@ -329,7 +363,6 @@ uniform vec4 uDetailScale;   // world tile sizes: micro, grain, ripple, (aniso)
 uniform vec3 uSparkle;       // intensity, spread, threshold
 uniform vec3 uSheen;   // roughness fresh, roughness packed, specular scale         // roughness fresh, roughness packed
 uniform float uSSS;
-uniform bool receiveShadow;
 // 0 off. 1 shadow mask, 2 ridge self-shadow, 3 clipmap level, 4 sparkle,
 // 5 detail normal, 6 compaction. Debug only; costs one uniform compare.
 uniform float uDebugView;
@@ -417,45 +450,41 @@ vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
   vec3 T = normalize(cross(N, vec3(1.0, 0.0, 0.0)));
   vec3 B = cross(N, T);
   float acc = 0.0;
-  float cell = 0.0028;
-  for (int k = 0; k < 4; k++) {
-    // Triangular window in log2(px): the lattice is shown only while its cells
-    // are ~2-6 px across.
-    // Show a lattice only while its cells are ~3-8 px across, so a glint is
-    // always a resolvable dot rather than sub-pixel noise.
-    float w = 1.0 - abs(log2(max(px, 1e-5) / (cell * 0.22))) * 0.72;
+  float cell = 0.0035;
+  for (int k = 0; k < SPARKLE_OCT; k++) {
+    // Show a lattice only while its cells are ~4-10 px across, so a glint is
+    // always a resolvable dot rather than sub-pixel noise. Neighbouring
+    // octaves are four times apart and cross-fade, which is what keeps the
+    // glints locked to the surface instead of re-seeding as the camera moves.
+    float w = 1.0 - abs(log2(max(px, 1e-5) / (cell * 0.17))) * 0.72;
     w = clamp(w, 0.0, 1.0);
     if (w > 0.004) {
       vec2 q = p / cell;
       vec2 ip = floor(q);
       vec2 fp = q - ip;
-      for (int j = 0; j < 2; j++) {
-        for (int i = 0; i < 2; i++) {
-          // Feature points are inset into their cell, so the 2x2 block at or
-          // after the sample always contains every point that can reach it.
-          vec2 o = vec2(float(i), float(j));
-          vec2 id = ip + o;
-          vec3 r = sn_hash23(id + vec2(cell * 131.0));
-          vec2 fpt = o + vec2(r.x, r.y) * 0.72 + 0.14 - fp;
-          float dd = dot(fpt, fpt);
-          if (dd < 0.17) {
-            float dot0 = 1.0 - smoothstep(0.05, 0.17, dd);
-            float a = r.z * 6.2831853;
-            float m = sn_hash21(id * 1.7 + 4.3);
-            // Facet orientation is parameterised by ANGLE, not by a tangent
-            // offset: with a 6 degree sun and a low camera the half-vector
-            // sits ~60 degrees off the surface normal, and a tilt vector added
-            // to N can never swing that far. Crystals sit at every angle.
-            float th = 0.04 + uSparkle.y * m;
-            vec3 fn = N * cos(th) + (T * cos(a) + B * sin(a)) * sin(th);
-            float al = dot(fn, Hv);
-            float g = exp2(-(1.0 - al) * uSparkle.z);
-            acc += g * dot0 * w;
-          }
-        }
+      // The feature point is confined to the middle half of its cell and the
+      // dot radius is a quarter of a cell, so no dot can ever cross a cell
+      // border: one lookup is exact where a 2x2 neighbourhood would normally
+      // be needed, and the whole term costs a quarter as much.
+      vec3 r = sn_hash23(ip + vec2(cell * 131.0));
+      vec2 fpt = r.xy * 0.5 + 0.25 - fp;
+      float dd = dot(fpt, fpt);
+      if (dd < 0.0625) {
+        float dot0 = 1.0 - smoothstep(0.018, 0.0625, dd);
+        // Facet orientation is parameterised by ANGLE, not by a tangent
+        // offset: with a 6 degree sun and a low camera the half-vector sits
+        // ~60 degrees off the surface normal, and a tilt vector added to N can
+        // never swing that far. Ice crystals sit at every angle.
+        vec2 az = vec2(r.z, fract(r.z * 91.73)) * 2.0 - 1.0;
+        az *= inversesqrt(max(dot(az, az), 1e-4));
+        float th = 0.04 + uSparkle.y * fract(r.z * 37.13);
+        float ct = cos(th), st = sin(th);
+        // N, T, B are orthonormal, so this is already unit length.
+        float al = dot(N * ct + (T * az.x + B * az.y) * st, Hv);
+        acc += exp2(-(1.0 - al) * uSparkle.z) * dot0 * w;
       }
     }
-    cell *= 4.0;   // one octave of glint scale per 2 stops of distance
+    cell *= 4.0;   // one octave of glint scale per two stops of distance
   }
   return acc * density * uSparkle.x * mix(uSunColor, vec3(0.86, 0.94, 1.0), 0.25);
 }
@@ -473,11 +502,13 @@ void main(){
   // --- footprint: displacement gradient + compaction ------------------------
   float fe = max(px, S_FP_SIZE / 1024.0);
   vec3 ft = sn_footTexel(p);
-  float f0 = sn_footH(ft);
-  float fx = sn_footH(p + vec2(fe, 0.0));
-  float fz = sn_footH(p + vec2(0.0, fe));
   float comp = clamp(ft.z, 0.0, 1.0);
-  N = normalize(N + vec3(-(fx - f0) / fe, 0.0, -(fz - f0) / fe));
+  if (dot(ft, ft) > 1e-8) {
+    float f0 = sn_footH(ft);
+    float fx = sn_footH(p + vec2(fe, 0.0));
+    float fz = sn_footH(p + vec2(0.0, fe));
+    N = normalize(N + vec3(-(fx - f0) / fe, 0.0, -(fz - f0) / fe));
+  }
 
   // --- detail normals -------------------------------------------------------
   vec2 W = uWindXZ;
@@ -487,9 +518,10 @@ void main(){
   float wGrn = 1.0 - smoothstep(uDetailScale.y * 0.9, uDetailScale.y * 5.0, px);
   float wMic = 1.0 - smoothstep(uDetailScale.x * 0.9, uDetailScale.x * 5.0, px);
 
-  vec3 dRip = sn_detail(vec2(wuv.x + wuv.y * 0.11, wuv.y * uDetailScale.w) / uDetailScale.z, 1.0);
-  vec3 dGrn = sn_detail(wuv / uDetailScale.y + vec2(0.37, 0.61), 1.0);
-  vec3 dMic = sn_detail(wuv / uDetailScale.x + vec2(0.11, 0.83), 1.0);
+  vec3 dRip = vec3(0.0, 0.0, 0.5), dGrn = vec3(0.0, 0.0, 0.5), dMic = vec3(0.0, 0.0, 0.5);
+  if (wRip > 0.01) dRip = sn_detail(vec2(wuv.x + wuv.y * 0.11, wuv.y * uDetailScale.w) / uDetailScale.z, 1.0);
+  if (wGrn > 0.01) dGrn = sn_detail(wuv / uDetailScale.y + vec2(0.37, 0.61), 1.0);
+  if (wMic > 0.01) dMic = sn_detail(wuv / uDetailScale.x + vec2(0.11, 0.83), 1.0);
 
   float packed = clamp(vFields.y * 0.85 + comp * 0.6, 0.0, 1.0);
   float soft = 1.0 - packed;
@@ -540,7 +572,8 @@ void main(){
   // Crest proximity stands in for thickness: a knife-edge of a drift is a few
   // millimetres of snow and lights up like wax when the sun is behind it.
   float thin = saturate(vFields.x * 2.8 - 0.10) * (1.0 - comp) * saturate(0.35 + 0.65 * vFields.y);
-  float fwdPhase = pow(saturate(dot(V, -L)), 5.0);
+  float fwd0 = saturate(dot(V, -L));
+  float fwdPhase = fwd0 * fwd0 * (fwd0 * fwd0) * fwd0;
   float back = saturate(0.55 - NdotL);
   vec3 sss = uSunColor * (uSunInt * uSSS * thin * fwdPhase * back * mix(0.35, 1.0, shadowMask));
   col += sss * vec3(1.0, 0.94, 0.86);
@@ -564,11 +597,12 @@ void main(){
   // A rough dielectric does not become a perfect mirror at grazing angles;
   // pulling f90 down with roughness is what keeps the sun path believable.
   float f90 = clamp(1.0 - rough * 0.85, 0.12, 1.0);
-  float F = 0.021 + (f90 - 0.021) * pow(1.0 - VoH, 5.0);
+  float v5 = 1.0 - VoH; v5 = v5 * v5 * (v5 * v5) * v5;
+  float F = 0.021 + (f90 - 0.021) * v5;
   col += uSunColor * (uSunInt * uSheen.z * D * Vis * F * NoL * sun * (0.55 + 0.8 * packed));
 
   // Grazing-angle brightening: at a metre above the snow you see the sky in it.
-  float fres = pow(1.0 - NdotV, 5.0);
+  float fres = 1.0 - NdotV; fres = fres * fres * (fres * fres) * fres;
   col += uSkyColor * (uSkyInt * (0.035 + 0.55 * fres) * (0.35 + 0.65 * packed));
 
   // --- sparkle --------------------------------------------------------------

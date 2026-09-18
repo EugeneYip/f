@@ -23,7 +23,7 @@ export class Horizon {
     this.rings = [];
     // radius (m), ridge height (m), base (m), aerial mix at top/base, seed
     this.layout = [
-      // `min` matters more than `h`: anything below the terrain rim is
+      // min matters more than h: anything below the terrain rim is
       // invisible, so the low end of each profile has to clear the horizon
       // line or the range shows up as a couple of stray humps.
       // Radii are pinned between the terrain's outer clipmap ring (which can

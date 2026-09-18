@@ -85,7 +85,7 @@ export class SnowMaterial {
         uDeepTint: { value: new THREE.Color(0.56, 0.72, 1.0) },
         uDetail: { value: null },
         uDetailScale: { value: new THREE.Vector4(0.055, 0.32, 1.55, 0.40) },
-        uSparkle: { value: new THREE.Vector3(55.0, 1.36, 150.0) },
+        uSparkle: { value: new THREE.Vector3(70.0, 1.36, 120.0) },
         uSheen: { value: new THREE.Vector3(0.74, 0.42, 0.38) },
         uSSS: { value: 1.7 },
         uSkirtDrop: { value: 60.0 },
@@ -103,7 +103,7 @@ export class SnowMaterial {
       fragmentShader: snowResolve(SNOW_FRAG),
       lights: true,
       fog: true,
-      defines: { SUN_TAPS: this._sunTaps(q) },
+      defines: { SUN_TAPS: this._sunTaps(q), SPARKLE_OCT: this._sparkleOct(q) },
     });
     this.material.name = 'snow';
 
@@ -141,9 +141,14 @@ export class SnowMaterial {
     return this.material;
   }
 
+  _sparkleOct(q) {
+    const seg = q.get('terrainSegments');
+    return seg >= 384 ? 4 : seg >= 256 ? 3 : 2;
+  }
+
   _sunTaps(q) {
     const seg = q.get('terrainSegments');
-    return seg >= 384 ? 5 : seg >= 256 ? 4 : 2;
+    return seg >= 384 ? 4 : seg >= 256 ? 3 : 2;
   }
 
   /**
@@ -163,7 +168,7 @@ export class SnowMaterial {
       stencilBuffer: false,
       generateMipmaps: true,
     });
-    rt.texture.anisotropy = Math.min(8, ctx.renderer.capabilities.getMaxAnisotropy());
+    rt.texture.anisotropy = Math.min(4, ctx.renderer.capabilities.getMaxAnisotropy());
 
     const mat = new THREE.RawShaderMaterial({
       vertexShader: FULLSCREEN_VERT,
@@ -212,8 +217,10 @@ export class SnowMaterial {
 
   onQuality(ctx) {
     const taps = this._sunTaps(ctx.quality);
-    if (this.material.defines.SUN_TAPS !== taps) {
+    const oct = this._sparkleOct(ctx.quality);
+    if (this.material.defines.SUN_TAPS !== taps || this.material.defines.SPARKLE_OCT !== oct) {
       this.material.defines.SUN_TAPS = taps;
+      this.material.defines.SPARKLE_OCT = oct;
       this.material.needsUpdate = true;
     }
   }

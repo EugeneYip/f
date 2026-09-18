@@ -34,7 +34,7 @@ export class SnowParticles {
     this._depthTex = null;
     this._counts = '';
 
-    // Metres, m/s. `share` is the fraction of ctx.quality snowParticles.
+    // Metres, m/s. share is the fraction of ctx.quality snowParticles.
     this.defs = {
       near: {
         share: 0.10, box: [8, 6, 8], size: 0.016, fall: 0.85,

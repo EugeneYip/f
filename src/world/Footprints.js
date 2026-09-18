@@ -46,6 +46,9 @@ export class Footprints {
     this._nPending = 0;
     this._serial = 0;
     this.pressCount = 0;
+    // Presses that came in through ctx.terrain.press(), i.e. from another
+    // system. While this is zero the terrain drives its own contact prints.
+    this.externalCount = 0;
 
     this.origin = new THREE.Vector2(0, 0);
     this.uniforms = {
@@ -140,8 +143,9 @@ export class Footprints {
   }
 
   /** Queue a depression. Returns the stamp slot, or -1 if it was dropped. */
-  press(x, z, radius, depth, sharpness, heading, time) {
+  press(x, z, radius, depth, sharpness, heading, time, external) {
     if (!this.enabled) return -1;
+    if (external) this.externalCount++;
     radius = radius > 0 ? Math.min(radius, 0.5) : 0.05;
     // Clamped to 1 on both sides: the GPU stores the profile in a 0..1 channel,
     // so the CPU must not model anything deeper than the texture can hold.

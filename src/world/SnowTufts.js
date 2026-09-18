@@ -17,7 +17,7 @@ export class SnowTufts {
   }
 
   _build(ctx, terrain) {
-    const count = Math.min(2400, ctx.quality.get('grassTufts') | 0);
+    const count = Math.min(2000, (ctx.quality.get('grassTufts') | 0) * 0.8 | 0);
     this.count = count;
     if (!count) return;
 
@@ -69,19 +69,31 @@ export class SnowTufts {
     const iPos = new Float32Array(count * 3);
     const iParam = new Float32Array(count * 4);
     const r2 = rng(13377);
-    const R = 26;
+    const R = 22;
     let n = 0, guard = 0;
     const up = new THREE.Vector3();
+    // Sedge grows in clumps, not as an even sprinkle: pick a patch centre every
+    // few plants and jitter around it. An even scatter reads as a decal.
+    let cx = 0, cz = 0, inClump = 0;
     while (n < count && guard++ < count * 40) {
-      const a = r2() * Math.PI * 2;
-      const rr = Math.sqrt(r2()) * R;
-      const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+      let x, z;
+      if (inClump <= 0) {
+        const a = r2() * Math.PI * 2;
+        const rr = Math.sqrt(r2()) * R;
+        cx = Math.cos(a) * rr; cz = Math.sin(a) * rr;
+        inClump = 2 + Math.floor(r2() * 6);
+      }
+      inClump--;
+      const ja = r2() * Math.PI * 2;
+      const jr = Math.pow(r2(), 0.65) * 0.85;
+      x = cx + Math.cos(ja) * jr;
+      z = cz + Math.sin(ja) * jr;
       if (x * x + z * z < 1.45 * 1.45) continue;             // clear of the fox
       const h = terrain._fieldRaw(x, z, 0) - terrain._bias;
       // Sedge survives where the wind scours it clear: crests, exposed ground.
       const crest = terrain._oSast, expo = terrain._oExpo;
       if (crest < 0.02) continue;
-      if (r2() > 0.15 + expo * 0.85 * (0.3 + crest * 2.2)) continue;
+      if (r2() > 0.25 + expo * 0.75 * (0.3 + crest * 2.2)) continue;
       terrain.normalAt(x, z, up);
       if (up.y < 0.86) continue;
       iPos[n * 3] = x; iPos[n * 3 + 1] = h; iPos[n * 3 + 2] = z;
@@ -139,7 +151,7 @@ export class SnowTufts {
   }
 
   onQuality(ctx, terrain) {
-    const want = Math.min(2400, ctx.quality.get('grassTufts') | 0);
+    const want = Math.min(2000, (ctx.quality.get('grassTufts') | 0) * 0.8 | 0);
     if (want === this.count) return;
     this.dispose();
     if (this.mesh) ctx.scene.remove(this.mesh);
