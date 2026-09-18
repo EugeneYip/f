@@ -91,6 +91,9 @@ uniform float uTransPow;
 uniform float uAOInner;
 uniform float uAOPow;
 uniform float uAOBake;
+uniform float uAOFloor;
+uniform float uTuftAmt;
+uniform float uClumpAO;
 uniform float uAniso;
 uniform float uStrandRound;
 uniform float uRim;
@@ -218,7 +221,7 @@ export const FUR_FIELD = /* glsl */ `
  * of being point-sampled, which is what stops the coat crawling at distance.
  */
 vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
-             float freqScale, float shellFill, out vec3 site)
+             float freqScale, float shellFill, float pathK, out vec3 site)
 {
   // Large-scale variation: real fur is not uniformly dense.
   float coatVar = snoise(p * uCoatVarFreq);
@@ -245,7 +248,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // Per-strand length. Without this every hair ends on the same shell and the
   // coat gets a hard outer boundary — the shrink-wrapped shag-carpet tell.
   float hairLen = uHairLenMin + (1.0 - uHairLenMin) *
-                  clamp(mix(cRand, 0.25 + 0.75 * sRand * sRand, 0.42), 0.0, 1.0);
+                  clamp(mix(cRand, 0.25 + 0.75 * sRand * sRand, 0.58), 0.0, 1.0);
   float lenFade = 1.0 - smoothstep(hairLen - 0.30, hairLen + 0.04, t);
 
   // Strand cross-section, tapering to a point.
@@ -273,23 +276,43 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // Near the skin the coat is dense felt, not separate hairs. Without this the
   // shells read as a stack of nets and you see straight through to the body.
   float fill = 1.0 - smoothstep(shellFill * 0.42, shellFill * 1.18, t);
-  a = max(a, fill * uFill * (0.84 + 0.16 * cRand));
 
   // ---- the tuft --------------------------------------------------------
   // Each clump is a CONE: wide enough at the root to cover the skin, narrowing
   // to a point at the tip, so the gaps between tufts open up as you climb
   // through the coat. This is the difference between fur and carpet, and it is
   // what breaks the shells' long parallel comb strokes into separate locks.
-  float tuftR = mix(1.00, 0.26, t * t) * (0.70 + 0.62 * cRand);
-  float taa   = max(px * fc * 1.6, 0.02);
+  float tuftR = mix(1.06, 0.34, t) * (0.72 + 0.56 * cRand);
+  float taa   = max(px * fc * 1.2, 0.015);
   float tuft  = 1.0 - smoothstep(tuftR - taa, tuftR + taa, cd.x);
-  tuft = mix(1.0, tuft, smoothstep(0.0, 0.22, t));
+  tuft = mix(1.0, tuft, smoothstep(0.0, 0.18, t) * uTuftAmt);
 
-  a *= tuft * lenFade * densityScale * uDensity;
+  a = a * tuft * lenFade;                                  // guard hair, tufted
 
-  // Gaps between tufts are deep, so they are dark.
-  float clumpAO = mix(0.66, 1.0, smoothstep(0.02, 0.40, cd.y - cd.x) * 0.45
-                                + smoothstep(0.55, 0.10, cd.x) * 0.55);
+  // Beer-Lambert path length, applied to the UNDERCOAT ONLY.
+  //
+  // The undercoat is a continuous medium: a ray crossing a shell's slab
+  // obliquely travels further through it and must come out more opaque, which
+  // is what stops the coat going translucent along the surface (the cast
+  // shadow used to be legible straight through the ruff). Guard hairs are
+  // discrete cylinders and get no such boost — applying it to them too seals
+  // the outline into smooth felt and throws away the silhouette break-up,
+  // which is the one thing that matters most here.
+  float under = fill * uFill * (0.86 + 0.14 * cRand);
+  under = 1.0 - pow(1.0 - clamp(under, 0.0, 1.0), pathK);
+
+  a = max(a, under) * densityScale * uDensity;
+
+  // Occlusion from the lock structure.
+  //
+  // This used to be a near-flat tint per Voronoi cell, which painted the flank
+  // and shoulder with grey patches that read as a dirty, moulting coat — the
+  // single worst artifact this shader had. It is now a gradient that is
+  // weighted to vanish at the tips: only hair that genuinely has a lock
+  // stacked above it gets darkened, so there is nothing left to tint the
+  // visible outer coat cell by cell.
+  float lockDepth = (1.0 - t) * (1.0 - t);
+  float clumpAO = 1.0 - 0.40 * uClumpAO * lockDepth * smoothstep(0.58, 0.08, cd.x);
 
   return vec4(clamp(a, 0.0, 1.0), clamp(ds / max(r, 1e-4), 0.0, 1.0), sRand, clumpAO);
 }
@@ -486,15 +509,18 @@ void main(){
 ${isShell ? /* glsl */ `
   // Bind-space pixel footprint — the LOD signal for every noise scale.
   float px = max(length(fwidth(vRoot)), 1e-7);
-  float shellFill = clamp(3.0 / max(uShellCount, 1.0) + 0.46, 0.30, 0.95);
+  float shellFill = clamp(3.0 / max(uShellCount, 1.0) + 0.58, 0.34, 0.98);
+
+  float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, 6.0);
 
   vec3 site;
-  vec4 hair = furHair(vRoot, t, px, vP0.w, vP1.x, vP1.y, shellFill, site);
+  vec4 hair = furHair(vRoot, t, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, site);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
   rnd = hair.z;
   ao *= hair.w;
+
 
   // Per-strand cylinder normal. Without this every hair in a tuft shades
   // identically and the macro shot turns to mush.
@@ -517,9 +543,10 @@ ${isShell ? /* glsl */ `
   // than the tips, or it reads as a flat decal instead of a deep coat.
   ao *= mix(uAOInner, 1.0, pow(t, uAOPow));
   ao *= mix(0.60, 1.0, 1.0 - hair.y * 0.5);
+  ao = max(ao, uAOFloor);
 ` : /* glsl */ `
   // Base layer: skin under the coat — dark, occluded, faintly cool.
-  ao *= uAOInner * 0.8;
+  ao = max(ao * uAOInner * 0.8, uAOFloor * 0.8);
   #ifdef USE_COLOR
     // Pad leather and the nose come through the vertex colour. Under a dense
     // paw coat almost none of it should read, or the fox grows teddy-bear feet.
@@ -569,6 +596,7 @@ ${SKIN_FN}
 
 uniform float uCardWidth;
 uniform float uCardLength;
+uniform float uCardJitter;
 
 attribute float furLength;
 attribute float furStiffness;
@@ -595,10 +623,21 @@ void main(){
 
   vec3  nb   = normalize(normal);
   vec3  tb   = furTangent;
-  // Cards fold over much harder than the shells do, and rise less far along
-  // the normal. A tuft that stands perpendicular to the skin is a quill.
-  float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * 1.9;
-  float rise = 0.58;
+
+  // Fan each tuft off the flow direction. Without this every card on the
+  // dorsal line sweeps back on exactly the same heading and the topline reads
+  // as a combed mane rather than as separate locks.
+  float ja = (rnd - 0.5) * uCardJitter;
+  tb = normalize(tb * cos(ja) + cross(nb, tb) * sin(ja));
+
+  // Cards fold over harder than the shells do — a tuft standing perpendicular
+  // to the skin is a quill, not a hair. But the rise term is also what decides how
+  // far a card reaches ALONG THE NORMAL, and if that lands short of the
+  // outermost shell the cards are buried inside the coat and contribute
+  // nothing to the outline. uCardLength is sized so the mean tip clears the
+  // shells by ~25% and the longest by ~2x.
+  float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * (1.10 + 0.85 * hash11(rnd * 37.1));
+  float rise = 0.72;
   vec3  offB = nb * (L * v * rise) + tb * (L * lay * v * (0.42 + 0.58 * v));
   vec3  hdir = normalize(nb * rise + tb * (lay * (0.42 + 1.16 * v)));
 
@@ -675,7 +714,7 @@ void main(){
   float hr = hash11(fi * 1.7 + rnd * 31.0);
 
   float d   = abs(fr - 0.5) * 2.0;
-  float rad = 0.30 + 0.52 * hr;
+  float rad = 0.20 + 0.40 * hr;
   float aa  = clamp(fwidth(s) * 1.6, 0.02, 1.2);
   float a   = 1.0 - smoothstep(rad - aa, rad + aa, d);
 
@@ -687,10 +726,10 @@ void main(){
 
   // Sub-pixel cards dissolve to their mean instead of flickering.
   float lod = 1.0 - smoothstep(0.30, 0.85, fwidth(s));
-  a = mix(clamp(rad * 0.8, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
+  a = mix(clamp(rad * 0.70, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
 
   // Strongest exactly where the surface turns away — the silhouette.
-  float edge = mix(uCardInner, 1.0, pow(clamp(vEdge, 0.0, 1.0), 1.4));
+  float edge = mix(uCardInner, 1.0, pow(clamp(vEdge, 0.0, 1.0), 2.2));
   a *= edge * uCardOpacity * vP0.w;
   if (a < 0.004) discard;
 

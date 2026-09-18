@@ -8,32 +8,33 @@ import * as THREE from 'three';
  * frame. Do not change pose names without updating the review baseline.
  */
 export const POSES = {
-  // Authored against MEASURED anatomy (tools/_probe.mjs), not guesswork:
-  //   eyeR (0.027, 0.318, 0.222) · nose (0.001, 0.293, 0.274)
-  //   earTip y 0.382 · withers y ~0.28 · pawF z 0.093 · pawR z -0.143
-  //   tailTip (0.007, 0.055, -0.501) · bbox 0.777 L x 0.158 W x 0.383 H
+  // Authored against MEASURED anatomy (not guesswork). Current rig, after the
+  // proportion rework that dropped the skull 34 mm and pulled it back 22 mm:
+  //   eyeR (0.0288, 0.2809, 0.1999) · nose (0.0016, 0.2497, 0.2518)
+  //   head bone (0, 0.2821, 0.1638) · skull top 0.322 skin / ~0.33 furred
+  //   inter-pupil 46 mm · pawF z 0.093 · pawR z -0.143 · tail tip y 0.048
   // Re-derive these if the anatomy changes; a pose that misses its subject
   // silently wastes an entire review round.
 
   // The money shot: 3/4 front, eye level, backlit from camera-left.
   // Target biased +x so the animal sits left of centre with space to look into.
-  hero:        { pos: [0.904, 0.326, 0.854], target: [0.100, 0.205, 0.020], fov: 40, focus: 1.25 },
+  hero:        { pos: [0.904, 0.316, 0.854], target: [0.100, 0.190, 0.020], fov: 40, focus: 1.25 },
 
   // Head fills ~70% of frame height. Long-ish lens to stay flattering.
-  portrait:    { pos: [0.364, 0.355, 0.610], target: [0.005, 0.310, 0.215], fov: 26, focus: 0.55 },
+  portrait:    { pos: [0.379, 0.325, 0.585], target: [0.015, 0.285, 0.175], fov: 26, focus: 0.55 },
 
   // Extreme close on the RIGHT eye — iris parallax, corneal highlight, lids, lashes.
-  macro_eye:   { pos: [0.105, 0.339, 0.324], target: [0.027, 0.318, 0.222], fov: 18, focus: 0.13 },
+  macro_eye:   { pos: [0.107, 0.302, 0.302], target: [0.029, 0.281, 0.200], fov: 18, focus: 0.13 },
 
   // Camera looks almost straight into the sun with the fox between: the
   // definitive fur test for rim translucency and silhouette break-up.
-  silhouette:  { pos: [0.720, 0.260, 1.420], target: [0.000, 0.210, 0.000], fov: 38, focus: 1.61 },
+  silhouette:  { pos: [0.720, 0.250, 1.420], target: [0.000, 0.195, 0.000], fov: 38, focus: 1.61 },
 
   // Side elevation on a long lens. Proportion and joint-placement audit.
-  profile:     { pos: [1.900, 0.220, -0.020], target: [0.000, 0.200, -0.020], fov: 24, focus: 1.90 },
+  profile:     { pos: [1.900, 0.205, -0.020], target: [0.000, 0.190, -0.020], fov: 24, focus: 1.90 },
 
   // Rear three-quarter. Tail volume, flow and carriage.
-  tail:        { pos: [-0.716, 0.496, -1.181], target: [0.000, 0.160, -0.300], fov: 38, focus: 1.15 },
+  tail:        { pos: [-0.716, 0.466, -1.100], target: [0.000, 0.150, -0.250], fov: 38, focus: 1.10 },
 
   // Ground level at the front paws. Contact, compression, footprints.
   paws:        { pos: [0.620, 0.055, 0.660], target: [0.000, 0.055, 0.020], fov: 32, focus: 0.89 },
@@ -48,7 +49,7 @@ export const POSES = {
   terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70 },
 
   // Behind and above the head: ruff depth and ear interior.
-  nape:        { pos: [-0.231, 0.562, -0.224], target: [0.000, 0.315, 0.160], fov: 34, focus: 0.55 },
+  nape:        { pos: [-0.231, 0.529, -0.299], target: [0.000, 0.282, 0.135], fov: 34, focus: 0.55 },
 };
 
 export class Debug {
@@ -167,6 +168,16 @@ export class Debug {
           }
         });
         return [...seen.values()];
+      },
+
+      /** Hide the DOM overlay for review shots. The critic is grading the
+       *  render, not the chrome, and the loader's fade is driven by its own
+       *  rAF which barely ticks while the harness drives frames synchronously
+       *  inside a single evaluate block. */
+      setUI: (visible) => {
+        const el = document.getElementById('ui');
+        if (el) el.style.display = visible ? '' : 'none';
+        return !!el;
       },
 
       stats: () => {

@@ -25,10 +25,21 @@
  * invalidate everything downstream.
  */
 import * as THREE from 'three';
-import { TAU, fbm1 } from '../util/math.js';
+import { TAU, clamp, damp, fbm1 } from '../util/math.js';
 import { FoxSkeleton, POSE_PRESETS } from './FoxSkeleton.js';
-import { buildFoxSurface, GRID_LONG } from './FoxSurface.js';
-import { REGION, REGION_NAME, LANDMARKS } from './FoxAnatomy.js';
+import { buildFoxSurface, CELL } from './FoxSurface.js';
+import { REGION, REGION_NAME, LANDMARKS, skullXf } from './FoxAnatomy.js';
+
+const PAW_ANCHORS = ['pawFL', 'pawFR', 'pawRL', 'pawRR'];
+const PRESS_HZ = 8;                 // stamps per simulated second
+const PRESS_RADIUS = 0.045;         // furred paw spreads a little wider than the skin
+const PRESS_DEPTH = 0.10;           // 0..1 of max compression. Terrain writes the
+                                    // contact/compaction channel at full strength
+                                    // regardless, so this only needs to dish the
+                                    // surface a few mm; 0.28 dug a visible hole
+                                    // under a paw the rig holds at fixed height.
+const PRESS_SHARPNESS = 0.52;       // furry paw -> soft rim
+const PRESS_CONTACT_BAND = 0.020;   // above this the paw counts as lifted
 
 export class Fox {
   name = 'fox';
@@ -36,6 +47,12 @@ export class Fox {
 
   /** Animation agent: set false to take over the bones completely. */
   useBuiltInIdle = true;
+
+  /** Animation agent: set false once real gait contacts drive terrain.press(). */
+  pressFootprints = true;
+
+  /** Animation agent: set false once IK puts the paws on the snow itself. */
+  autoGround = true;
 
   constructor() {
     this.root = new THREE.Group();
@@ -49,6 +66,8 @@ export class Fox {
     this._tmpQ = new THREE.Quaternion();
     this._tmpE = new THREE.Euler();
     this._tmpV = new THREE.Vector3();
+    this._lastPressTick = -1;
+    this._grounded = false;
   }
 
   async init(ctx) {
@@ -62,7 +81,7 @@ export class Fox {
 
     // -------------------------------------------------------------- surface --
     const tier = ctx.quality.tier;
-    const gridLong = ctx.quality.get('foxGridLong') ?? GRID_LONG[tier] ?? GRID_LONG.high;
+    const cell = ctx.quality.get('foxVoxelCell') ?? CELL[tier] ?? CELL.high;
 
     // Yield roughly every 12 ms of work so we never block a frame for long.
     let lastYield = performance.now();
@@ -72,7 +91,7 @@ export class Fox {
       lastYield = performance.now();
     };
 
-    const built = await buildFoxSurface(this.rig, { gridLong, onYield });
+    const built = await buildFoxSurface(this.rig, { cell, onYield });
     this.geometry = built.geometry;
     this.field = built.field;
     this.eyes = built.eyes;
@@ -154,8 +173,11 @@ export class Fox {
     };
 
     // --- nose: march forward out of the nose pad --------------------------
-    const noseStart = [0, 0.2958, 0.2540];
-    const noseDir = [0, -0.10, 0.995];
+    // Authored in skull-reference space and mapped, like every other head
+    // landmark — hardcoding world coordinates here left the nose anchor
+    // stranded 33 mm off the face the moment the skull was repositioned.
+    const noseStart = skullXf([0, 0.2930, 0.2480]);
+    const noseDir = [0, -0.14, 0.990];
     const tn = f.raycast(noseStart[0], noseStart[1], noseStart[2], noseDir[0], noseDir[1], noseDir[2], 0.08);
     const noseT = tn > 0 ? tn : 0.030;
     mk('nose', 'head', [
@@ -169,10 +191,11 @@ export class Fox {
     mk('eyeR', 'head', this.eyes.R.centre);
 
     // --- mouth: front of the lower lip -------------------------------------
-    const mt = f.raycast(0, 0.2892, 0.2400, 0, -0.18, 0.984, 0.06);
+    const ms = skullXf([0, 0.2900, 0.2330]);
+    const mt = f.raycast(ms[0], ms[1], ms[2], 0, -0.18, 0.984, 0.06);
     mk('mouth', 'jaw', mt > 0
-      ? [0, 0.2892 - 0.18 * mt, 0.2400 + 0.984 * mt]
-      : [0, 0.2880, 0.2560]);
+      ? [ms[0], ms[1] - 0.18 * mt, ms[2] + 0.984 * mt]
+      : [ms[0], ms[1] - 0.006, ms[2] + 0.020]);
 
     // --- ear tips: march along each pinna axis -----------------------------
     for (const side of ['L', 'R']) {
@@ -190,7 +213,7 @@ export class Fox {
     }
 
     // --- chest: sternum centre (breath origin / camera focus) --------------
-    mk('chest', 'chest', [0, 0.1880, 0.0950]);
+    mk('chest', 'chest', [0, 0.1800, 0.0900]);
 
     // --- tail tip ----------------------------------------------------------
     const t8 = LANDMARKS.tail09, t9 = LANDMARKS.tail_tip;
@@ -204,11 +227,13 @@ export class Fox {
     // --- paws: the audit harness measures foot slide and ground clearance
     //     off these, so they must be the real contact patch centroid, on the
     //     ground plane, not the joint centre.
+    // Seed the contact search just ahead of each distal joint; _measureContact
+    // then finds the true patch centroid, so these only have to be close.
     const pawSpecs = [
-      ['pawFL', 'pawL', -Math.abs(LANDMARKS.pawL[0]), 0.094],
-      ['pawFR', 'pawR', Math.abs(LANDMARKS.pawR[0]), 0.094],
-      ['pawRL', 'footL', -Math.abs(LANDMARKS.footL[0]), -0.140],
-      ['pawRR', 'footR', Math.abs(LANDMARKS.footR[0]), -0.140],
+      ['pawFL', 'pawL', -Math.abs(LANDMARKS.pawL[0]), LANDMARKS.pawL[2] + 0.012],
+      ['pawFR', 'pawR', Math.abs(LANDMARKS.pawR[0]), LANDMARKS.pawR[2] + 0.012],
+      ['pawRL', 'footL', -Math.abs(LANDMARKS.footL[0]), LANDMARKS.footL[2] + 0.018],
+      ['pawRR', 'footR', Math.abs(LANDMARKS.footR[0]), LANDMARKS.footR[2] + 0.018],
     ];
     this.pawContact = {};
     for (const [name, boneName, xc, zc] of pawSpecs) {
@@ -266,7 +291,90 @@ export class Fox {
   // ------------------------------------------------------------------ update --
   update(dt, ctx) {
     if (this.useBuiltInIdle) this._builtInIdle(ctx);
+    this._groundToTerrain(dt, ctx);
     this._updateSubject(ctx);
+    this._pressFootprints(ctx);
+  }
+
+  /**
+   * Sit the animal on the snow instead of on the y = 0 plane.
+   *
+   * The anatomy is authored with the paws at y = 0, but the terrain is not a
+   * plane — under the fox it sits around -4 mm and it falls away to -33 mm a
+   * metre out. Four millimetres of air under a paw is plainly visible at the
+   * `paws` framing, so the root tracks the mean terrain height under the four
+   * paw anchors.
+   *
+   * `heightAt()` includes footprint depressions, so this loop feeds back into
+   * our own presses. That is fine and in fact correct: Footprints merges a
+   * re-press by taking max(depth, decayed), so the depression does not deepen
+   * without bound and the loop converges to the paw resting at the bottom of
+   * its own print, which is what a real fox standing in snow does.
+   *
+   * ANIMATION AGENT: `ctx.fox.autoGround = false` once per-limb IK owns this.
+   */
+  _groundToTerrain(dt, ctx) {
+    if (!this.autoGround) return;
+    const terrain = ctx.terrain;
+    if (!terrain || typeof terrain.heightAt !== 'function') return;
+
+    let sum = 0, n = 0;
+    for (const k of PAW_ANCHORS) {
+      const a = this.anchors[k];
+      if (!a) continue;
+      a.updateWorldMatrix(true, false);
+      const p = this._tmpV.setFromMatrixPosition(a.matrixWorld);
+      sum += terrain.heightAt(p.x, p.z) - p.y;
+      n++;
+    }
+    if (!n) return;
+
+    const target = clamp(this.root.position.y + sum / n, -0.25, 0.25);
+    // Snap on the first frame so the animal is never seen settling onto the
+    // snow at load; damp after that so terrain changes are absorbed smoothly.
+    this.root.position.y = this._grounded
+      ? damp(this.root.position.y, target, 9, dt)
+      : target;
+    this._grounded = true;
+    this.groundY = this.root.position.y;
+    this.root.updateMatrixWorld(true);
+  }
+
+  /**
+   * Stamp snow compression under each paw that is in contact.
+   *
+   * Without this the animal reads as levitating even though the paws are
+   * geometrically touching — there is no depression and, more importantly, no
+   * contact darkening, because the terrain writes its compaction channel from
+   * these stamps. Terrain has a fallback that does the same thing, but it
+   * switches itself off the moment anyone presses externally, so this takes
+   * ownership of the handoff.
+   *
+   * Throttled off `ctx.time` (not wall clock) so the review harness stays
+   * deterministic; Footprints merges repeat presses of a stationary paw into
+   * one stamp, so re-pressing costs nothing.
+   *
+   * ANIMATION AGENT: this is yours to take over with real gait contacts —
+   * `ctx.fox.pressFootprints = false` turns it off.
+   */
+  _pressFootprints(ctx) {
+    if (!this.pressFootprints) return;
+    const terrain = ctx.terrain;
+    if (!terrain || typeof terrain.press !== 'function') return;
+
+    const tick = Math.floor(ctx.time * PRESS_HZ);
+    if (tick === this._lastPressTick) return;
+    this._lastPressTick = tick;
+
+    for (const k of PAW_ANCHORS) {
+      const a = this.anchors[k];
+      if (!a) continue;
+      a.updateWorldMatrix(true, false);
+      const p = this._tmpV.setFromMatrixPosition(a.matrixWorld);
+      const gy = terrain.heightAt?.(p.x, p.z) ?? 0;
+      if (p.y - gy > PRESS_CONTACT_BAND) continue;   // paw is lifted
+      terrain.press(p.x, p.z, PRESS_RADIUS, PRESS_DEPTH, PRESS_SHARPNESS);
+    }
   }
 
   _updateSubject(ctx) {

@@ -23,7 +23,9 @@ export class Breath {
   constructor() {
     this.MAX_PUFFS = 14;
     this.BLOBS = 5;
-    this.LIFE = 1.55;          // seconds, bible §7 "short-lived"
+    this.LIFE = 1.05;          // seconds, bible §7 "short-lived"
+    this._burstLeft = 0;
+    this._burstNext = 0;
     this.enabled = true;
     this._phasePrev = 0;
     this._ownPhase = 0;
@@ -79,8 +81,14 @@ export class Breath {
     this._puffData = new Float32Array(this.MAX_PUFFS * 4);
     for (let i = 0; i < this.MAX_PUFFS; i++) this._puffData[i * 4 + 3] = -1;
 
+    // xyz = exhale direction, w unused. Lets the shader build the plume as a
+    // forward cone instead of a ball.
+    this._puffDir = new Float32Array(this.MAX_PUFFS * 4);
+    for (let i = 0; i < this.MAX_PUFFS; i++) this._puffDir[i * 4 + 2] = 1;
+
     this.uniforms = {
       uPuff: { value: this._puffData },
+      uPuffDir: { value: this._puffDir },
       uCamPos: { value: new THREE.Vector3() },
       uCamRight: { value: new THREE.Vector3(1, 0, 0) },
       uCamUp: { value: new THREE.Vector3(0, 1, 0) },
@@ -88,9 +96,13 @@ export class Breath {
       uSunColor: { value: new THREE.Vector3() },
       uSkyColor: { value: new THREE.Vector3() },
       uBounce: { value: new THREE.Vector3() },
-      uR0: { value: 0.012 },
+      uR0: { value: 0.017 },
       uR1: { value: 0.115 },
-      uDensity: { value: 0.50 },
+      // Condensation is thin. At 0.5 this rendered as an opaque cotton ball;
+      // real breath is a haze you can see the background through.
+      uDensity: { value: 0.21 },
+      uWindDir: { value: new THREE.Vector3(1, 0, 0) },
+      uShear: { value: 0.55 },
     };
 
     const mat = new THREE.ShaderMaterial({
@@ -101,8 +113,9 @@ export class Breath {
         attribute vec4 aBlob;
         attribute vec4 aExtra;
         uniform vec4 uPuff[MAX_PUFFS];
-        uniform vec3 uCamRight, uCamUp;
-        uniform float uR0, uR1;
+        uniform vec4 uPuffDir[MAX_PUFFS];
+        uniform vec3 uCamRight, uCamUp, uWindDir;
+        uniform float uR0, uR1, uShear;
         varying vec2 vUv;
         varying float vAge, vFade, vSeed, vRot;
         varying vec3 vWorld;
@@ -121,13 +134,34 @@ export class Breath {
           // air around it almost immediately.
           float e = 1.0 - pow(1.0 - age, 2.4);
           float radius = mix(uR0, uR1, e) * aExtra.x;
-          vec3 c = P.xyz + aBlob.yzw * mix(uR0, uR1 * 1.35, e) * aExtra.w;
 
+          // Blob cluster as a forward CONE, not a sphere: stretched along the
+          // exhale and squeezed across it. A symmetric cluster is what made
+          // this read as a ball of cotton floating near the face.
+          vec3 fwd = normalize(uPuffDir[int(aBlob.x)].xyz + vec3(1e-5));
+          vec3 up0 = abs(fwd.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+          vec3 pr1 = normalize(cross(up0, fwd));
+          vec3 pr2 = cross(fwd, pr1);
+          float spread = mix(uR0, uR1 * 1.05, e) * aExtra.w;
+          vec3 c = P.xyz
+                 + fwd * (abs(aBlob.y) * spread * 1.5)
+                 + pr1 * (aBlob.z * spread * 0.62)
+                 + pr2 * (aBlob.w * spread * 0.62);
+
+          // Shear along the wind as it ages. A puff that stays circular reads
+          // as a cartoon smoke ring; real breath is pulled into a streak
+          // almost immediately.
           float sz = radius * 2.0;
-          vec3 world = c + uCamRight * (position.x * sz) + uCamUp * (position.y * sz);
+          vec2 wS = vec2(dot(uWindDir, uCamRight), dot(uWindDir, uCamUp));
+          float wl = length(wS);
+          vec2 wd = wl > 1e-4 ? wS / wl : vec2(1.0, 0.0);
+          vec2 wp = vec2(-wd.y, wd.x);
+          float stretch = 1.0 + uShear * e;
+          vec2 off = position.x * wd * (sz * stretch) + position.y * wp * sz;
+          vec3 world = c + uCamRight * off.x + uCamUp * off.y;
 
           // Fade in over the first 12%, then thin out as it expands.
-          vFade = smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(0.35, 1.0, age));
+          vFade = smoothstep(0.0, 0.05, age) * (1.0 - smoothstep(0.18, 1.0, age));
           vAge = age;
           vSeed = aExtra.y;
           vRot = aExtra.z + age * 1.1;
@@ -152,13 +186,16 @@ export class Breath {
           float sr = sin(vRot), cr = cos(vRot);
           c = mat2(cr, -sr, sr, cr) * c;
           float r = length(c) * 2.0;
-          float a = smoothstep(1.0, 0.15, r);
+          // No flat core: a soft shoulder all the way in, so the puff never
+          // develops the opaque middle that made it read as a cotton ball.
+          float a = smoothstep(1.0, 0.05, r) * (0.35 + 0.65 * smoothstep(1.0, 0.45, r));
           if (a <= 0.0) discard;
 
           // Turbulent break-up, coarsening as the puff expands and mixes.
-          vec3 np = vec3(c * (7.0 - 3.2 * vAge), vSeed * 37.0 + vAge * 1.6);
-          float n = snoise(np) * 0.5 + snoise(np * 2.3) * 0.28;
-          a *= clamp(0.62 + 0.75 * n, 0.0, 1.0);
+          // Biased so more of the sprite is torn away than kept.
+          vec3 np = vec3(c * (9.0 - 4.0 * vAge), vSeed * 37.0 + vAge * 2.2);
+          float n = snoise(np) * 0.55 + snoise(np * 2.4) * 0.3 + snoise(np * 5.1) * 0.15;
+          a *= clamp(0.30 + 1.05 * n, 0.0, 1.0);
           a *= vFade * uDensity;
           if (a <= 0.003) discard;
 
@@ -202,13 +239,20 @@ export class Breath {
     this.mesh?.material.dispose();
   }
 
-  _emit(ctx, origin, forward) {
+  _emit(ctx, origin, forward, k) {
     const p = this.puffs[this._nextIdx];
     this._nextIdx = (this._nextIdx + 1) % this.MAX_PUFFS;
     p.age = 0;
     p.pos.copy(origin);
     // Out of the nose and slightly down, the way a muzzle actually points.
-    p.vel.copy(forward).multiplyScalar(0.62).add(new THREE.Vector3(0, -0.1, 0));
+    // Each puff in the burst is a little slower than the last, so the plume
+    // stretches away from the nostrils instead of leaving as one ball.
+    const sp = 0.32 * (1 - 0.09 * k);
+    p.vel.copy(forward).multiplyScalar(sp).add(new THREE.Vector3(0, -0.06, 0));
+    const i = (this._nextIdx + this.MAX_PUFFS - 1) % this.MAX_PUFFS;
+    this._puffDir[i * 4] = forward.x;
+    this._puffDir[i * 4 + 1] = forward.y;
+    this._puffDir[i * 4 + 2] = forward.z;
   }
 
   update(dt, ctx) {
@@ -232,13 +276,21 @@ export class Breath {
       const wrapped = phase < this._phasePrev && this._phasePrev > 0.5 && phase < 0.5;
       this._phasePrev = phase;
 
-      if (crossed || wrapped) {
+      if (crossed || wrapped) { this._burstLeft = 7; this._burstNext = ctx.time; }
+
+      // An exhale is not one puff, and it is not instantaneous. Seven
+      // staggered over ~0.45 s keeps the plume ROOTED at the nostrils for the
+      // whole exhale; a short burst leaves a detached blob hanging in front
+      // of the face for the rest of the cycle, which is what it was doing.
+      if (this._burstLeft > 0 && ctx.time >= this._burstNext) {
         nose.updateWorldMatrix(true, false);
         const origin = new THREE.Vector3().setFromMatrixPosition(nose.matrixWorld);
         const fwd = new THREE.Vector3(0, 0, 1)
           .applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(nose.matrixWorld));
         if (!Number.isFinite(fwd.x) || fwd.lengthSq() < 1e-8) fwd.set(0, 0, 1);
-        this._emit(ctx, origin, fwd.normalize());
+        this._emit(ctx, origin, fwd.normalize(), 3 - this._burstLeft);
+        this._burstLeft--;
+        this._burstNext = ctx.time + 0.065;
       }
     }
 
@@ -253,11 +305,15 @@ export class Breath {
       if (p.age >= 1) { p.age = -1; this._puffData[i * 4 + 3] = -1; continue; }
       any = true;
       // Ejection momentum bleeds off fast; wind and a little buoyancy take over.
-      const drag = Math.exp(-4.2 * dt);
+      // Wind coupling was 0.55 as an acceleration, which carried the puff
+      // ~1.7 m in a lifetime and left it hanging in space well clear of the
+      // animal. A puff this small equilibrates with the air fast but only
+      // lives about a second, so it should never get far from the muzzle.
+      const drag = Math.exp(-5.5 * dt);
       p.vel.multiplyScalar(drag);
-      p.vel.x += wind.x * speed * 0.55 * dt;
-      p.vel.y += (0.18 - p.vel.y * 0.5) * dt;
-      p.vel.z += wind.z * speed * 0.55 * dt;
+      p.vel.x += wind.x * speed * 0.20 * dt;
+      p.vel.y += (0.09 - p.vel.y * 0.6) * dt;
+      p.vel.z += wind.z * speed * 0.20 * dt;
       p.pos.addScaledVector(p.vel, dt);
       this._puffData[i * 4] = p.pos.x;
       this._puffData[i * 4 + 1] = p.pos.y;
@@ -270,6 +326,8 @@ export class Breath {
 
     const u = this.uniforms;
     u.uPuff.value = this._puffData;
+    u.uPuffDir.value = this._puffDir;
+    u.uWindDir.value.copy(ctx.wind).normalize();
     const sun = ctx.sunColor, si = ctx.sunIntensity ?? 7;
     u.uSunDir.value.copy(ctx.sunDirection);
     u.uSunColor.value.set(sun.r * si, sun.g * si, sun.b * si);

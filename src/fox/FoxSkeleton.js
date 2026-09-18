@@ -24,7 +24,7 @@
  * kill both.
  */
 import * as THREE from 'three';
-import { LANDMARKS, REGION as R } from './FoxAnatomy.js';
+import { LANDMARKS, REGION as R, skullXf } from './FoxAnatomy.js';
 
 /** [name, parent, tipLandmark|null] — declaration order IS the bone index order. */
 const BONE_DEFS = [
@@ -74,8 +74,8 @@ for (const s of ['L', 'R']) {
 
 /** Extra segment endpoints that are not bone positions. */
 const VIRTUAL_TIPS = {
-  '@muzzle': [0, 0.3030, 0.2400],
-  '@chin': [0, 0.2895, 0.2500],
+  '@muzzle': skullXf([0, 0.3030, 0.2360]),
+  '@chin': skullXf([0, 0.2900, 0.2440]),
 };
 
 /**

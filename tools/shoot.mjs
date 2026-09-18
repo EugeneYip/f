@@ -38,6 +38,7 @@ function parseArgs(argv) {
     else if (k === '--wind') a.wind = next().split(',').map(Number);
     else if (k === '--timeout') a.timeout = parseInt(next(), 10);
     else if (k === '--url') a.url = next();
+    else if (k === '--ui') a.ui = true;
   }
   const [w, h] = a.size.split('x').map(Number);
   a.width = w || 1280; a.height = h || 800;
@@ -176,6 +177,7 @@ const main = async () => {
     await page.evaluate(async (a) => {
       const D = window.FoxDebug;
       D.setAdaptive(false);
+      if (!a.ui) D.setUI(false);
       if (a.quality) D.setQuality(a.quality);
       D.pause();
       if (a.sun) D.setSun(a.sun[0], a.sun[1]);

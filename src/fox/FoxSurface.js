@@ -29,13 +29,20 @@ import {
   analyticNormals, triangulate, smoothField,
 } from './AnatMesher.js';
 
-/** Grid cells along the longest domain axis, per quality tier. */
-export const GRID_LONG = { low: 100, medium: 116, high: 132, ultra: 140 };
+/**
+ * Voxel edge length in metres, per quality tier.
+ *
+ * Sized directly rather than as "N cells along the longest axis": that made
+ * the triangle count depend on the bounding box, so shortening the tail
+ * silently pushed the mesh from 27k to 37k triangles. Cell size keeps the
+ * budget stable while the anatomy is still being tuned.
+ */
+export const CELL = { low: 0.0076, medium: 0.0067, high: 0.0060, ultra: 0.0056 };
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export async function buildFoxSurface(skeleton, {
-  gridLong = 140,
+  cell = CELL.high,
   relaxIters = 3,
   fieldSmooth = 3,
   flowSmooth = 5,
@@ -53,8 +60,7 @@ export async function buildFoxSurface(skeleton, {
   // ----------------------------------------------------------------- domain --
   const b = field.bounds;
   const span = [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
-  const longest = Math.max(span[0], span[1], span[2]);
-  const h = longest / gridLong;
+  const h = cell;
   const pad = h * 2.0;
   const min = [b.min[0] - pad, b.min[1] - pad, b.min[2] - pad];
   const dims = [

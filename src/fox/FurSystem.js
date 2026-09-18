@@ -27,7 +27,7 @@ import { buildFurCards } from './FurCards.js';
 const MAX_SHELLS = 26;
 
 /** Cards per tier. `furFins` gates them off entirely at low. */
-const CARD_COUNT = { low: 0, medium: 5200, high: 10500, ultra: 17000 };
+const CARD_COUNT = { low: 0, medium: 5000, high: 9600, ultra: 15000 };
 
 export class FurSystem {
   name = 'fur';
@@ -300,10 +300,14 @@ async function bakeCoatOcclusion(positions, normals, adjacency, nv) {
 
   let a = Float32Array.from(positions);
   let b = new Float32Array(nv * 3);
+  // NOTE: the finest scale is deliberately gone. Surface Nets leaves a little
+  // vertex-scale bumpiness, and a 5 mm probe reads that as cavities — which
+  // showed up on the flank and shoulder as ~20 mm grey patches that looked
+  // exactly like a dirty, moulting coat. Only anatomical cavities (armpit,
+  // throat, between the haunches) should darken the fur.
   const stages = [
-    { iters: 5, weight: 0.26, scale: 0.0055 },
-    { iters: 18, weight: 0.36, scale: 0.0150 },
-    { iters: 44, weight: 0.44, scale: 0.0340 },
+    { iters: 22, weight: 0.42, scale: 0.0180 },
+    { iters: 52, weight: 0.58, scale: 0.0380 },
   ];
 
   let done = 0;
@@ -337,6 +341,23 @@ async function bakeCoatOcclusion(positions, normals, adjacency, nv) {
     await new Promise((r) => setTimeout(r, 0));
   }
 
-  for (let v = 0; v < nv; v++) occ[v] = occ[v] > 1 ? 1 : occ[v];
-  return occ;
+  // Blur the result over the surface. Whatever vertex-scale structure survived
+  // the coarse probes gets averaged away here, leaving a field that only varies
+  // over anatomical distances — which is the only thing a 45 mm coat could
+  // plausibly respond to anyway.
+  let s0 = occ, s1 = new Float32Array(nv);
+  for (let it = 0; it < 10; it++) {
+    for (let v = 0; v < nv; v++) {
+      const s = start[v], e = start[v + 1];
+      if (e === s) { s1[v] = s0[v]; continue; }
+      let acc = 0;
+      for (let k = s; k < e; k++) acc += s0[nb[k]];
+      s1[v] = s0[v] * 0.3 + (acc / (e - s)) * 0.7;
+    }
+    const t = s0; s0 = s1; s1 = t;
+  }
+  // Cap it: fur never goes black, it goes deep blue.
+  const out = occ;
+  for (let v = 0; v < nv; v++) out[v] = Math.min(0.82, s0[v]);
+  return out;
 }

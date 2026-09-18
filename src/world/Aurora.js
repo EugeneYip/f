@@ -113,7 +113,9 @@ export class Aurora {
           v /= n;
           // Sharpen into distinct striations separated by dark gaps rather
           // than a soft cloud.
-          v = Math.pow(clamp(v * 2.05 - 0.50, 0, 1), 1.30);
+          // Harder threshold: the gaps between striations have to go to actual
+        // zero or the curtain integrates into a smooth green gradient.
+        v = Math.pow(clamp(v * 2.45 - 0.72, 0, 1), 1.12);
           data[o + b] = Math.round(v * 255);
         }
         let e = 0, en = 0;
@@ -153,12 +155,17 @@ export class Aurora {
     const f = u.uFoldW.value;
     u.uInvFoldW2.value.set(1 / (f.x * f.x), 1 / (f.y * f.y));
     u.uScale.value = this.BASE_SCALE / k;
+    // At 6 steps a full-amplitude per-pixel jitter has nothing to average
+    // against and shows as stipple. Fewer steps, less jitter -- the
+    // thicker sheets that come with the same LOD hide the banding it
+    // would otherwise trade for.
+    u.uJitter.value = clamp(steps / 14, 0.25, 1);
   }
 
   _buildCurtains(ctx, sky) {
     const steps = Math.max(4, ctx.quality.get('auroraSteps') || 12);
     this._steps = steps;
-    this.BASE_SCALE = 0.0125;
+    this.BASE_SCALE = 0.0112;
 
     // Arc frame. Rotated so the bands run ACROSS the aurora pose's view
     // rather than straight away from it.
@@ -173,7 +180,7 @@ export class Aurora {
       uDrift: { value: 0 },
       uIntensity: { value: 0 },
       uArcRot: { value: new THREE.Vector2(Math.cos(th), Math.sin(th)) },
-      uSFreq: { value: 0.0009 },
+      uSFreq: { value: 0.0017 },
       uShear: { value: 0.016 },
       // Across-arc distances in km. These set the ELEVATION each curtain
       // appears at: atan(90 / |z|). -110/-200/-340 puts them at roughly
@@ -182,7 +189,8 @@ export class Aurora {
       uBandThick: { value: new THREE.Vector3(4.5, 7.0, 11.0) },
       uInvThick2: { value: new THREE.Vector3() },
       uInvFoldW2: { value: new THREE.Vector2() },
-      uBandAmp: { value: new THREE.Vector3(1.0, 0.72, 0.45) },
+      uJitter: { value: 1 },
+      uBandAmp: { value: new THREE.Vector3(1.0, 0.58, 0.32) },
       uFoldPos: { value: new THREE.Vector2(0, 0) },
       uFoldW: { value: new THREE.Vector2(150, 230) },
       uColLow: { value: new THREE.Color(0x7dffc4) },
@@ -209,7 +217,7 @@ export class Aurora {
         precision highp float;
         uniform sampler2D uCurtain;
         uniform vec3 uSunDir;
-        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill;
+        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uJitter;
         uniform vec2 uArcRot, uFoldPos, uFoldW, uInvFoldW2;
         uniform vec3 uBandZ, uBandThick, uBandAmp, uInvThick2;
         uniform vec3 uColLow, uColMid, uColHigh, uColTop;
@@ -272,7 +280,7 @@ export class Aurora {
           }
 
           float dt = (t1 - t0) / float(AUR_STEPS);
-          float jit = ign(gl_FragCoord.xy);
+          float jit = 0.5 + (ign(gl_FragCoord.xy) - 0.5) * uJitter;
 
           // Accumulate emission and emission-weighted altitude, then look the
           // colour up ONCE. Per-step colour ramping was three smoothsteps and
@@ -324,8 +332,8 @@ export class Aurora {
             // dead-straight line across the frame.
             float vv = clamp(v - (0.075 * sB + 0.045 * sA), 0.0, 1.0);
             float b = (vv - 0.045) * 29.41;
-            float vert = smoothstep(0.0, 0.03, vv) * (0.10 + 0.55 * exp(-vv * 3.4))
-                       + 1.90 * bump(b * b);
+            float vert = smoothstep(0.0, 0.03, vv) * (0.06 + 0.40 * exp(-vv * 3.6))
+                       + 2.70 * bump(b * b);
 
             float w = dens * vert;
             accD += w;

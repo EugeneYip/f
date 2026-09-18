@@ -29,9 +29,13 @@ export class Horizon {
       // Radii are pinned between the terrain's outer clipmap ring (which can
       // reach ~480 m at ultra, with a skirt) and the 900 m far plane. Inside
       // that and the range is simply buried in the snowfield.
-      { r: 560, h: 26, min: 7,  base: -140, aerialTop: 0.50, aerialBase: 0.70, seed: 7717, rough: 1.0 },
-      { r: 690, h: 44, min: 13, base: -160, aerialTop: 0.66, aerialBase: 0.83, seed: 3391, rough: 0.85 },
-      { r: 840, h: 66, min: 20, base: -180, aerialTop: 0.80, aerialBase: 0.93, seed: 9043, rough: 0.7 },
+      // aerialBase / aerialCrest: how much of the sky's own colour is mixed in
+      // at the horizon line and at the peak. The crest values are near 1 on
+      // purpose -- a distant ridge has to arrive at the sky's value before its
+      // silhouette ends, or the eye finds the join.
+      { r: 560, h: 26, min: 7,  base: -140, aerialBase: 0.44, aerialCrest: 0.92, seed: 7717, rough: 1.0 },
+      { r: 690, h: 44, min: 13, base: -160, aerialBase: 0.62, aerialCrest: 0.965, seed: 3391, rough: 0.85 },
+      { r: 840, h: 66, min: 20, base: -180, aerialBase: 0.82, aerialCrest: 0.985, seed: 9043, rough: 0.7 },
     ];
     this.fog = { r: 520, top: 30, bottom: -60 };
   }
@@ -53,12 +57,14 @@ export class Horizon {
       const L = this.layout[i];
       const mesh = new THREE.Mesh(this._ridgeGeometry(L), this._ridgeMaterial(sky, L, snow));
       mesh.frustumCulled = false;
+      mesh.name = `ridge${i}`;
       mesh.renderOrder = -9000 + i;   // far ring first; they are opaque anyway
       this.group.add(mesh);
       this.rings.push(mesh);
     }
 
     this.fogBand = new THREE.Mesh(this._fogGeometry(), this._fogMaterial(sky));
+    this.fogBand.name = 'icefog';
     this.fogBand.frustumCulled = false;
     this.fogBand.renderOrder = -50;
     this.group.add(this.fogBand);
@@ -98,6 +104,7 @@ export class Horizon {
     const pos = new Float32Array((N + 1) * 2 * 3);
     const hv = new Float32Array((N + 1) * 2);      // 0 at base, 1 at ridge top
     const az = new Float32Array((N + 1) * 2);
+    const tp = new Float32Array((N + 1) * 2);      // this column's crest height (m)
     const idx = [];
     for (let i = 0; i <= N; i++) {
       const a = (i / N) * Math.PI * 2;
@@ -108,6 +115,7 @@ export class Horizon {
       pos[o * 3 + 3] = x; pos[o * 3 + 4] = top;    pos[o * 3 + 5] = z;
       hv[o] = 0; hv[o + 1] = 1;
       az[o] = a; az[o + 1] = a;
+      tp[o] = top; tp[o + 1] = top;
       if (i < N) {
         const b = i * 2;
         idx.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
@@ -117,6 +125,7 @@ export class Horizon {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('aH', new THREE.BufferAttribute(hv, 1));
     g.setAttribute('aAz', new THREE.BufferAttribute(az, 1));
+    g.setAttribute('aTop', new THREE.BufferAttribute(tp, 1));
     g.setIndex(idx);
     return g;
   }
@@ -128,17 +137,19 @@ export class Horizon {
         uSkyTexel: sky.shared.uSkyTexel,
         uSunDir: sky.shared.uSunDir,
         uSnow: { value: new THREE.Vector3(snow.r, snow.g, snow.b) },
-        uAerial: { value: new THREE.Vector2(L.aerialTop, L.aerialBase) },
+        uAerial: { value: new THREE.Vector2(L.aerialBase, L.aerialCrest) },
         uDither: { value: 0.010 },
       },
       vertexShader: /* glsl */ `
         attribute float aH;
         attribute float aAz;
+        attribute float aTop;
         varying float vH;
         varying float vAz;
+        varying float vTop;
         varying vec3 vWorld;
         void main() {
-          vH = aH; vAz = aAz;
+          vH = aH; vAz = aAz; vTop = aTop;
           vec4 w = modelMatrix * vec4(position, 1.0);
           vWorld = w.xyz;
           gl_Position = projectionMatrix * viewMatrix * w;
@@ -149,7 +160,7 @@ export class Horizon {
         uniform vec3 uSunDir, uSnow;
         uniform vec2 uAerial;
         uniform float uDither;
-        varying float vH, vAz;
+        varying float vH, vAz, vTop;
         varying vec3 vWorld;
         ${ATMO_PARS}
         ${SKY_SAMPLE}
@@ -171,35 +182,47 @@ export class Horizon {
           // glows and its faces go pale. Away from the sun it flattens out.
           float lit = 0.66 + 0.60 * smoothstep(-0.45, 0.95, sunFacing);
 
-          // Snowfield / rock break-up. Frequency matters more than amplitude:
-          // at 260 cycles/radian this landed at ~5 px per cycle on screen and
-          // read as corduroy. Lower frequencies, and varying with height as
-          // well as azimuth, give patches instead of stripes.
-          float det = vnoise(vAz * 62.0 + vH * 3.1) * 0.55
-                    + vnoise(vAz * 17.0 - vH * 1.3) * 0.45;
+          // Height above the HORIZON LINE, normalised by this column's own
+          // crest -- not the 0..1 across the whole geometry. The geometry
+          // starts 140 m below sea level so it can never leave a gap under the
+          // terrain rim, which meant the visible band was only the top ~12% of
+          // the old parameter and every gradient keyed to it came out flat.
+          // This was what made the range read as a painted wall.
+          float hN = clamp(vWorld.y / max(vTop, 0.5), 0.0, 1.0);
+
+          // Snowfield / rock break-up, in patches rather than stripes.
+          float det = vnoise(vAz * 62.0 + hN * 3.1) * 0.55
+                    + vnoise(vAz * 17.0 - hN * 1.3) * 0.45;
           lit *= 0.93 + 0.14 * det;
-          // Ridge tops catch skylight; the flanks fall away.
-          lit *= mix(0.86, 1.06, smoothstep(0.0, 0.85, vH));
+          lit *= mix(0.88, 1.05, smoothstep(0.0, 0.9, hN));
 
           // Fade toward the sky's *own* value at the horizon in this direction,
           // so the ridge line dissolves instead of ending on an edge.
           vec3 haze = sampleSky(normalize(vec3(dh.x, 0.010, dh.z)), uSunDir);
-          float aerial = mix(uAerial.y, uAerial.x, smoothstep(0.0, 1.0, vH));
-          // Vary the haze along the ring. A range at one constant aerial
-          // strength reads as a cardboard cutout no matter how good the ridge
-          // line is; real distance comes and goes with the air.
+          float aerial = mix(uAerial.x, uAerial.y, hN * hN);
+          // Vary the haze along the ring; real distance comes and goes.
           float azVar = vnoise(vAz * 2.7 + 5.0) * 0.55 + vnoise(vAz * 6.1) * 0.45;
-          aerial = clamp(aerial + (azVar - 0.5) * 0.24, 0.0, 0.98);
+          aerial = clamp(aerial + (azVar - 0.5) * 0.20, 0.0, 0.995);
           vec3 col = mix(uSnow * lit * 0.62, haze, aerial);
 
+          // Dissolve the crest. A distant ridge has the most air in front of
+          // its top and the least snow on it, so the silhouette should thin
+          // out and break up instead of ending on a clean line. The noise is
+          // what stops the remaining edge reading as a drawn contour.
+          float edge = smoothstep(1.05, 0.45, hN);
+          float ragged = vnoise(vAz * 39.0 + 2.0) * 0.6 + vnoise(vAz * 121.0) * 0.4;
+          float a = clamp(edge * (0.62 + 0.72 * ragged), 0.0, 1.0);
+          a = max(a, smoothstep(0.46, 0.20, hN));   // solid below, no see-through
+
           col *= 1.0 + triDither(gl_FragCoord.xy) * uDither;
-          gl_FragColor = vec4(max(col, 0.0), 1.0);
+          gl_FragColor = vec4(max(col, 0.0), a);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
       `,
       side: THREE.DoubleSide,
-      depthWrite: true,
+      transparent: true,
+      depthWrite: false,
       depthTest: true,
     });
   }
@@ -253,7 +276,10 @@ export class Horizon {
           float band = exp(-pow(max(0.0, (vWorld.y - 2.0)) / 17.0, 1.7))
                      * smoothstep(0.0, 0.22, t);
           float lumpy = 0.68 + 0.42 * (vnoise(az * 5.3 + 11.0) * 0.6 + vnoise(az * 17.0) * 0.4);
-          float a = clamp(band * lumpy * 0.52, 0.0, 1.0);
+          // Taper to exactly zero before the cylinder's top rim, or the rim
+          // itself draws a perfectly straight line across the sky.
+          float rim = smoothstep(uRange.y, uRange.y * 0.45, vWorld.y);
+          float a = clamp(band * lumpy * rim * 0.62, 0.0, 1.0);
 
           vec3 haze = sampleSky(normalize(vec3(dh.x, 0.006, dh.z)), uSunDir);
           // Ice fog is suspended crystals, not air: it scatters near-neutrally

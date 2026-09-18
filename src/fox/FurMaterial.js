@@ -63,42 +63,45 @@ export const REGION_TABLE = [
   /* 21 legHindUpper  */ { a: [1.00, 1.00, 1.00, 0.28], b: [1.05, 1.20, 1.00, 0.60] },
   /* 22 hock          */ { a: [1.00, 1.12, 0.95, 0.32], b: [1.15, 1.35, 1.00, 1.30] },
   /* 23 pawHind       */ { a: [1.00, 1.30, 0.60, 0.16], b: [1.55, 1.95, 0.22, 0.55] },
-  /* 24 tailBase      */ { a: [1.04, 1.08, 0.62, 0.34], b: [0.85, 0.95, 1.00, 1.45] },
-  /* 25 tailMid       */ { a: [1.06, 1.14, 0.48, 0.42], b: [0.78, 0.92, 1.00, 1.90] },
-  /* 26 tailTip       */ { a: [1.04, 1.12, 0.52, 0.36], b: [0.82, 0.95, 1.00, 1.70] },
+  /* 24 tailBase      */ { a: [1.04, 1.08, 0.62, 0.34], b: [0.85, 0.95, 1.00, 1.30] },
+  /* 25 tailMid       */ { a: [1.06, 1.14, 0.48, 0.42], b: [0.78, 0.92, 1.00, 1.55] },
+  /* 26 tailTip       */ { a: [1.04, 1.12, 0.52, 0.36], b: [0.82, 0.95, 1.00, 1.45] },
 ];
 
 /** Authoring defaults. Every one of these is live-tweakable via ctx.fur.set(). */
 export const FUR_DEFAULTS = {
   // coat shape
-  coatScale: 0.97,
-  lay: 0.72,
+  coatScale: 0.93,
+  lay: 0.44,
   droop: 0.30,
   windBend: 1.0,
   waveFreq: 5.2,
   waveSpeed: 3.1,
 
   // hair field (metres -> per-metre frequencies)
-  clumpFreq: 118,     // ~8.5 mm tufts; coarser than this reads as dirt, not fur
-  strandFreq: 700,    // ~1.43 mm strands
-  microFreq: 2450,    // ~0.41 mm hairs, only resolved at macro range
-  clumpPull: 0.66,
-  strandRoot: 0.52,
+  clumpFreq: 136,     // ~7.4 mm tufts; coarser reads as dirt, not fur
+  strandFreq: 1080,    // ~0.93 mm; fine enough to blur into a mass at body distance
+  microFreq: 3400,    // ~0.29 mm hairs, only resolved at macro range
+  clumpPull: 0.74,
+  strandRoot: 0.58,
   strandTip: 0.15,
-  hairLenMin: 0.40,
+  hairLenMin: 0.52,
   density: 1.0,
   fill: 1.0,
-  coatVarFreq: 22,
+  coatVarFreq: 15,
 
   // shading
   ambient: 2.10,
   ambientSat: 1.0,
   wrap: 0.40,
-  trans: 7.00,        // divided by PI in the shader
+  trans: 2.60,        // divided by PI in the shader
   transPow: 3.4,
-  aoInner: 0.18,
-  aoPow: 1.25,
-  aoBake: 0.86,
+  aoInner: 0.46,
+  aoPow: 0.90,
+  aoFloor: 0.30,
+  tuftAmt: 1.0,
+  clumpAO: 0.75,
+  aoBake: 0.50,
   rim: 0.30,
   strandRound: 0.60,
 
@@ -111,10 +114,11 @@ export const FUR_DEFAULTS = {
   specJitter: 0.11,
 
   // cards
-  cardWidth: 0.16,
-  cardLength: 1.22,
-  cardInner: 0.18,
-  cardOpacity: 0.92,
+  cardWidth: 0.15,
+  cardLength: 1.80,
+  cardInner: 0.07,
+  cardJitter: 1.05,
+  cardOpacity: 1.0,
 };
 
 export function buildFurUniforms(ctx) {
@@ -171,7 +175,7 @@ export function buildFurUniforms(ctx) {
     uShadowTint: { value: new THREE.Vector3(0.72, 0.845, 1.0) },
     uSpecTintA: { value: c(0xfff3e2) },
     uSpecTintB: { value: c(0xffe8cc) },
-    uTransTint: { value: c(0xffd6b4) },
+    uTransTint: { value: c(0xffb072) },
     uSpecShiftA: { value: d.specShiftA },
     uSpecShiftB: { value: d.specShiftB },
     uSpecPowA: { value: d.specPowA },
@@ -185,6 +189,9 @@ export function buildFurUniforms(ctx) {
     uAOInner: { value: d.aoInner },
     uAOPow: { value: d.aoPow },
     uAOBake: { value: d.aoBake },
+    uAOFloor: { value: d.aoFloor },
+    uTuftAmt: { value: d.tuftAmt },
+    uClumpAO: { value: d.clumpAO },
     uAniso: { value: 1 },
     uStrandRound: { value: d.strandRound },
     uRim: { value: d.rim },
@@ -198,6 +205,7 @@ export function buildFurUniforms(ctx) {
     uCardWidth: { value: d.cardWidth },
     uCardLength: { value: d.cardLength },
     uCardInner: { value: d.cardInner },
+    uCardJitter: { value: d.cardJitter },
     uCardOpacity: { value: d.cardOpacity },
   };
 }

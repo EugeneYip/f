@@ -126,7 +126,9 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
     const cReg = reg[dom];
 
     const cRand = rand();
-    const lenMul = 0.72 + 0.68 * rand() * rand();
+    // Tight spread: a wide one puts a 100 mm wisp halo on the tail, which
+    // dissolves the brush into strands instead of thickening it.
+    const lenMul = 0.76 + 0.50 * rand() * rand();
 
     const base = cI * vPer;
     for (let s = 0; s <= SEGMENTS; s++) {
