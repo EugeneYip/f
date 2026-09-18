@@ -566,6 +566,10 @@ export class Sky {
     // back rather than doubling the fill. Set ONCE, not on every regeneration,
     // so another system can override it without us fighting over the value.
     if (!this._envIntensitySet) {
+      // Environment._balanceAmbient() owns this once the IBL exists: it
+      // drops the hemisphere and rim lights so ambient is not double-counted,
+      // and restores this to 1.0. Leaving the compensated value here as the
+      // pre-handover default.
       ctx.scene.environmentIntensity = 0.6;
       this._envIntensitySet = true;
     }

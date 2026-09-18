@@ -124,11 +124,12 @@ const SKIN_FN = /* glsl */ `
 /** Object-space skin matrix for the current vertex. */
 mat4 furSkinMatrix(){
   #ifdef USE_SKINNING
-    mat4 bx = getBoneMatrix(skinIndex.x);
-    mat4 by = getBoneMatrix(skinIndex.y);
-    mat4 bz = getBoneMatrix(skinIndex.z);
-    mat4 bw = getBoneMatrix(skinIndex.w);
-    mat4 s = skinWeight.x * bx + skinWeight.y * by + skinWeight.z * bz + skinWeight.w * bw;
+    // Each influence is 4 texelFetches, and the shells re-run this once per
+    // shell per vertex. Most vertices carry only two or three real weights.
+    mat4 s = skinWeight.x * getBoneMatrix(skinIndex.x);
+    if (skinWeight.y > 0.0) s += skinWeight.y * getBoneMatrix(skinIndex.y);
+    if (skinWeight.z > 0.0) s += skinWeight.z * getBoneMatrix(skinIndex.z);
+    if (skinWeight.w > 0.0) s += skinWeight.w * getBoneMatrix(skinIndex.w);
     return bindMatrixInverse * s * bindMatrix;
   #else
     return mat4(1.0);
@@ -227,11 +228,15 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   float coatVar = snoise(p * uCoatVarFreq);
 
   // ---- clumps ------------------------------------------------------------
+  // cell8, not worley3: the occlusion term was rewritten to use F1 only, so
+  // the 27-cell search bought nothing and cost ~200 ALU per fragment per
+  // shell — by far the most expensive thing in the coat. The lost jitter
+  // range is bought back by warping the lookup with coatVar.
   float fc = uClumpFreq * clumpScale * (1.0 + 0.14 * coatVar);
-  vec3  cid;
-  vec2  cd = worley3(p * fc, cid);
-  vec3  csite = (cid + hash33(cid)) / fc;
-  float cRand = hash13(cid * 1.913);
+  vec3  csiteC;
+  vec2  cd = vec2(cell8(p * fc + coatVar * 0.35, csiteC), 0.0);
+  vec3  csite = csiteC / fc;
+  float cRand = hash13(csiteC * 1.913);
 
   // Hairs converge on their clump tip as they rise. This is what turns an even
   // carpet into tufts, and evenness is an instant tell.
@@ -339,7 +344,7 @@ float kkLobe(vec3 T, vec3 N, vec3 H, float shift, float power){
  *   rnd  per-strand random — breaks the specular into individual hairs
  */
 vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
-              float tipWhite, vec3 tintMul)
+              float tipWhite, vec3 tintMul, bool cheap)
 {
   vec3  L = uSunDir;
   vec3  H = normalize(L + V);
@@ -373,7 +378,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   vec3 col = albedo * (direct + ambient);
 
   // ---- anisotropic specular, two shifted lobes ---------------------------
-  if (uAniso > 0.5){
+  if (uAniso > 0.5 && !cheap){
     float j  = (rnd - 0.5) * uSpecJitter;
     float s1 = kkLobe(T, N, H, uSpecShiftA + j, uSpecPowA);
     float s2 = kkLobe(T, N, H, uSpecShiftB + j * 1.7, uSpecPowB);
@@ -387,7 +392,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // Light that entered the far side of the coat and kept going. Peaks when the
   // camera looks into the sun, strongest in the thin outer coat and at grazing
   // angles — i.e. exactly along the rim.
-  float fwd   = pow(clamp(-dot(V, L), 0.0, 1.0), uTransPow);
+  float fwd   = cheap ? 0.0 : pow(clamp(-dot(V, L), 0.0, 1.0), uTransPow);
   float thin  = mix(0.10, 1.0, t * t);
   float graze = pow(1.0 - ndv, 1.3);
   float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
@@ -513,8 +518,14 @@ ${isShell ? /* glsl */ `
 
   float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, 6.0);
 
-  vec3 site;
-  vec4 hair = furHair(vRoot, t, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, site);
+  // Shells this deep are solid felt and almost entirely hidden behind the coat
+  // above them. Neither the strand/micro/clump field nor the specular and
+  // transmission lobes can change what you see, so skip all of it.
+  bool deep = t < shellFill * 0.40;
+
+  vec3 site = vRoot;
+  vec4 hair = vec4(1.0, 0.45, hash13(vRoot * 131.7), 1.0);
+  if (!deep) hair = furHair(vRoot, t, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, site);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -524,7 +535,7 @@ ${isShell ? /* glsl */ `
 
   // Per-strand cylinder normal. Without this every hair in a tuft shades
   // identically and the macro shot turns to mush.
-  float sLod = 1.0 - smoothstep(0.16, 0.5, px * uStrandFreq * vP1.y);
+  float sLod = (1.0 - smoothstep(0.16, 0.5, px * uStrandFreq * vP1.y)) * (deep ? 0.0 : 1.0);
   if (uStrandRound > 0.001 && sLod > 0.01){
     vec3 B = cross(T, V);
     float bl = length(B);
@@ -554,7 +565,7 @@ ${isShell ? /* glsl */ `
   #endif
 `}
 
-  vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint);
+  vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint, ${isShell ? 'deep' : 'false'});
 
 ${isShell ? /* glsl */ `
   // Stochastic cut-out. The threshold is hashed in OBJECT space, so it is
@@ -749,7 +760,7 @@ void main(){
 
   float ao = (1.0 - vP0.z * uAOBake) *
              mix(uAOInner + 0.3, 1.05, pow(clamp(v, 0.0, 1.0), uAOPow * 0.6));
-  vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0));
+  vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0), false);
 
   gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
   #include <tonemapping_fragment>

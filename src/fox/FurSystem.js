@@ -192,6 +192,17 @@ export class FurSystem {
         n = lerp(n, l.minShells, k2);
       }
     }
+    // Distance is only half the story: what actually costs is OVERDRAW, and
+    // that scales with how much of the screen the animal covers. At the
+    // portrait framing the fox fills the frame and every shell is a near
+    // full-screen blended pass, which is where the budget goes. Trade shells
+    // against coverage — at that range the coat on the head is only 5-10 mm,
+    // so 9 shells are still well under a millimetre apart and read the same as 18.
+    const fov = (ctx.camera.fov ?? 40) * Math.PI / 180;
+    const subjectSpan = 0.38;   // fox height including coat, metres
+    const coverage = subjectSpan / Math.max(2 * d * Math.tan(fov * 0.5), 1e-4);
+    n *= lerp(1, 0.50, smoothstep(0.50, 1.25, coverage));
+
     n = clamp(Math.round(n), l.minShells, this.shellCount);
     if (n !== this.shellGeometry.instanceCount) {
       this.shellGeometry.instanceCount = n;

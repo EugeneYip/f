@@ -34,6 +34,13 @@ export class Environment {
     this.sun.target = this.sunTarget;
 
     // --- sky fill (cool, from above) --------------------------------------
+    // The sky system generates a real PMREM environment map, which already
+    // carries sky ambient with correct directionality. A full-strength
+    // hemisphere light on top of that double-counts it -- the sky agent had to
+    // set scene.environmentIntensity = 0.6 to compensate. So keep only a token
+    // hemisphere as a floor for the moments before the IBL exists (and for the
+    // low tier, where the env map is tiny), and let the IBL carry ambient at
+    // full strength. _balanceAmbient() below owns this trade.
     this.hemi = new THREE.HemisphereLight(ctx.skyColor.clone(), ctx.groundBounce.clone(), 1.25);
     scene.add(this.hemi);
 
@@ -46,6 +53,7 @@ export class Environment {
     scene.add(this.bounce);
 
     // --- a cool kicker opposite the sun, standing in for sky occlusion ----
+    // Largely superseded by the IBL once that exists; see _balanceAmbient().
     this.rim = new THREE.DirectionalLight(new THREE.Color(0xa8c8f0), 0.55);
     this.rim.castShadow = false;
     scene.add(this.rim);
@@ -86,7 +94,35 @@ export class Environment {
     this.bounce.target = this.sunTarget;
   }
 
+  /**
+   * Hand ambient over to the image-based lighting once it exists.
+   *
+   * The snow bounce stays at full strength regardless: the sky system renders
+   * a SKY-ONLY scene into the PMREM, so the environment map contains no
+   * upward light off the snowfield at all -- and on a real snowfield that
+   * bounce is most of what fills the belly, jaw and tail underside.
+   */
+  _balanceAmbient(ctx) {
+    const hasIBL = !!ctx.scene.environment;
+    if (hasIBL === this._iblApplied) return;
+    this._iblApplied = hasIBL;
+
+    if (hasIBL) {
+      // 0.85 rather than 1.0: the sky-only PMREM is bright at twilight and a
+      // full-strength handover flattened the animal. Final contrast belongs to
+      // the postfx grade, not to four competing light intensities -- this just
+      // removes the double-count so there is one knob to turn.
+      ctx.scene.environmentIntensity = 0.85;
+      this.hemi.intensity = 0.18;   // floor only; the IBL does the real work
+      this.rim.intensity = 0.22;    // IBL already wraps light round the far side
+    } else {
+      this.hemi.intensity = 1.25;
+      this.rim.intensity = 0.55;
+    }
+  }
+
   update(dt, ctx) {
+    this._balanceAmbient(ctx);
     // Keep the sun's colour/intensity authoritative on ctx so a UI slider or
     // the debug API can drive the whole scene from one place.
     this.sun.color.copy(ctx.sunColor);

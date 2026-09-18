@@ -127,7 +127,12 @@ export class Aurora {
     const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.minFilter = THREE.LinearFilter;
+    // Mipmapped: the march samples this at up to ~1000 km, where adjacent
+    // pixels step several texels and the filaments moire badly. Automatic LOD
+    // is useless inside a raymarch (the UV jumps between steps), so the
+    // shader picks the level explicitly from the sample distance.
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.magFilter = THREE.LinearFilter;
     tex.colorSpace = THREE.NoColorSpace;
     tex.needsUpdate = true;
@@ -155,11 +160,14 @@ export class Aurora {
     const f = u.uFoldW.value;
     u.uInvFoldW2.value.set(1 / (f.x * f.x), 1 / (f.y * f.y));
     u.uScale.value = this.BASE_SCALE / k;
-    // At 6 steps a full-amplitude per-pixel jitter has nothing to average
-    // against and shows as stipple. Fewer steps, less jitter -- the
-    // thicker sheets that come with the same LOD hide the banding it
-    // would otherwise trade for.
-    u.uJitter.value = clamp(steps / 14, 0.25, 1);
+    // At 6 steps a per-pixel jitter has nothing to average against and the
+    // interleaved-gradient pattern shows through as a fixed screen hatch --
+    // far worse than the banding it was there to hide, which the thickened
+    // sheets of the same LOD already smooth out. Off below ~10 steps.
+    // Capped at 0.5 even at high: a full-step jitter leaves a visible
+    // interleaved-gradient hatch across the curtains, and with sheets
+    // this soft there is very little banding for it to hide.
+    u.uJitter.value = clamp((steps - 6) / 8, 0, 1) * 0.5;
   }
 
   _buildCurtains(ctx, sky) {
@@ -180,7 +188,7 @@ export class Aurora {
       uDrift: { value: 0 },
       uIntensity: { value: 0 },
       uArcRot: { value: new THREE.Vector2(Math.cos(th), Math.sin(th)) },
-      uSFreq: { value: 0.0017 },
+      uSFreq: { value: 0.0013 },
       uShear: { value: 0.016 },
       // Across-arc distances in km. These set the ELEVATION each curtain
       // appears at: atan(90 / |z|). -110/-200/-340 puts them at roughly
@@ -190,6 +198,7 @@ export class Aurora {
       uInvThick2: { value: new THREE.Vector3() },
       uInvFoldW2: { value: new THREE.Vector2() },
       uJitter: { value: 1 },
+      uPxAngle: { value: 0.0013 },
       uBandAmp: { value: new THREE.Vector3(1.0, 0.58, 0.32) },
       uFoldPos: { value: new THREE.Vector2(0, 0) },
       uFoldW: { value: new THREE.Vector2(150, 230) },
@@ -217,7 +226,7 @@ export class Aurora {
         precision highp float;
         uniform sampler2D uCurtain;
         uniform vec3 uSunDir;
-        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uJitter;
+        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uJitter, uPxAngle;
         uniform vec2 uArcRot, uFoldPos, uFoldW, uInvFoldW2;
         uniform vec3 uBandZ, uBandThick, uBandAmp, uInvThick2;
         uniform vec3 uColLow, uColMid, uColHigh, uColTop;
@@ -307,7 +316,13 @@ export class Aurora {
             float s = q.x;
 
             if (i % 2 == 0) {
-              F = texture2D(uCurtain, vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07));
+              // Explicit LOD from how many texels one pixel spans at this
+              // distance. Without it the filaments alias into a cross-hatch
+              // moire, which is exactly what fine striations turn into when
+              // you sample them past Nyquist.
+              float texPerPx = uSFreq * (t0 + dt * float(i)) * uPxAngle * 1024.0;
+              float lod = max(0.0, log2(max(texPerPx, 1.0)));
+              F = textureLod(uCurtain, vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07), lod);
               sA = sin(s * 0.0042 + uDrift * 9.0);
               sB = sin(s * 0.0131 - uDrift * 5.0);
               sC = sin(s * 0.0027 - uDrift * 6.0 + 1.9);
@@ -509,6 +524,10 @@ export class Aurora {
       ((t * 16.0 + 900) % 3400) - 1700,
       ((-t * 9.5 + 2200) % 3400) - 1700,
     );
+
+    // Angular size of one pixel, for the curtain texture's LOD selection.
+    const bh = ctx.bufferSize?.height || ctx.size.y || 800;
+    u.uPxAngle.value = 2 * Math.tan(ctx.camera.fov * Math.PI / 360) / bh;
 
     this.starUniforms.uTime.value = t;
     this.starUniforms.uPix.value = ctx.renderer.getPixelRatio();
