@@ -9,7 +9,11 @@ export const TIERS = {
     label: 'Low',
     dpr: 1.0, maxDpr: 1.0,
     shadowMapSize: 1024, shadowCascades: 1, softShadow: false,
-    furShells: 6, furFins: false, furAniso: false,
+    // A small card budget rather than none: with furFins false the low tier
+    // had a completely smooth silhouette, and REVIEW category A makes a hard
+    // mesh edge against the sky an automatic <=4. 'low' must look good, not
+    // merely cheap. 2500 cards is roughly a third of medium's budget.
+    furShells: 6, furFins: true, furCards: 2500, furAniso: false,
     terrainSegments: 160, terrainRadius: 90,
     snowParticles: 1500, snowLayers: 1,
     // TAA on at low, SMAA off. SMAA cannot resolve the fur's stochastic
@@ -24,7 +28,7 @@ export const TIERS = {
     label: 'Medium',
     dpr: 1.0, maxDpr: 1.5,
     shadowMapSize: 2048, shadowCascades: 2, softShadow: true,
-    furShells: 11, furFins: true, furAniso: true,
+    furShells: 11, furFins: true, furCards: 7000, furAniso: true,
     terrainSegments: 256, terrainRadius: 130,
     snowParticles: 5000, snowLayers: 2,
     ao: true, bloom: true, dof: true, godRays: false, taa: true, smaa: false,
@@ -36,7 +40,7 @@ export const TIERS = {
     label: 'High',
     dpr: 1.0, maxDpr: 2.0,
     shadowMapSize: 3072, shadowCascades: 3, softShadow: true,
-    furShells: 18, furFins: true, furAniso: true,
+    furShells: 18, furFins: true, furCards: 13000, furAniso: true,
     terrainSegments: 384, terrainRadius: 190,
     snowParticles: 12000, snowLayers: 3,
     ao: true, bloom: true, dof: true, godRays: true, taa: true, smaa: false,
@@ -48,7 +52,7 @@ export const TIERS = {
     label: 'Ultra',
     dpr: 1.0, maxDpr: 2.0,
     shadowMapSize: 4096, shadowCascades: 3, softShadow: true,
-    furShells: 26, furFins: true, furAniso: true,
+    furShells: 26, furFins: true, furCards: 19000, furAniso: true,
     terrainSegments: 512, terrainRadius: 240,
     snowParticles: 20000, snowLayers: 3,
     ao: true, bloom: true, dof: true, godRays: true, taa: true, smaa: false,
