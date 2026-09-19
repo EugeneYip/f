@@ -95,10 +95,10 @@ export const LANDMARKS = {
   head: [0, 0.3155, 0.1875],
   jaw: [0, 0.3005, 0.2085],
 
-  earR01: [0.0330, 0.3235, 0.1930],
-  earR02: [0.0377, 0.3363, 0.1924],
-  earR03: [0.0424, 0.3491, 0.1918],
-  earR_tip: [0.0470, 0.3620, 0.1912],
+  earR01: [0.0300, 0.3330, 0.1934],
+  earR02: [0.0330, 0.3393, 0.1930],
+  earR03: [0.0360, 0.3457, 0.1926],
+  earR_tip: [0.0388, 0.3498, 0.1922],
 
   // tail: carried low with a gentle continuous curve, tip clear of the snow
   tail01: [0, 0.2270, -0.2060],
@@ -182,8 +182,8 @@ export const FUR = {
   [R.muzzle]: [0.0030, 0.90],
   [R.jawLower]: [0.0048, 0.72],
   [R.cheek]: [0.0320, 0.28],
-  [R.forehead]: [0.0044, 0.82],
-  [R.skull]: [0.0092, 0.74],
+  [R.forehead]: [0.0038, 0.82],
+  [R.skull]: [0.0075, 0.74],
   [R.earOuter]: [0.0090, 0.70],
   [R.earInner]: [0.0082, 0.44],
   [R.throat]: [0.0300, 0.28],
@@ -379,12 +379,15 @@ export function buildField() {
   });
 
   // ------------------------------------------------------------------ ears ---
-  // Small, rounded, heavily furred, set on the sides of the dome.
-  const earA = [L.earR01[0] - 0.003, L.earR01[1] + 0.002, L.earR01[2] - 0.001];
+  // §4b: small, WIDE APART and LOW on the skull, thickly furred, and rounded
+  // almost to a semicircle — so the pinna is a short wide paddle (60 mm across
+  // by ~27 mm proud of the dome), not the tall tapering blade it was. Most of
+  // its length is buried inside the cranium, which is what anchors it.
+  const earA = L.earR01;
   const earB = L.earR_tip;
   f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0250), rb: sr(0.0228),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.52, 1.0, 1.0],
+    name: 'earR', a: earA, b: earB, ra: sr(0.0218), rb: sr(0.0206),
+    frame: 'axis', normal: EAR_NORMAL, squash: [0.55, 1.02, 1.0],
     k: 0.013, ...furOf(R.earOuter),
     flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
   });

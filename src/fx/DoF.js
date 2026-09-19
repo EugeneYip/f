@@ -95,7 +95,8 @@ void main() {
   // come from this pixel's own CoC — it comes from the dilated near CoC,
   // i.e. the largest foreground circle that can actually reach here.
   float R = texture2D(tNearMax, vUv).r;
-  if (R < 0.75) { gl_FragColor = vec4(centre.rgb, 0.0); return; }
+  // Match the sub-pixel gate below: nothing here can scatter, so skip the loop.
+  if (R < 1.0) { gl_FragColor = vec4(centre.rgb, 0.0); return; }
 #else
   // The far layer only gathers within its own circle, which is what stops a
   // blurred background bleeding onto a sharp subject in front of it.
@@ -123,7 +124,18 @@ void main() {
     float reach = s.a;
 #endif
     float dist = length(o);
+    // Coverage of this pixel by the tap's circle of confusion, with a one
+    // pixel soft edge...
     float w = fxSat(reach - dist + 1.0);
+    // ...but that pad alone makes a tap whose circle is a FIFTH of a pixel
+    // score full coverage at zero distance. At the profile pose the subject
+    // sits at CoC -0.19 px: in focus, but fractionally near, so every
+    // pixel of the animal qualified as its own near-field scatterer and got
+    // averaged across the body. A circle smaller than a pixel is not blurred
+    // at all, so it scatters nothing. The far layer never showed this because
+    // its composite ramp already gates sub-pixel CoC; the near layer had no
+    // equivalent gate.
+    w *= smoothstep(0.5, 1.5, reach);
     cover += w;                       // un-boosted: this is the coverage term
     // Real lenses are not flat discs: spherical aberration piles a little
     // extra energy at the rim. A touch of it is what makes a highlight read

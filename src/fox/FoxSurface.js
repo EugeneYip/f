@@ -109,7 +109,7 @@ export async function buildFoxSurface(skeleton, {
   // 45 mm neck bleed onto the muzzle and forehead, which must stay at 2-6 mm
   // per the bible. 12 mm keeps the gradients smooth without crossing a whole
   // anatomical zone.
-  const sigma = 0.012;
+  const sigma = 0.0105;
 
   for (let v = 0; v < nv; v++) {
     const o = v * 3;
@@ -195,7 +195,12 @@ export async function buildFoxSurface(skeleton, {
 
   // --------------------------------------------------- smooth the fur fields --
   t = now();
+  // Smooth fur length in log space for the same reason it is blended there:
+  // an arithmetic Laplacian lets the 58 mm tail and 48 mm flank leak into the
+  // 3 mm muzzle far faster than the reverse.
+  for (let v = 0; v < nv; v++) furLength[v] = Math.log(Math.max(furLength[v], 1e-5));
   smoothField(furLength, 1, adj, fieldSmooth, 0.55);
+  for (let v = 0; v < nv; v++) furLength[v] = Math.exp(furLength[v]);
   smoothField(furStiffness, 1, adj, fieldSmooth, 0.55);
   smoothField(furFlow, 3, adj, flowSmooth, 0.50, true);
 

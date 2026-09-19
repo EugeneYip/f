@@ -27,7 +27,7 @@ import { buildFurCards } from './FurCards.js';
 const MAX_SHELLS = 26;
 
 /** Cards per tier. `furFins` gates them off entirely at low. */
-const CARD_COUNT = { low: 0, medium: 5000, high: 9600, ultra: 15000 };
+const CARD_COUNT = { low: 0, medium: 7000, high: 13000, ultra: 19000 };
 
 export class FurSystem {
   name = 'fur';
@@ -219,8 +219,15 @@ export class FurSystem {
 
     // Cards are the silhouette, so they survive much further out than shells
     // do — but their screen size collapses, so thin the count instead.
+    //
+    // They also get thinned when the animal fills the frame, for the same
+    // reason the shells do: a card that covers more pixels costs more, and the
+    // fringe density that actually reads is per unit of OUTLINE, which does not
+    // grow as you walk closer. Without this the cards, not the shells, become
+    // the dominant cost at portrait range.
     if (this.cardMesh) {
-      const keep = d < l.far ? 1 : lerp(1, 0.42, smoothstep(l.far, l.cull * 1.6, d));
+      const near = lerp(1, 0.55, smoothstep(0.55, 1.25, coverage));
+      const keep = (d < l.far ? 1 : lerp(1, 0.42, smoothstep(l.far, l.cull * 1.6, d))) * near;
       const count = Math.max(6, Math.floor((this._cardIndexCount * keep) / 6) * 6);
       this.cardMesh.geometry.setDrawRange(0, Math.min(count, this._cardIndexCount));
     }

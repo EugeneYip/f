@@ -566,9 +566,16 @@ export class Locomotion {
     this.pos.y = this.groundY;
 
     // --- vertical bounce and lateral weight transfer ----------------------
-    const beats = g.bobBeats || 2;
-    const bobT = -g.bob * Math.cos(TAU * beats * this.phase) * moving;
-    this.bob = damp(this.bob, bobT, 22, h);
+    // Driven by how much of the animal is actually being held up, not by a
+    // blind harmonic. A hand-phased sine put the withers at their HIGHEST
+    // while a forefoot was planted, which on a 168 mm front limb pushed the
+    // target out of reach and made the reach backstop yank the whole body
+    // down 33 mm every stride. Support-driven, it is in phase by
+    // construction, for every gait, including mid-blend between two.
+    const support = 1 - this.airborne;
+    const meanSupport = clamp(this.duty, 0.15, 1);
+    const bobT = -g.bob * ((support - meanSupport) / meanSupport) * moving;
+    this.bob = damp(this.bob, bobT, 14, h);
 
     // Sway toward the supported side: positive bodyX-weighted load.
     let swayT = 0;
@@ -594,9 +601,15 @@ export class Locomotion {
       + clamp(this.yawRate, -2, 2) * 0.10;
     this.spineBend = damp(this.spineBend, bendT, 12, h);
 
-    // Sagittal flexion — the gallop's real power source.
-    const flexT = (g.spineFlex * Math.PI / 180) * Math.sin(TAU * this.phase + 1.15) * fast;
-    this.spineFlex = damp(this.spineFlex, flexT, 20, h);
+    // Sagittal flexion — the gallop's real power source. Same reasoning as
+    // the bob: the back rounds while the forefeet carry and the hindlimbs
+    // gather underneath, and extends as the hindlimbs drive back. Reading it
+    // off the load split gets the phase right without a magic constant, and
+    // it lowers the withers exactly when the forelimb needs the reach.
+    const foreShare = FL.load + FR.load;
+    const hindShare = RL.load + RR.load;
+    const flexT = (g.spineFlex * Math.PI / 180) * (foreShare - hindShare) * fast;
+    this.spineFlex = damp(this.spineFlex, flexT, 16, h);
 
     // Whole-body attitude: terrain + a nose-down lean with speed.
     const pitchT = -terrainPitch * 0.8 + (g.pitch * Math.PI / 180) * moving

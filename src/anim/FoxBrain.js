@@ -47,17 +47,23 @@ const FOOT_CONFORM = 0.72;
 /** Toes splay outward by this much (radians). */
 const FOOT_SPLAY = 0.045;
 /**
- * Clearance at which a foot stops being the body-drop backstop's problem and
- * becomes the airborne clamp's. One threshold, not a fade: a fade left a band
- * where the backstop had bowed out but the clamp was only partly applied, and
- * a galloping fox picked up 5.7 mm of genuine reach error in it. No pop
- * results, because the clamp's correction factor is `limit/D`, which passes
- * through 1 exactly as D crosses the limit.
+ * Clearance window over which the airborne reach clamp fades in.
  *
- * Sits above the audit's 22 mm stance band with margin: the clamp moves a foot
- * horizontally, so it must never touch a frame that could count as contact.
+ * The clamp moves a foot HORIZONTALLY, so its influence must be exactly zero
+ * on any frame the audit could classify as contact (clearance < 22 mm), and
+ * it must reach zero *continuously*. A single hard threshold at 32 mm looked
+ * safe and was not: at a gallop the descent crosses 32 mm to 22 mm inside one
+ * 120 Hz step, so the clamp's release became a one-frame horizontal jump that
+ * the audit read as 0.5 m/s of sliding.
+ *
+ * The backstop below covers this entire window rather than bowing out at its
+ * start. That overlap is the point: an earlier version handed over at the
+ * bottom of the fade, leaving a band where the backstop had stopped and the
+ * clamp was only partly applied, and a galloping fox picked up 5.7 mm of
+ * genuine reach error in it.
  */
-const CLAMP_ON = 0.032;
+const CLAMP_FADE_LO = 0.030;
+const CLAMP_FADE_HI = 0.055;
 /** Lower bound on airborne limb extension — stops the elbow folding shut. */
 const MIN_EXT = 0.42;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
@@ -113,27 +119,27 @@ const SLEEP_POSE = {
 const STATES = {
   idle: {
     gait: 'idle', alert: 0.32, exert: 0.00, settled: 1,
-    tailLift: 0.34, tailCurl: 0.00, tailStiff: 1.00,
+    tailLift: 0.46, tailCurl: -0.42, tailStiff: 1.00,
     ears: { x: -0.02, y: 0.085, z: 0.030 },
     drop: 0, look: 0.85, frontIK: 1, hindIK: 1,
   },
   alert: {
     gait: 'idle', alert: 1.00, exert: 0.10, settled: 0.85,
-    tailLift: 0.80, tailCurl: -0.12, tailStiff: 1.40,
+    tailLift: 0.92, tailCurl: -0.30, tailStiff: 1.40,
     ears: { x: -0.105, y: 0.155, z: -0.065 },
     drop: -0.005, look: 1.0, frontIK: 1, hindIK: 1,
     pose: { neck01: [-7, 0, 0], neck02: [-8.5, 0, 0], head: [-2, 0, 0], spine04: [-2, 0, 0], spine03: [-1, 0, 0] },
   },
   walk: {
     gait: 'walk', alert: 0.50, exert: 0.17, settled: 0,
-    tailLift: 0.50, tailCurl: 0.09, tailStiff: 1.05,
+    tailLift: 0.60, tailCurl: -0.30, tailStiff: 1.05,
     ears: { x: -0.045, y: 0.100, z: 0.010 },
     drop: 0, look: 0.62, frontIK: 1, hindIK: 1,
     pose: { neck01: [-2, 0, 0], neck02: [-2, 0, 0] },
   },
   trot: {
     gait: 'trot', alert: 0.62, exert: 0.46, settled: 0,
-    tailLift: 0.72, tailCurl: -0.06, tailStiff: 1.25,
+    tailLift: 0.82, tailCurl: -0.24, tailStiff: 1.25,
     ears: { x: -0.075, y: 0.120, z: -0.030 },
     drop: 0, look: 0.45, frontIK: 1, hindIK: 1,
     pose: { neck01: [-3, 0, 0], neck02: [-3, 0, 0], head: [1, 0, 0] },
@@ -674,7 +680,7 @@ export class FoxBrain {
       // galloping fox drop its whole body 42 mm to chase a paw that was
       // 80 mm in the air — which then folded the elbow flat. The two
       // mechanisms are complementary and must not overlap.
-      if (!f.stance && f.clear >= CLAMP_ON) continue;
+      if (!f.stance && f.clear >= CLAMP_FADE_HI) continue;
       drop = Math.max(drop, f.limb.requiredDrop(f._A, f.limb.Ltot * REACH_MAX));
     }
     drop = Math.min(drop, MAX_REACH_DROP);
@@ -691,7 +697,7 @@ export class FoxBrain {
     //     indistinguishable from sliding. Pull an unreachable *swing* target
     //     toward its shoulder so the limb folds instead of locking straight.
     for (const f of feet) {
-      if (f.stance || f.clear < CLAMP_ON) continue;
+      if (f.stance || f.clear <= CLAMP_FADE_LO) continue;
       const L = f.limb;
       L.hip(_v);
       const dx = f._A.x - _v.x, dy = f._A.y - _v.y, dz = f._A.z - _v.z;
@@ -704,7 +710,7 @@ export class FoxBrain {
       // rig before this clamp existed.
       const want = D > maxR ? maxR : D < minR ? minR : 0;
       if (!want) continue;
-      const k = want / D;
+      const k = lerp(1, want / D, smoothstep(CLAMP_FADE_LO, CLAMP_FADE_HI, f.clear));
       // Never push a paw DOWN. The min case scales the hip→ankle vector up,
       // and that vector points mostly at the ground, so an unguarded clamp
       // would drive a swinging paw through the snow to open the stifle. The

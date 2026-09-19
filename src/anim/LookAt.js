@@ -128,12 +128,18 @@ export class Interest {
       const mean = 3.4 - 1.9 * alertness;
       this.nextAt = t + clamp(-Math.log(Math.max(1e-4, r1)) * mean, 0.55, 11);
 
-      const wide = 1.35 - 0.65 * alertness;
-      const a = yaw + (r2 * 2 - 1) * wide;
+      // Shaped, not uniform. A flat spread over ±65° meant roughly a third of
+      // all glances put the skull side-on, and the review's `portrait` and
+      // `macro_eye` framings then photographed the back of the head. Cubing
+      // keeps the animal looking broadly where it is facing and makes a wide
+      // check of the flank the exception it should be.
+      const off = r2 * 2 - 1;
+      const wide = 1.05 - 0.30 * alertness;
+      const a = yaw + off * off * off * wide;
       const dist = 1.2 + r3 * 16;
-      // Centred a little above eye level: a fox that spends half its time
-      // staring at the snow in front of its feet reads as depressed, not alert.
-      let y = origin.y + 0.26 + (r4 - 0.5) * 0.62;
+      // Centred at eye level: a fox that spends half its time staring at the
+      // snow in front of its feet reads as depressed, not alert.
+      let y = origin.y + 0.30 + (r4 - 0.5) * 0.45;
 
       if (camera && r4 > 0.74) {
         // Every so often it clocks the viewer — the single most alive thing

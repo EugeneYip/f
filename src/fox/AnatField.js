@@ -485,7 +485,12 @@ export class Field {
       const w = Math.exp(-t * t * 0.5);      // gaussian in distance excess
       const p = prims[i];
       wsum += w;
-      len += w * p.furLength;
+      // Fur length spans more than an order of magnitude (0.6 mm on the
+      // rhinarium to 58 mm on the tail), so blend it GEOMETRICALLY. An
+      // arithmetic mean of 3 mm muzzle and 45 mm ruff is 24 mm, which buried
+      // the short face fur that ART_DIRECTION §4b says sells the face; the
+      // geometric mean is 11 mm and keeps falling as the ruff's weight drops.
+      len += w * Math.log(p.furLength > 1e-5 ? p.furLength : 1e-5);
       stiff += w * p.furStiffness;
 
       // radial direction away from this primitive's own axis
@@ -517,7 +522,7 @@ export class Field {
 
     out.region = prims[argmin].region;
     out.nearest = argmin;
-    out.furLength = len / wsum;
+    out.furLength = Math.exp(len / wsum);
     out.furStiffness = stiff / wsum;
     const fl = Math.hypot(fx, fy, fz);
     if (fl > 1e-9) { out.flow[0] = fx / fl; out.flow[1] = fy / fl; out.flow[2] = fz / fl; }
