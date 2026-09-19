@@ -39,6 +39,7 @@ uniform vec3  uSkyColor;
 uniform vec3  uGroundBounce;
 uniform float uAmbient;
 uniform float uAmbientSat;
+uniform float uSunSat;
 
 // --- dynamics --------------------------------------------------------------
 uniform float uTime;
@@ -372,9 +373,21 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // needed: a hue shift on the albedo and a sky-coloured ambient.
   albedo *= mix(uShadowTint, vec3(1.0), lit);
 
-  // 1/PI so the fox sits at the same exposure as everything three lights with
-  // the standard BRDF (the snow, chiefly) — without it the animal blows out.
-  vec3 direct = uSunColor * uSunIntensity * wrapD * mix(ao, 1.0, 0.62) * RECIPROCAL_PI;
+  // Multiple scattering.
+  //
+  // Fur is a dense, high-albedo medium: a photon entering the coat bounces off
+  // many hairs before it leaves, so what exits is an average over everything
+  // that lit the coat, not a single-bounce copy of the sun's own colour. A
+  // Lambert surface takes the sun's chromaticity at full strength; fur does
+  // not, and treating it as if it did is what made a white animal render
+  // salmon. The snow does not show this because at a 6.6 degree sun a flat
+  // surface gets NdotL ~= 0.11 and is ambient dominated, whereas the fox's
+  // flank faces that low sun almost square on and gets NdotL ~= 1.
+  //
+  // 1/PI keeps the fox at the same exposure as everything three lights with
+  // the standard BRDF.
+  vec3 sunScatter = mix(vec3(luma(uSunColor)), uSunColor, uSunSat);
+  vec3 direct = sunScatter * uSunIntensity * wrapD * mix(ao, 1.0, 0.62) * RECIPROCAL_PI;
 
   // ---- ambient: cool sky above, snow bounce below -------------------------
   float up = N.y * 0.5 + 0.5;
@@ -401,10 +414,10 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // angles — i.e. exactly along the rim.
   float fwd   = cheap ? 0.0 : pow(clamp(-dot(V, L), 0.0, 1.0), uTransPow);
   float thin  = mix(0.10, 1.0, t * t);
-  float graze = pow(1.0 - ndv, 1.3);
+  float graze = pow(1.0 - ndv, 2.3);
   float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
   col += uSunColor * uSunIntensity * uTransTint * albedo *
-         (uTrans * RECIPROCAL_PI * fwd * thin * (0.06 + 1.85 * graze) * (0.30 + 0.95 * shell));
+         (uTrans * RECIPROCAL_PI * fwd * thin * (2.45 * graze) * (0.30 + 0.95 * shell));
 
   // A cool sky rim keeps the shadow side alive on the silhouette.
   col += uSkyColor * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);

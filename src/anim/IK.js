@@ -202,6 +202,7 @@ export class Limb {
     this._K2 = new THREE.Vector3();
     this._H = new THREE.Vector3();
     this._pole = new THREE.Vector3();
+    this._pole2 = new THREE.Vector3();
     this._seg = new THREE.Vector3();
     this._qw0 = new THREE.Quaternion();
     this._qw1 = new THREE.Quaternion();
@@ -271,8 +272,9 @@ export class Limb {
     this._pole.copy(this.restPole).applyQuaternion(bodyQ);
 
     twoBone(H, A, this.L1, eff, this._pole, this._K1);
-    _s1.copy(this._pole).multiplyScalar(-1);      // opposite bulge for the hock
-    twoBone(this._K1, A, this.L2, this.L3, _s1, this._K2);
+    // Opposite bulge for the hock/carpus — this is the canid Z-leg.
+    this._pole2.copy(this._pole).multiplyScalar(-1);
+    twoBone(this._K1, A, this.L2, this.L3, this._pole2, this._K2);
 
     this.reachError = Math.max(0, D - this.Ltot);
 

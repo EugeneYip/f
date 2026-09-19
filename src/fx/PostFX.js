@@ -52,24 +52,30 @@ function defaults() {
     // goes flat and chalky. Pulling ~1.3 stops down puts snow near the top of
     // the curve with room to gradate, and drops the fox's shade side into the
     // part of the curve that still has contrast.
-    exposure: 0.42,
+    exposure: 0.95,
     sharpen: 0.35,
     autofocus: false,
 
-    whiteBalance: [0.945, 0.99, 1.08],
+    // Near-neutral on purpose. The animal's salmon cast was A/B'd against
+    // ctx.postfx.enabled = false and is identical, so it is the fur material,
+    // not the grade — correcting it here would fight the fur agent's fix and
+    // would drag the snow, which is already correctly white-blue, off-hue.
+    whiteBalance: [0.995, 1.0, 1.01],
     grade: {
       shoulder: 1.0,
       // lookPower > 1 is the contrast lever that does NOT shorten the
       // highlight rolloff: it bends the midtones down while pinning 1.0, so
       // the fox's shade side separates from its lit side without touching the
       // shoulder that is keeping snow off the clip.
-      lookSlope: 1.0, lookOffset: 0.0, lookPower: 1.16, lookSat: 1.0,
+      lookSlope: 1.0, lookOffset: 0.0, lookPower: 1.30, lookSat: 1.0,
       // Bible SS3: "slight lift on the blue channel in shadow". Tiny numbers —
       // these are additive in display-linear, so 0.02 is already visible.
-      blackLift: [0.006, 0.010, 0.022],
+      blackLift: [0.003, 0.005, 0.013],
       shadowTint: [0.0, 0.004, 0.024], shadowAmount: 1.0,
       highlightTint: [0.009, 0.003, -0.006], highlightAmount: 1.0,
-      contrast: 1.05, saturation: 1.0, highlightDesat: 0.3,
+      // Contrast lives in agxLook.lookPower, which bends midtones while
+      // pinning white. This display-space pivot stays at 1.0.
+      contrast: 1.0, saturation: 1.0, highlightDesat: 0.22,
       grain: 0.016, grainSize: 1.9, grainFps: 24,
       chroma: 0.0018, vignette: 0.11, dither: 1 / 255,
     },
@@ -93,7 +99,11 @@ function defaults() {
       // 33-85 mm equivalent wide open obliterates the snowfield the terrain
       // and sky agents built. f/4 still throws the background well clear.
       fStop: 4.0, sensorHeight: 0.024, scale: 1.0, maxCoC: 26,
-      nearGain: 1.1, edgeBoost: 0.16, blendLo: 1.0, blendHi: 3.0,
+      // Background blur ceiling as a fraction of image height, so the look is
+      // identical at every resolution and adaptive-resolution step.
+      maxBackgroundCoC: 0.016,
+      nearGain: 1.0, edgeBoost: 0.14, blendLo: 1.0, blendHi: 3.0,
+      highlightClamp: 7.0,
     },
     fog: {
       density: 0.018, falloff: 0.18, height: 0.0, strength: 1.0,
@@ -132,6 +142,8 @@ export class PostFX {
     this._invViewProjJ = new THREE.Matrix4();
     this._invProjJ = new THREE.Matrix4();
     this._prevViewProj = new THREE.Matrix4();
+    // Set only by _profile(), to cost each stage by difference.
+    this._skip = { ao: false, bloom: false, dof: false, rays: false, taa: false, post: false };
   }
 
   // ------------------------------------------------------------------ init
@@ -468,8 +480,21 @@ export class PostFX {
     this.depthIdx ^= 1;
     const exposure = Math.max(0, (ctx.exposure ?? 1) * cfg.exposure);
 
+    const skip = this._skip;
+    if (skip.post) {
+      // Scene-only reference for the differential profiler: still goes
+      // through one fullscreen blit so the readPixels barrier is comparable.
+      this.blit.u.tSrc.value = this.rtScene.texture;
+      this.blit.u.uMode.value = 0;
+      this.blit.u.uScale.value = 1;
+      this.blit.render(r, null);
+      r.autoClear = prevAutoClear;
+      this._lastFrame = ctx.frame;
+      return;
+    }
+
     // --- 2. ambient occlusion ----------------------------------------------
-    if (this.ao) {
+    if (this.ao && !skip.ao) {
       this.ao.render({
         depth: depthTex, invProj: invProjJ, near, far,
         height: this.h >> 1,
@@ -483,14 +508,15 @@ export class PostFX {
 
     // --- 3. god rays --------------------------------------------------------
     let rayFade = 0;
-    if (this.rays) rayFade = this._renderRays(ctx, cam, depthTex);
+    if (this.rays && !skip.rays) rayFade = this._renderRays(ctx, cam, depthTex);
+    else if (this.rays) this.rays.clear();
 
     // --- 4. composite -------------------------------------------------------
     this._composite(ctx, cam, depthTex, near, far, exposure, invViewProjJ, rayFade);
 
     // --- 5. TAA + sharpen ---------------------------------------------------
     let colour = this.rtComposite.texture;
-    if (taaOn) {
+    if (taaOn && !skip.taa) {
       colour = this.taa.render({
         current: this.rtComposite.texture, depth: depthTex,
         invViewProjJ, near, far, static_: isStatic, cfg: cfg.taa,
@@ -507,14 +533,14 @@ export class PostFX {
 
     // --- 6. depth of field --------------------------------------------------
     const focus = this._focus(ctx, depthTex);
-    if (this.dof) {
+    if (this.dof && !skip.dof) {
       const cocScale = DoF.cocScale(cam.fov, focus, cfg.dof, this.h >> 1);
       colour = this.dof.render(colour, colour, depthTex,
         { cocScale, focus, near, far, cfg: cfg.dof });
     }
 
     // --- 7. bloom -----------------------------------------------------------
-    if (this.bloom) this.bloom.render(colour, this.w, this.h, cfg.bloom);
+    if (this.bloom && !skip.bloom) this.bloom.render(colour, this.w, this.h, cfg.bloom);
 
     // --- 8. grade + output --------------------------------------------------
     if (cfg.debug !== 'off' && this._debugBlit(cfg.debug, colour, depthTex)) {
@@ -635,7 +661,7 @@ export class PostFX {
     // for the bloom it adds on top, so pass 1.0 and pre-scale the bloom.
     u.uExposure.value = 1;
     u.uWhiteBalance.value.fromArray(this.cfg.whiteBalance);
-    u.uBloomStrength.value = this.bloom
+    u.uBloomStrength.value = (this.bloom && !this._skip.bloom)
       ? (this.cfg.bloom.strength * exposure) / this.bloom.normalisation : 0;
     u.uChroma.value = g.chroma;
     u.uVignette.value = g.vignette;
@@ -689,85 +715,66 @@ export class PostFX {
       bloomMips: this.bloom?.mips.length ?? 0,
       taaSamples: this.taa ? this.taa.n + 1 : 0,
       focus: this._afDistance,
+      fStop: this.ctx ? DoF.effectiveFStop(this.ctx.camera.fov,
+        this._afDistance, this.cfg.dof, this.h >> 1) : null,
     };
   }
 
   /**
-   * Per-pass GPU cost. `gl.finish()` between groups serialises the pipeline,
-   * so these numbers are pessimistic in absolute terms but the SHAPE is right,
-   * which is what you need to know where the budget went.
+   * Per-stage GPU cost by DIFFERENCE: time a full frame, then time it again
+   * with one stage skipped. Timing the stages in isolation does not work here
+   * — gl.finish() returns early under ANGLE/Metal, and a readPixels barrier
+   * on the default framebuffer only reliably drains work that reached the
+   * canvas, so an isolated render-to-texture pass measures as ~0. Differences
+   * of a full, canvas-terminated frame are apples to apples.
+   *
+   * Absolute numbers are a ceiling when other processes share the GPU.
    */
-  _profile(iters = 24) {
+  _profile(iters = 20) {
     const ctx = this.ctx;
     const gl = this.renderer.getContext();
-    const out = {};
-    // gl.finish() is close to a no-op under ANGLE/Metal — it returns while the
-    // command buffer is still in flight, which reports a 750k-triangle frame
-    // as 0.07 ms. A 1x1 readPixels on the default framebuffer genuinely
-    // stalls until the GPU has drained, so that is the barrier we use.
     const buf = new Uint8Array(4);
-    const barrier = () => {
+    const frame = () => {
+      this.renderFrame(ctx);
       this.renderer.setRenderTarget(null);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
     };
-    const time = (label, fn) => {
-      fn(); barrier();
+    const measure = () => {
+      for (let i = 0; i < 4; i++) frame();          // warm up / settle TAA
       const t0 = performance.now();
-      for (let i = 0; i < iters; i++) fn();
-      barrier();
-      out[label] = +((performance.now() - t0) / iters).toFixed(3);
+      for (let i = 0; i < iters; i++) frame();
+      return (performance.now() - t0) / iters;
     };
+
     const prevDebug = this.cfg.debug;
     this.cfg.debug = 'off';
+    const sk = this._skip;
+    const out = {};
     try {
-      time('total', () => this.renderFrame(ctx));
-      time('sceneOnly', () => {
-        this.renderer.setRenderTarget(this.rtScene);
-        this.renderer.render(ctx.scene, ctx.camera);
-      });
-      if (this.ao) {
-        time('ao', () => this.ao.render({
-          depth: this.rtScene.depthTexture,
-          invProj: ctx.camera.projectionMatrixInverse,
-          near: ctx.camera.near, far: ctx.camera.far, height: this.h >> 1,
-          tanHalfFov: Math.tan((ctx.camera.fov * Math.PI) / 360),
-          noiseOffset: 0, cfg: this.cfg.ao,
-        }));
-      }
-      time('composite', () => this.composite.render(this.renderer, this.rtComposite));
-      if (this.taa) {
-        time('taa+sharpen', () => {
-          const t = this.taa.render({
-            current: this.rtComposite.texture, depth: this.rtScene.depthTexture,
-            invViewProjJ: this._invViewProjJ, near: ctx.camera.near,
-            far: ctx.camera.far, static_: false, cfg: this.cfg.taa,
-          });
-          this.taa.applySharpen(t, this.cfg.sharpen, this.rtComposite);
-        });
-      }
-      if (this.dof) {
-        const focus = ctx.focusDistance ?? 2.5;
-        const cocScale = DoF.cocScale(ctx.camera.fov, focus, this.cfg.dof, this.h >> 1);
-        time('dof', () => this.dof.render(
-          this.rtComposite.texture, this.rtComposite.texture,
-          this.rtScene.depthTexture,
-          { cocScale, focus, near: ctx.camera.near, far: ctx.camera.far, cfg: this.cfg.dof }));
-      }
-      if (this.bloom) {
-        time('bloom', () => this.bloom.render(
-          this.rtComposite.texture, this.w, this.h, this.cfg.bloom));
-      }
-      if (this.rays) {
-        time('rays', () => this.rays.render(
-          this.rtScene.texture, this.rtScene.depthTexture,
-          { x: 0.5, y: 0.6 }, this.w / this.h, ctx.sunColor, this.cfg.rays));
-      }
-      time('grade', () => {
-        this._grade(ctx, this.rtComposite.texture, 1);
-        this.grade.render(this.renderer, this.smaa ? this.rtLdr : null);
-      });
-      out.postTotal = +(out.total - out.sceneOnly).toFixed(3);
+      const full = measure();
+      const one = (key) => {
+        sk[key] = true;
+        const t = measure();
+        sk[key] = false;
+        return +(full - t).toFixed(3);
+      };
+      out.frameMs = +full.toFixed(3);
+      out.ao = this.ao ? one('ao') : 0;
+      out.bloom = this.bloom ? one('bloom') : 0;
+      out.dof = this.dof ? one('dof') : 0;
+      out.rays = this.rays ? one('rays') : 0;
+      out.taa = this.taa ? one('taa') : 0;
+      sk.post = true;
+      const sceneOnly = measure();
+      sk.post = false;
+      out.sceneMs = +sceneOnly.toFixed(3);
+      out.postTotal = +(full - sceneOnly).toFixed(3);
+      // Whatever the named stages do not account for: composite + grade +
+      // the extra full-res round trips.
+      out.compositeGradeEtc = +(out.postTotal - out.ao - out.bloom -
+        out.dof - out.rays - out.taa).toFixed(3);
     } finally {
+      for (const k of Object.keys(sk)) sk[k] = false;
       this.cfg.debug = prevDebug;
       this.renderer.setRenderTarget(null);
       this.taa?.reset();

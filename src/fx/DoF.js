@@ -26,6 +26,7 @@ uniform float uFar;
 uniform float uFocus;
 uniform float uCoCScale;     // half-res px of CoC per unit of (z-F)/z
 uniform float uMaxCoC;       // half-res px
+uniform float uHighlightClamp;
 varying vec2 vUv;
 
 void main() {
@@ -39,7 +40,39 @@ void main() {
   float d = texture2D(tDepth, vUv).x;
   float z = fxViewZ(d, uNear, uFar);
   float coc = clamp(uCoCScale * (z - uFocus) / max(z, 1e-3), -uMaxCoC, uMaxCoC);
-  gl_FragColor = vec4(fxSafe(c), coc);
+
+  // Clamp the energy a single defocused point may scatter. This only feeds
+  // the BLURRED layers — in-focus pixels take the sharp path untouched — so
+  // snow sparkle still blooms into stars while a near flake stops turning
+  // into an 80 px glowing disc that reads as lens dirt (bible SS3: no lens dirt).
+  c = fxSafe(c);
+  float m = fxMax3(c);
+  if (m > uHighlightClamp) c *= uHighlightClamp / m;
+  gl_FragColor = vec4(c, coc);
+}
+`;
+
+/* Separable max of the NEAR circle of confusion.
+   Without this the near gather has to search the full aperture at every
+   pixel, so a handful of stray foreground taps get normalised into a
+   plausible-looking colour and composited at a plausible-looking alpha —
+   which paints a milky veil over the entire frame. Sizing the search radius
+   to the near blur that is actually present makes the radius (and therefore
+   the coverage) exactly zero wherever there is no foreground. */
+const NEARMAX_FRAG = /* glsl */ `
+uniform sampler2D tSrc;
+uniform vec2  uStep;        // one tap step, in uv
+uniform float uTaps;
+varying vec2 vUv;
+void main() {
+  float m = 0.0;
+  for (int i = -NEARMAX_TAPS; i <= NEARMAX_TAPS; i++) {
+    vec4 s = texture2D(tSrc, vUv + uStep * float(i));
+    // pass 1 reads the packed prepare buffer (alpha = signed CoC),
+    // pass 2 reads this buffer back (red = dilated near CoC).
+    m = max(m, NEARMAX_READ);
+  }
+  gl_FragColor = vec4(m, 0.0, 0.0, 1.0);
 }
 `;
 
@@ -48,6 +81,9 @@ uniform sampler2D tSrc;
 uniform vec2  uTexel;
 uniform float uMaxCoC;
 uniform float uEdgeBoost;
+#ifdef DOF_NEAR
+uniform sampler2D tNearMax;
+#endif
 varying vec2 vUv;
 
 void main() {
@@ -55,10 +91,11 @@ void main() {
   float cocC = centre.a;
 
 #ifdef DOF_NEAR
-  // The near layer must search the full aperture: foreground pixels scatter
-  // OUTWARD onto background that is itself perfectly sharp, so the radius
-  // cannot be keyed off this pixel.
-  float R = max(uMaxCoC, 1.0);
+  // Foreground scatters OUTWARD onto sharp background, so the radius cannot
+  // come from this pixel's own CoC — it comes from the dilated near CoC,
+  // i.e. the largest foreground circle that can actually reach here.
+  float R = texture2D(tNearMax, vUv).r;
+  if (R < 0.75) { gl_FragColor = vec4(centre.rgb, 0.0); return; }
 #else
   // The far layer only gathers within its own circle, which is what stops a
   // blurred background bleeding onto a sharp subject in front of it.
@@ -69,6 +106,7 @@ void main() {
 
   vec3 acc = vec3(0.0);
   float wsum = 0.0;
+  float cover = 0.0;
 
   for (int i = 0; i < DOF_TAPS; i++) {
     float fi = (float(i) + 0.5) / float(DOF_TAPS);
@@ -86,6 +124,7 @@ void main() {
 #endif
     float dist = length(o);
     float w = fxSat(reach - dist + 1.0);
+    cover += w;                       // un-boosted: this is the coverage term
     // Real lenses are not flat discs: spherical aberration piles a little
     // extra energy at the rim. A touch of it is what makes a highlight read
     // as bokeh rather than as a gaussian blob.
@@ -95,7 +134,9 @@ void main() {
   }
 
 #ifdef DOF_NEAR
-  float alpha = fxSat(wsum / (float(DOF_TAPS) * 0.42));
+  // Coverage = the fraction of the (correctly sized) disc that foreground
+  // material actually occupies. Every tap can contribute at most 1.
+  float alpha = fxSat(cover / float(DOF_TAPS));
   gl_FragColor = vec4(wsum > 1e-4 ? acc / wsum : centre.rgb, alpha);
 #else
   acc += centre.rgb; wsum += 1.0;   // an in-focus pixel must remain itself
@@ -155,9 +196,14 @@ export class DoF {
     this.renderer = renderer;
     const hw = Math.max(1, w >> 1), hh = Math.max(1, h >> 1);
 
+    const qw = Math.max(1, w >> 2), qh = Math.max(1, h >> 2);
     this.rtPrep = makeRT(hw, hh, { name: 'dofPrep' });
     this.rtFar = makeRT(hw, hh, { name: 'dofFar' });
     this.rtNear = makeRT(hw, hh, { name: 'dofNear' });
+    // Quarter-res: a max filter is forgiving, and over-dilating slightly is
+    // harmless (it only costs a few gather taps that then weight to zero).
+    this.rtMaxA = makeRT(qw, qh, { name: 'dofNearMaxH', format: THREE.RedFormat });
+    this.rtMaxB = makeRT(qw, qh, { name: 'dofNearMaxV', format: THREE.RedFormat });
     this.rtOut = makeRT(w, h, { name: 'dofOut' });
 
     this.prepare = new FxPass('dofPrepare', PREPARE_FRAG, {
@@ -165,7 +211,20 @@ export class DoF {
       uSrcTexel: { value: new THREE.Vector2(1 / w, 1 / h) },
       uNear: { value: 0.05 }, uFar: { value: 900 },
       uFocus: { value: 2.5 }, uCoCScale: { value: 10 }, uMaxCoC: { value: 16 },
+      uHighlightClamp: { value: 7 },
     });
+
+    this.nearMaxH = new FxPass('dofNearMaxH', NEARMAX_FRAG, {
+      tSrc: { value: this.rtPrep.texture },
+      uStep: { value: new THREE.Vector2() },
+      uTaps: { value: 1 },
+    }, { NEARMAX_TAPS: 6, NEARMAX_READ: 'max(0.0, -s.a)' });
+
+    this.nearMaxV = new FxPass('dofNearMaxV', NEARMAX_FRAG, {
+      tSrc: { value: this.rtMaxA.texture },
+      uStep: { value: new THREE.Vector2() },
+      uTaps: { value: 1 },
+    }, { NEARMAX_TAPS: 6, NEARMAX_READ: 's.r' });
 
     const gatherU = () => ({
       tSrc: { value: this.rtPrep.texture },
@@ -174,7 +233,9 @@ export class DoF {
       uEdgeBoost: { value: 0.16 },
     });
     this.far = new FxPass('dofFar', GATHER_FRAG, gatherU(), { DOF_TAPS: tune.dofTaps });
-    this.near = new FxPass('dofNear', GATHER_FRAG, gatherU(),
+    const nearU = gatherU();
+    nearU.tNearMax = { value: this.rtMaxB.texture };
+    this.near = new FxPass('dofNear', GATHER_FRAG, nearU,
       { DOF_TAPS: tune.dofNearTaps, DOF_NEAR: '' });
 
     this.composite = new FxPass('dofComposite', COMPOSITE_FRAG, {
@@ -190,10 +251,16 @@ export class DoF {
 
   setSize(w, h) {
     const hw = Math.max(1, w >> 1), hh = Math.max(1, h >> 1);
+    const qw = Math.max(1, w >> 2), qh = Math.max(1, h >> 2);
     this.rtPrep.setSize(hw, hh);
     this.rtFar.setSize(hw, hh);
     this.rtNear.setSize(hw, hh);
+    this.rtMaxA.setSize(qw, qh);
+    this.rtMaxB.setSize(qw, qh);
     this.rtOut.setSize(w, h);
+    this.nearMaxH.u.tSrc.value = this.rtPrep.texture;
+    this.nearMaxV.u.tSrc.value = this.rtMaxA.texture;
+    this.near.u.tNearMax.value = this.rtMaxB.texture;
     this.prepare.u.uSrcTexel.value.set(1 / w, 1 / h);
     for (const p of [this.far, this.near]) {
       p.u.uTexel.value.set(1 / hw, 1 / hh);
@@ -208,14 +275,39 @@ export class DoF {
    * Thin-lens CoC in HALF-RES pixels:
    *   CoC_metres = (f/N) * (f / (F - f)) * |z - F| / z
    *   CoC_px     = CoC_metres / sensorHeight * imageHeightPx
-   * so the scale factor multiplying (z - F)/z is constant per frame.
+   * so the factor multiplying (z - F)/z is constant per frame. Note that
+   * (z - F)/z tends to 1 as z tends to infinity, which means this scale IS
+   * the background blur radius — a genuinely useful thing to be able to cap.
+   *
+   * THE CAP. Left purely physical, a 52 mm at f/4 focused at 0.55 m (the
+   * `portrait` pose) has a depth of field a few millimetres deep, and
+   * `macro_eye` at 0.13 m is far worse: every pose closer than about a metre
+   * saturates the entire frame and the shot becomes unreadable. That is not
+   * a bug in the maths, it is what the lens does — which is exactly why a DP
+   * stops down for a close-focus shot instead of shooting it wide open. So we
+   * pick the aperture for the framing: raise N until the background blur sits
+   * at maxBackgroundCoC (a fraction of image height, so it is resolution
+   * independent). The CoC still follows the thin-lens curve; only the stop
+   * moves, and only when the physical one would be unusable.
    */
   static cocScale(fovDeg, focus, cfg, halfResHeight) {
     const sensorH = cfg.sensorHeight;                      // metres
     const f = (sensorH * 0.5) / Math.tan((fovDeg * Math.PI) / 360);
     const A = f / Math.max(cfg.fStop, 0.5);
     const denom = Math.max(focus - f, 1e-4);
-    return (A * (f / denom) / sensorH) * halfResHeight * cfg.scale;
+    const physical = (A * (f / denom) / sensorH) * halfResHeight * cfg.scale;
+    const ceiling = cfg.maxBackgroundCoC * halfResHeight;
+    return Math.min(physical, ceiling);
+  }
+
+  /** The stop we actually ended up at, for reporting. */
+  static effectiveFStop(fovDeg, focus, cfg, halfResHeight) {
+    const sensorH = cfg.sensorHeight;
+    const f = (sensorH * 0.5) / Math.tan((fovDeg * Math.PI) / 360);
+    const denom = Math.max(focus - f, 1e-4);
+    const scale = DoF.cocScale(fovDeg, focus, cfg, halfResHeight);
+    const A = (scale / cfg.scale / halfResHeight) * sensorH / (f / denom);
+    return +(f / Math.max(A, 1e-6)).toFixed(2);
   }
 
   render(sharpTexture, hdrTexture, depth, params) {
@@ -230,7 +322,17 @@ export class DoF {
     p.uFocus.value = focus;
     p.uCoCScale.value = cocScale;
     p.uMaxCoC.value = maxCoC;
+    p.uHighlightClamp.value = cfg.highlightClamp;
     this.prepare.render(r, this.rtPrep);
+
+    // Dilate the near CoC across the full aperture, in quarter-res steps.
+    const qw = this.rtMaxA.width, qh = this.rtMaxA.height;
+    const spanQ = Math.max(1, maxCoC * 0.5);          // half-res px -> quarter-res px
+    const stepQ = spanQ / 6;
+    this.nearMaxH.u.uStep.value.set(stepQ / qw, 0);
+    this.nearMaxH.render(r, this.rtMaxA);
+    this.nearMaxV.u.uStep.value.set(0, stepQ / qh);
+    this.nearMaxV.render(r, this.rtMaxB);
 
     for (const g of [this.far, this.near]) {
       g.u.uMaxCoC.value = maxCoC;
@@ -256,7 +358,9 @@ export class DoF {
   dispose() {
     disposeRT(this.rtPrep); disposeRT(this.rtFar);
     disposeRT(this.rtNear); disposeRT(this.rtOut);
-    this.prepare.dispose(); this.far.dispose();
-    this.near.dispose(); this.composite.dispose();
+    disposeRT(this.rtMaxA); disposeRT(this.rtMaxB);
+    this.prepare.dispose(); this.far.dispose(); this.near.dispose();
+    this.nearMaxH.dispose(); this.nearMaxV.dispose();
+    this.composite.dispose();
   }
 }

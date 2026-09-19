@@ -35,7 +35,7 @@ export class FurSystem {
 
   constructor() {
     this.enabled = true;
-    this.autoStochastic = true;
+    this.autoStochastic = false;
     this.stochasticAmount = 0.55;
     this.lod = { near: 1.5, far: 3.2, cull: 7.0, minShells: 4 };
     this.stats = {};
@@ -226,13 +226,23 @@ export class FurSystem {
     }
 
     // --------------------------------------------------- stochastic alpha -
-    // Dithered cut-out only pays off once something is resolving it. Until the
-    // postfx agent's TAA is live, a smooth blended alpha is strictly better
-    // than visible screen-door noise.
+    // OFF by default, deliberately.
+    //
+    // Dithered cut-out only pays off once a TAA resolve is actually running,
+    // and "is TAA running" turned out to be unsafe to infer: a postfx system
+    // can exist, declare renderFrame, and still not be driving the frame —
+    // App drops it and falls back to a direct render the first time it
+    // throws, which is exactly what happened here. Auto-enabling off a signal
+    // that can silently go stale is how you get a mystery artifact later, so
+    // this stays opt-in: set `ctx.fur.autoStochastic = true` (or write
+    // uStochastic directly) once TAA is known good, and re-review the coat.
+    // The blended path below it is the one that has actually been reviewed.
     if (this.autoStochastic) {
-      const taaLive = !!ctx.quality.get('taa') &&
-        (ctx.app?.systems ?? []).some((s) => s.renderFrame && !s._failed);
+      const driver = ctx.app?._renderer;           // the system actually drawing
+      const taaLive = !!ctx.quality.get('taa') && !!driver && !driver._failed;
       this.uniforms.uStochastic.value = taaLive ? this.stochasticAmount : 0;
+    } else {
+      this.uniforms.uStochastic.value = 0;
     }
   }
 

@@ -66,14 +66,17 @@ void main() {
   vec3 c = agxToneMap(hdr, uShoulder, uLookSlope, uLookOffset, uLookPower, uLookSat);
 
   // --- grade ---------------------------------------------------------------
-  /* Chromatic black floor. Bible SS2.3: shadows must never crush to 0. A
-     tinted lift that pins white guarantees a minimum, and makes the darkest
-     part of the frame BLUE rather than dead — which is also what a real
-     twilight zenith looks like through an atmosphere. */
-  c = uBlackLift + c * (1.0 - uBlackLift);
   c = gradeHighlightDesat(c, uHighlightDesat);
   c = gradeSplitTone(c, uShadowTint, uShadowAmount, uHighlightTint, uHighlightAmount);
   c = gradeContrastSat(c, uContrast, uSaturation);
+
+  /* Chromatic black floor, LAST. Bible SS2.3: shadows must never crush to 0.
+     It has to come after the contrast stage — a contrast pivot at 0.5 sends
+     near-black negative, which silently ate this lift the first time round.
+     A tinted lift that pins white guarantees a floor and makes the darkest
+     part of the frame blue rather than dead, which is also what a twilight
+     zenith looks like through an atmosphere. */
+  c = uBlackLift + c * (1.0 - uBlackLift);
 
   // --- display -------------------------------------------------------------
   c = fxLinearToSRGB(c);
