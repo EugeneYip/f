@@ -20,6 +20,7 @@ uniform float uLookPower;
 uniform float uLookSat;
 uniform vec3  uShadowTint;
 uniform float uShadowAmount;
+uniform float uShadowFloor;
 uniform vec3  uHighlightTint;
 uniform float uHighlightAmount;
 uniform float uContrast;
@@ -67,7 +68,7 @@ void main() {
 
   // --- grade ---------------------------------------------------------------
   c = gradeHighlightDesat(c, uHighlightDesat);
-  c = gradeSplitTone(c, uShadowTint, uShadowAmount, uHighlightTint, uHighlightAmount);
+  c = gradeSplitTone(c, uShadowTint, uShadowAmount, uHighlightTint, uHighlightAmount, uShadowFloor);
   c = gradeContrastSat(c, uContrast, uSaturation);
 
   /* Chromatic black floor, LAST. Bible SS2.3: shadows must never crush to 0.
@@ -114,6 +115,7 @@ export function makeGrade() {
     uLookSat: { value: 1 },
     uShadowTint: { value: new THREE.Vector3(-0.004, 0.004, 0.020) },
     uShadowAmount: { value: 1 },
+    uShadowFloor: { value: 0.06 },
     uHighlightTint: { value: new THREE.Vector3(0.016, 0.006, -0.010) },
     uHighlightAmount: { value: 1 },
     uContrast: { value: 1.02 },

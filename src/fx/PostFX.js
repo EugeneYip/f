@@ -52,7 +52,7 @@ function defaults() {
     // goes flat and chalky. Pulling ~1.3 stops down puts snow near the top of
     // the curve with room to gradate, and drops the fox's shade side into the
     // part of the curve that still has contrast.
-    exposure: 0.95,
+    exposure: 1.08,
     sharpen: 0.35,
     autofocus: false,
 
@@ -70,8 +70,8 @@ function defaults() {
       lookSlope: 1.0, lookOffset: 0.0, lookPower: 1.30, lookSat: 1.0,
       // Bible SS3: "slight lift on the blue channel in shadow". Tiny numbers —
       // these are additive in display-linear, so 0.02 is already visible.
-      blackLift: [0.003, 0.005, 0.013],
-      shadowTint: [0.0, 0.004, 0.024], shadowAmount: 1.0,
+      blackLift: [0.0006, 0.0010, 0.0020],
+      shadowTint: [0.0, 0.004, 0.018], shadowAmount: 1.0, shadowFloor: 0.06,
       highlightTint: [0.009, 0.003, -0.006], highlightAmount: 1.0,
       // Contrast lives in agxLook.lookPower, which bends midtones while
       // pinning white. This display-space pivot stays at 1.0.
@@ -80,7 +80,20 @@ function defaults() {
       chroma: 0.0018, vignette: 0.11, dither: 1 / 255,
     },
     bloom: {
-      threshold: 0.95, softKnee: 0.55, strength: 0.085,
+      /* Measured. strength is divided by the pyramid normalisation (~4.2), so
+         the old 0.085 was an effective ~0.02 — invisible. Sweeping it against
+         a snow-sparkle crop: strength 0 -> mean 187.0, 0.30 -> 190.9,
+         1.00 -> 198.4. 0.30 gives real veiling glare on the glints without a
+         grey wash. Threshold sits above diffuse white so the backlit fur does
+         not bloom into the eye socket, which is what filled the eye at 0.95. */
+      /* Deliberately conservative. At strength 0.30 the whole-frame minimum
+         luminance rose from 16 to 30 — the veil the review flagged as 3a,
+         coming back in through bloom. Under-blooming is the cheaper mistake.
+         NOTE for the terrain agent: the snow glints sit in the SAME exposed
+         HDR range as the lit fur (both ~1.0-1.3), so no absolute threshold
+         separates them. Giving the sparkle real HDR headroom is what would
+         let bloom turn it into crystal without also blooming the coat. */
+      threshold: 1.25, softKnee: 0.55, strength: 0.12,
       scatter: 0.82, upsampleRadius: 1.0, clampMax: 64,
     },
     ao: {
@@ -101,12 +114,17 @@ function defaults() {
       fStop: 4.0, sensorHeight: 0.024, scale: 1.0, maxCoC: 26,
       // Background blur ceiling as a fraction of image height, so the look is
       // identical at every resolution and adaptive-resolution step.
-      // Judgement call, easy to revert: 0.016 (~19 px at 1200p) removed every
-      // high-frequency reference from the background, which makes the eye
-      // read the in-focus subject as soft even though it is bit-identical
-      // with DoF off. 0.011 keeps clear subject separation while leaving
-      // enough background structure to judge sharpness against.
-      maxBackgroundCoC: 0.011,
+      /* MEASURED, not chosen by eye. The coat is alpha-blended, so the gaps
+         between guard hairs carry the BACKGROUND's depth, not the hair's.
+         Any background blur therefore replaces those gaps with smooth
+         backdrop and the fringe averages out of existence — the tail's upper
+         contour measured 3.91 detail with post off, 2.52 with DoF off, and
+         only 1.49 at a 0.011 ceiling. Sweeping the ceiling recovers it:
+         0.007 -> 1.84, 0.004 -> 2.45, i.e. essentially everything DoF was
+         costing. Bible SS2.1 ("fur must break the silhouette") outranks
+         SS9's shallow depth of field, so the fringe wins. The real fix is for
+         the hairs to write depth; until then this is the honest ceiling. */
+      maxBackgroundCoC: 0.005,
       nearGain: 1.0, edgeBoost: 0.14, blendLo: 1.0, blendHi: 3.0,
       highlightClamp: 7.0,
     },
@@ -117,7 +135,7 @@ function defaults() {
     },
     rays: {
       strength: 0.45, density: 0.62, decay: 0.94,
-      threshold: 1.2, maskFalloff: 1.5, sunDisc: 0.55,
+      threshold: 1.2, maskFalloff: 1.5, sunDisc: 0.55, shaftDensity: 0.045,
     },
     taa: { clampGamma: 1.25, antiGhost: 1.0, feedbackFrames: 12 },
     debug: 'off',   // off | ao | bloom | rays | coc | hdr | depth
@@ -638,6 +656,7 @@ export class PostFX {
       u.tRays.value = this.rays.texture;
       u.uRayTint.value.copy(ctx.sunColor);
       u.uRayStrength.value = cfg.rays.strength * rayFade;
+      u.uShaftDensity.value = cfg.rays.shaftDensity;
     }
 
     this.composite.render(this.renderer, this.rtComposite);
@@ -686,6 +705,7 @@ export class PostFX {
     u.uLookSat.value = g.lookSat;
     u.uShadowTint.value.fromArray(g.shadowTint);
     u.uShadowAmount.value = g.shadowAmount;
+    u.uShadowFloor.value = g.shadowFloor;
     u.uHighlightTint.value.fromArray(g.highlightTint);
     u.uHighlightAmount.value = g.highlightAmount;
     u.uContrast.value = g.contrast;

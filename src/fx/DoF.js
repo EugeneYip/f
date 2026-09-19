@@ -29,17 +29,44 @@ uniform float uMaxCoC;       // half-res px
 uniform float uHighlightClamp;
 varying vec2 vUv;
 
+float cocAt(float z) {
+  return clamp(uCoCScale * (z - uFocus) / max(z, 1e-3), -uMaxCoC, uMaxCoC);
+}
+
 void main() {
   vec2 o = uSrcTexel * 0.5;
-  vec3 c = texture2D(tHDR, vUv + vec2(-o.x, -o.y)).rgb
-         + texture2D(tHDR, vUv + vec2( o.x, -o.y)).rgb
-         + texture2D(tHDR, vUv + vec2(-o.x,  o.y)).rgb
-         + texture2D(tHDR, vUv + vec2( o.x,  o.y)).rgb;
-  c *= 0.25;
+  vec2 o0 = vec2(-o.x, -o.y), o1 = vec2(o.x, -o.y);
+  vec2 o2 = vec2(-o.x,  o.y), o3 = vec2(o.x,  o.y);
 
-  float d = texture2D(tDepth, vUv).x;
-  float z = fxViewZ(d, uNear, uFar);
-  float coc = clamp(uCoCScale * (z - uFocus) / max(z, 1e-3), -uMaxCoC, uMaxCoC);
+  /* Colour and CoC must come from the SAME surface. Averaging a 2x2 colour box
+     while taking CoC from one depth tap means a pixel straddling the
+     silhouette gets the animal's bright colour paired with the background's
+     CoC — it then scatters as a bright far-field source and paints a glowing
+     halo around the whole subject. (That halo is what reads as the subject
+     going "semi-transparent".)
+     So: pick the sub-sample that is MOST out of focus — the blurred layers
+     exist to represent out-of-focus content, and in-focus content is carried
+     by the sharp path — then weight the colour toward sub-samples lying on
+     that same surface. */
+  float z0 = fxViewZ(texture2D(tDepth, vUv + o0).x, uNear, uFar);
+  float z1 = fxViewZ(texture2D(tDepth, vUv + o1).x, uNear, uFar);
+  float z2 = fxViewZ(texture2D(tDepth, vUv + o2).x, uNear, uFar);
+  float z3 = fxViewZ(texture2D(tDepth, vUv + o3).x, uNear, uFar);
+  float c0 = cocAt(z0), c1 = cocAt(z1), c2 = cocAt(z2), c3 = cocAt(z3);
+
+  float coc = c0; float zRef = z0;
+  if (abs(c1) > abs(coc)) { coc = c1; zRef = z1; }
+  if (abs(c2) > abs(coc)) { coc = c2; zRef = z2; }
+  if (abs(c3) > abs(coc)) { coc = c3; zRef = z3; }
+
+  float k = 1.0 / max(zRef * 0.04, 1e-4);
+  float w0 = exp(-abs(z0 - zRef) * k), w1 = exp(-abs(z1 - zRef) * k);
+  float w2 = exp(-abs(z2 - zRef) * k), w3 = exp(-abs(z3 - zRef) * k);
+  vec3 c = texture2D(tHDR, vUv + o0).rgb * w0
+         + texture2D(tHDR, vUv + o1).rgb * w1
+         + texture2D(tHDR, vUv + o2).rgb * w2
+         + texture2D(tHDR, vUv + o3).rgb * w3;
+  c /= max(w0 + w1 + w2 + w3, 1e-4);
 
   // Clamp the energy a single defocused point may scatter. This only feeds
   // the BLURRED layers — in-focus pixels take the sharp path untouched — so

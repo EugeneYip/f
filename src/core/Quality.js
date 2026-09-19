@@ -12,7 +12,10 @@ export const TIERS = {
     furShells: 6, furFins: false, furAniso: false,
     terrainSegments: 160, terrainRadius: 90,
     snowParticles: 1500, snowLayers: 1,
-    ao: false, bloom: true, dof: false, godRays: false, taa: false, smaa: true,
+    // TAA on at low, SMAA off. SMAA cannot resolve the fur's stochastic
+    // dither -- the coat degraded to television static (review blocker 13).
+    // TAA costs more than SMAA, but a broken image is not a cheaper image.
+    ao: false, bloom: true, dof: false, godRays: false, taa: true, smaa: false,
     aurora: true, auroraSteps: 6,
     breath: true, footprints: true, footprintRes: 512,
     envMapSize: 64, grassTufts: 0,

@@ -95,9 +95,14 @@ export const GRADE_LOOK = /* glsl */ `
    fall to zero through the midtones, which is the difference between a subtle
    polar grade and the teal-orange crush the bible forbids. */
 vec3 gradeSplitTone(vec3 c, vec3 shadowTint, float shadowAmt,
-                    vec3 highTint, float highAmt) {
+                    vec3 highTint, float highAmt, float shadowFloor) {
   float l = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-  float ws = pow(1.0 - l, 2.5);
+  /* The shadow weight must fall back to ZERO at true black. Peaking it at
+     l = 0 turns a "slight blue lift in the shadows" (bible SS3) into an
+     absolute floor under every pixel in the frame, including the night sky —
+     a scrim, which is exactly what it was doing. Rolling it off below
+     shadowFloor keeps the lift where there is actually signal to tint. */
+  float ws = pow(1.0 - l, 2.5) * smoothstep(0.0, shadowFloor, l);
   float wh = l * l;
   c += shadowTint * (ws * shadowAmt);
   c += highTint   * (wh * highAmt);

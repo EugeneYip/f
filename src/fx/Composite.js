@@ -45,6 +45,7 @@ uniform float uFogPhase;
 uniform sampler2D tRays;
 uniform vec3  uRayTint;
 uniform float uRayStrength;
+uniform float uShaftDensity;
 #endif
 
 varying vec2 vUv;
@@ -114,7 +115,14 @@ void main() {
 #endif
 
 #ifdef USE_RAYS
-  c += texture2D(tRays, vUv).rgb * uRayTint * uRayStrength;
+  /* Crepuscular rays are light in-scattered along the path BETWEEN camera and
+     surface, so the energy a pixel receives grows with its distance. Adding
+     the full shaft to every pixel regardless of depth gave a 1.9 m animal the
+     same in-scatter as the sky behind it, which reads as the subject going
+     semi-transparent. Weighting by path transmittance is both the physical
+     answer and the fix. */
+  float shaft = sky ? 1.0 : (1.0 - exp(-vz * uShaftDensity));
+  c += texture2D(tRays, vUv).rgb * uRayTint * (uRayStrength * shaft);
 #endif
 
   gl_FragColor = vec4(fxSafe(c), 1.0);
@@ -160,5 +168,6 @@ export function makeComposite(flags) {
     tRays: { value: null },
     uRayTint: { value: new THREE.Color(1, 1, 1) },
     uRayStrength: { value: 0 },
+    uShaftDensity: { value: 0.045 },
   }, defines);
 }
