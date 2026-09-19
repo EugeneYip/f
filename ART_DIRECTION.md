@@ -195,8 +195,17 @@ them:
 photograph the ear is a **triangle with a rounded tip** — clearly wider at the
 base and tapering upward to a soft point. It is small and thickly furred
 *relative to a red fox*, which is the real distinction; it is not a paddle.
-- Height should visibly exceed... roughly match base width, not be less than it.
-- The tip is **rounded, not flat** — a soft apex, not an arc.
+- **Measure VISIBLE SILHOUETTE HEIGHT, not height above the cranium.** This
+  matters more than it sounds: because the pinna leans outward, it leaves the
+  head silhouette well below the dome, so visible height is much greater than
+  height-above-dome. Anatomy's first pass hit "height above dome ≈ base width"
+  exactly and rendered at ~1.8:1 tall-to-wide — clearly rabbit-like. Target
+  **visible height ≈ base width (about 1:1)**, which lands near 37 mm proud on
+  a 52 mm base at the current lean.
+- The tip is **rounded, not flat** — a soft apex, not an arc. Note a sharper
+  apex on a thin pinna has sub-cell rim curvature and will reintroduce the ear
+  stair-stepping of review blocker 5; thicken the pinna slightly to compensate
+  and watch the worst neighbour-normal angle.
 - Keep the wide-set, low, outward-leaning placement from §4b. That part was right.
 
 ### Muzzle: short but genuinely tapering to a point

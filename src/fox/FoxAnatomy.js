@@ -96,9 +96,9 @@ export const LANDMARKS = {
   jaw: [0, 0.3005, 0.2085],
 
   earR01: [0.0300, 0.3330, 0.1934],
-  earR02: [0.0330, 0.3393, 0.1930],
-  earR03: [0.0360, 0.3457, 0.1926],
-  earR_tip: [0.0388, 0.3498, 0.1922],
+  earR02: [0.0362, 0.3459, 0.1928],
+  earR03: [0.0423, 0.3589, 0.1921],
+  earR_tip: [0.0485, 0.3718, 0.1915],
 
   // tail: carried low with a gentle continuous curve, tip clear of the snow
   tail01: [0, 0.2270, -0.2060],
@@ -352,26 +352,26 @@ export function buildField() {
   // Short and BLUNT: 2:1 taper read as a point once fur was on it, so the
   // muzzle now barely narrows and stops well short of the old nose position.
   f.add({
-    name: 'muzzle', a: H([0, 0.3020, 0.2260]), b: H([0, 0.2955, 0.2320]),
-    ra: sr(0.0268), rb: sr(0.0206),
+    name: 'muzzle', a: H([0, 0.3020, 0.2255]), b: H([0, 0.2952, 0.2380]),
+    ra: sr(0.0272), rb: sr(0.0175),
     squash: [1.0, 0.90, 1.0], k: 0.014, ...furOf(R.muzzle),
     flowDir: [0, 0.05, -1], flowRadial: 0.34, tint: TINT_FUR,
   });
   f.add({
-    name: 'nosePad', a: H([0, 0.2938, 0.2450]), ra: sr(0.0140),
-    squash: [1.0, 0.86, 0.80], k: 0.006, ...furOf(R.nose),
+    name: 'nosePad', a: H([0, 0.2930, 0.2510]), ra: sr(0.0130),
+    squash: [1.0, 0.86, 0.78], k: 0.006, ...furOf(R.nose),
     flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_SKIN,
   });
   f.add({
-    name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2898, 0.2330]),
-    ra: sr(0.0224), rb: sr(0.0168),
+    name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2895, 0.2385]),
+    ra: sr(0.0224), rb: sr(0.0140),
     squash: [0.95, 0.80, 1.0], k: 0.010, ...furOf(R.jawLower),
     flowDir: [0, -0.30, -1], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Whisker pads — the paired swellings at the muzzle root. Small, but they
   // are most of what stops a canid muzzle reading as a plain cone.
   f.addMirrored({
-    name: 'whiskerPadR', a: H([0.0165, 0.2955, 0.2310]), ra: sr(0.0150),
+    name: 'whiskerPadR', a: H([0.0160, 0.2950, 0.2258]), ra: sr(0.0132),
     squash: [0.86, 0.80, 1.05], k: 0.011, ...furOf(R.muzzle),
     flowDir: [0.18, -0.25, -0.95], flowRadial: 0.35, tint: TINT_FUR,
   });
@@ -390,26 +390,26 @@ export function buildField() {
   const earA = L.earR01;
   const earB = L.earR_tip;
   f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0218), rb: sr(0.0206),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.55, 1.02, 1.0],
-    k: 0.013, ...furOf(R.earOuter),
+    name: 'earR', a: earA, b: earB, ra: sr(0.0208), rb: sr(0.0108),
+    frame: 'axis', normal: EAR_NORMAL, squash: [0.60, 1.02, 1.0],
+    k: 0.015, ...furOf(R.earOuter),
     flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
   });
   // Shallow concha bowl on the forward face.
-  const earMid = lerp3(earA, earB, 0.46);
+  const earMid = lerp3(earA, earB, 0.34);
   const earAxis = sub(earB, earA);
   const eal = Math.hypot(earAxis[0], earAxis[1], earAxis[2]);
   const conchaC = [
-    earMid[0] + EAR_NORMAL[0] * sr(0.0196),
-    earMid[1] + EAR_NORMAL[1] * sr(0.0196),
-    earMid[2] + EAR_NORMAL[2] * sr(0.0196),
+    earMid[0] + EAR_NORMAL[0] * sr(0.0165),
+    earMid[1] + EAR_NORMAL[1] * sr(0.0165),
+    earMid[2] + EAR_NORMAL[2] * sr(0.0165),
   ];
   f.addMirrored({
     name: 'conchaR', a: conchaC,
     b: [conchaC[0] + earAxis[0] / eal * 0.010,
         conchaC[1] + earAxis[1] / eal * 0.010,
         conchaC[2] + earAxis[2] / eal * 0.010],
-    ra: sr(0.0215),
+    ra: sr(0.0165),
     frame: 'axis', normal: EAR_NORMAL, squash: [0.42, 0.96, 1.05],
     k: 0.008, op: 'subtract', ...furOf(R.earInner),
     flowDir: sub(earB, earA), flowRadial: 0.20, tint: TINT_FUR,
