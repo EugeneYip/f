@@ -55,6 +55,18 @@ void main() {
   // --- neighbourhood statistics, in compressed YCoCg ----------------------
   vec3 m1 = vec3(0.0), m2 = vec3(0.0);
   vec3 cmin = vec3(1e9), cmax = vec3(-1e9);
+#ifdef TAA_CHEAP
+  /* 5-tap cross instead of the full 3x3. The corners contribute least to the
+     clipping box, and the low tier exists for weak hardware. */
+  vec2 offs[5] = vec2[5](vec2(0.0), vec2(-1.0, 0.0), vec2(1.0, 0.0),
+                         vec2(0.0, -1.0), vec2(0.0, 1.0));
+  for (int i = 0; i < 5; i++) {
+    vec3 s = fxRGB2YCoCg(fxCompress(fxSafe(texture2D(tCurr, vUv + offs[i] * uTexel).rgb)));
+    m1 += s; m2 += s * s;
+    cmin = min(cmin, s); cmax = max(cmax, s);
+  }
+  m1 /= 5.0; m2 /= 5.0;
+#else
   for (int y = -1; y <= 1; y++) {
     for (int x = -1; x <= 1; x++) {
       vec3 s = fxRGB2YCoCg(fxCompress(
@@ -64,6 +76,7 @@ void main() {
     }
   }
   m1 /= 9.0; m2 /= 9.0;
+#endif
   vec3 sigma = sqrt(max(m2 - m1 * m1, vec3(0.0)));
   // Variance clipping (Salvi): intersect the AABB of the 3x3 with a
   // gamma-sigma box around the mean. Tighter than min/max alone on smooth
@@ -89,9 +102,13 @@ void main() {
 
   // Catmull-Rom is exact at zero offset, so when the camera has not moved a
   // single bilinear tap gives a bit-identical result for a fifth of the cost.
+#ifdef TAA_CHEAP
+  vec3 histRGB = texture2D(tHist, prevUv).rgb;   // no Catmull-Rom at low tier
+#else
   vec3 histRGB = uUseCR > 0.5
     ? fxHistoryCR(tHist, prevUv, uRes, uTexel)
     : texture2D(tHist, prevUv).rgb;
+#endif
   vec3 hist = clamp(fxRGB2YCoCg(fxCompress(fxSafe(histRGB))), lo, hi);
   histRGB = fxUncompress(fxYCoCg2RGB(hist));
 
@@ -139,7 +156,7 @@ void main() {
 `;
 
 export class TAA {
-  constructor(renderer, w, h) {
+  constructor(renderer, w, h, cheap = false) {
     this.renderer = renderer;
     this.histA = makeRT(w, h, { name: 'taaHistA' });
     this.histB = makeRT(w, h, { name: 'taaHistB' });
@@ -171,7 +188,7 @@ export class TAA {
       uAntiGhost: { value: 0 },
       uUseCR: { value: 1 },
       uReset: { value: 1 },
-    });
+    }, cheap ? { TAA_CHEAP: '' } : {});
 
     this.sharpen = new FxPass('sharpen', SHARPEN_FRAG, {
       tSrc: { value: null },

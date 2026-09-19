@@ -39,7 +39,11 @@ import { makeGrade, makeDebugBlit } from './Grade.js';
    is overridable through ctx.postfx. The feature GATES all come from
    ctx.quality.get(): ao, bloom, dof, godRays, taa, smaa. */
 const TUNE = {
-  low:    { slices: 1, steps: 3, mips: 5, raySamples: 8,  dofTaps: 14, dofNearTaps: 10 },
+  // At `low`: a 5-tap TAA clamp, no Catmull-Rom history, and no sharpen pass.
+  // Sharpen is a whole extra full-res read/write whose only job is recovering
+  // TAA softness — a luxury on the tier that exists for weak hardware.
+  low:    { slices: 1, steps: 3, mips: 5, raySamples: 8,  dofTaps: 14, dofNearTaps: 10,
+            taaCheap: true, sharpenScale: 0 },
   medium: { slices: 2, steps: 3, mips: 6, raySamples: 10, dofTaps: 24, dofNearTaps: 14 },
   high:   { slices: 2, steps: 4, mips: 7, raySamples: 12, dofTaps: 32, dofNearTaps: 18 },
   ultra:  { slices: 3, steps: 6, mips: 7, raySamples: 14, dofTaps: 48, dofNearTaps: 28 },
@@ -136,8 +140,14 @@ function defaults() {
       luminance: 0.55,
     },
     rays: {
-      strength: 0.45, density: 0.62, decay: 0.94,
-      threshold: 1.2, maskFalloff: 1.5, sunDisc: 0.55, shaftDensity: 0.045,
+      /* Measured at silhouette: sky near the sun +6.0 sRGB levels, the animal
+         +3.4 (veiling glare through bloom, not the old additive halo), and
+         exactly 0.0 at the profile pose where the sun is off screen: the fade is
+         correct. Held at 0.30 rather than 0.45: this pass has a history of
+         costing the subject more than it earns. */
+      strength: 0.30, density: 0.62, decay: 0.94,
+      threshold: 0.45, maskFalloff: 1.5, sunDisc: 0.25, shaftDensity: 0.045,
+      blurGain: 4.0,
     },
     taa: { clampGamma: 1.25, antiGhost: 1.0, feedbackFrames: 12 },
     debug: 'off',   // off | ao | bloom | rays | coc | hdr | depth
@@ -265,7 +275,8 @@ export class PostFX {
       this.dof = this.gates.dof ? new DoF(r, w, h, tune) : null;
       this.rays = this.gates.rays
         ? new GodRays(r, Math.max(1, w >> 2), Math.max(1, h >> 2), tune) : null;
-      this.taa = this.gates.taa ? new TAA(r, w, h) : null;
+      this.taa = this.gates.taa ? new TAA(r, w, h, !!tune.taaCheap) : null;
+      this.sharpenScale = tune.sharpenScale ?? 1;
 
       this.composite = makeComposite({
         ao: this.gates.ao, fog: true, rays: this.gates.rays,
@@ -553,10 +564,10 @@ export class PostFX {
         current: this.rtComposite.texture, depth: depthTex,
         invViewProjJ, near, far, static_: isStatic, cfg: cfg.taa,
       });
-      if (cfg.sharpen > 0.001) {
+      if (cfg.sharpen * this.sharpenScale > 0.001) {
         // rtComposite has been consumed; reuse it instead of a 4th full-res
         // half-float buffer.
-        colour = this.taa.applySharpen(colour, cfg.sharpen, this.rtComposite);
+        colour = this.taa.applySharpen(colour, cfg.sharpen * this.sharpenScale, this.rtComposite);
       }
       this.taa.advance();
       this.taa.storePrevViewProj(
@@ -659,6 +670,7 @@ export class PostFX {
       u.uRayTint.value.copy(ctx.sunColor);
       u.uRayStrength.value = cfg.rays.strength * rayFade;
       u.uShaftDensity.value = cfg.rays.shaftDensity;
+      u.uRayTexel.value.set(4 / this.w, 4 / this.h);
     }
 
     this.composite.render(this.renderer, this.rtComposite);

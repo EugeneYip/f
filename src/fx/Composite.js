@@ -46,6 +46,7 @@ uniform sampler2D tRays;
 uniform vec3  uRayTint;
 uniform float uRayStrength;
 uniform float uShaftDensity;
+uniform vec2  uRayTexel;
 #endif
 
 varying vec2 vUv;
@@ -122,7 +123,16 @@ void main() {
      semi-transparent. Weighting by path transmittance is both the physical
      answer and the fix. */
   float shaft = sky ? 1.0 : (1.0 - exp(-vz * uShaftDensity));
-  c += texture2D(tRays, vUv).rgb * uRayTint * (uRayStrength * shaft);
+  /* The ray buffer is quarter resolution; a single bilinear tap leaves a
+     visible blocky column under the sun once the gain is high enough to
+     matter. A 4-tap tent costs three fetches on a quarter-res target and
+     removes it. */
+  vec3 ray = 0.25 * (
+      texture2D(tRays, vUv + vec2(-0.5, -0.5) * uRayTexel).rgb
+    + texture2D(tRays, vUv + vec2( 0.5, -0.5) * uRayTexel).rgb
+    + texture2D(tRays, vUv + vec2(-0.5,  0.5) * uRayTexel).rgb
+    + texture2D(tRays, vUv + vec2( 0.5,  0.5) * uRayTexel).rgb);
+  c += ray * uRayTint * (uRayStrength * shaft);
 #endif
 
   gl_FragColor = vec4(fxSafe(c), 1.0);
@@ -169,5 +179,6 @@ export function makeComposite(flags) {
     uRayTint: { value: new THREE.Color(1, 1, 1) },
     uRayStrength: { value: 0 },
     uShaftDensity: { value: 0.045 },
+    uRayTexel: { value: new THREE.Vector2() },
   }, defines);
 }
