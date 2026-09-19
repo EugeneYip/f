@@ -74,7 +74,7 @@ const MAX_REACH_DROP = 0.055;
  * absolute world coordinates aimed at the origin. Launching the animal this
  * many seconds "upstream" puts it back on its mark when the shutter opens.
  */
-const REVIEW_LEAD = 3.2;
+const REVIEW_LEAD = 3.05;
 const STATE_BLEND = 0.55;
 
 const LIMB_SPECS = [
@@ -92,28 +92,23 @@ const LIMB_SPECS = [
  * `sit` is seeded from the anatomy agent's own review preset and then tuned
  * so the hind pasterns lie along the snow instead of hovering.
  */
+// Trunk only. Leg joints are deliberately absent: IK owns all four limbs in
+// every state, so a leg angle written here would be silently overwritten.
+// An earlier version authored the hind legs with `hindIK: 0` and measured the
+// hind paws floating 88 mm above the snow.
 const SIT_POSE = {
-  hips: [-19, 0, 0],
-  spine01: [5, 0, 0], spine02: [6, 0, 0], spine03: [6, 0, 0], spine04: [4, 0, 0],
-  thighL: [-58, 2, 0], thighR: [-58, -2, 0],
-  shinL: [80, 0, 0], shinR: [80, 0, 0],
-  hockL: [-46, 0, 0], hockR: [-46, 0, 0],
-  footL: [14, 0, 0], footR: [14, 0, 0],
-  toeL: [-6, 0, 0], toeR: [-6, 0, 0],
+  hips: [-21, 0, 0],
+  spine01: [6, 0, 0], spine02: [7, 0, 0], spine03: [7, 0, 0], spine04: [5, 0, 0],
+  neck01: [-5, 0, 0], neck02: [-6, 0, 0],
 };
 
+// Trunk only, same reason as SIT_POSE. The curl is spine yaw; the limbs fold
+// on their own once the body is low enough and IK holds the paws on the snow.
 const SLEEP_POSE = {
-  hips: [-6, 0, 0],
-  spine01: [3, 14, 0], spine02: [3, 16, 0], spine03: [2, 14, 0], spine04: [2, 10, 0],
+  hips: [-5, 0, 0],
+  spine01: [3, 15, 0], spine02: [3, 17, 0], spine03: [2, 15, 0], spine04: [2, 10, 0],
   chest: [0, 8, 0],
-  neck01: [16, 22, 0], neck02: [20, 20, 0], head: [16, 10, 4],
-  thighL: [-74, 4, 0], thighR: [-70, -4, 0],
-  shinL: [96, 0, 0], shinR: [92, 0, 0],
-  hockL: [-58, 0, 0], hockR: [-54, 0, 0],
-  footL: [24, 0, 0], footR: [22, 0, 0],
-  upperArmL: [28, 0, 0], upperArmR: [26, 0, 0],
-  lowerArmL: [-52, 0, 0], lowerArmR: [-50, 0, 0],
-  wristL: [40, 0, 0], wristR: [38, 0, 0],
+  neck01: [15, 23, 0], neck02: [19, 21, 0], head: [15, 10, 4],
 };
 
 const STATES = {
@@ -155,14 +150,14 @@ const STATES = {
     gait: 'idle', alert: 0.45, exert: 0.02, settled: 1,
     tailLift: -0.05, tailCurl: 0.55, tailStiff: 0.85,
     ears: { x: -0.035, y: 0.110, z: 0.020 },
-    drop: 0.055, look: 0.90, frontIK: 1, hindIK: 0,
+    drop: 0.100, look: 0.90, frontIK: 1, hindIK: 1,
     pose: SIT_POSE,
   },
   sleep: {
     gait: 'idle', alert: 0.02, exert: 0.00, settled: 1,
     tailLift: -0.55, tailCurl: 1.50, tailStiff: 0.55,
     ears: { x: 0.090, y: 0.020, z: 0.120 },
-    drop: 0.138, look: 0.05, frontIK: 0, hindIK: 0,
+    drop: 0.132, look: 0.05, frontIK: 1, hindIK: 1,
     pose: SLEEP_POSE,
   },
   pounce: {

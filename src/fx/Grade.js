@@ -131,7 +131,8 @@ export function makeGrade() {
 export function makeDebugBlit() {
   return new FxPass('fxDebug', /* glsl */ `
     uniform sampler2D tSrc;
-    uniform int uMode;      // 0 rgb, 1 red as grey, 2 alpha as grey, 3 |coc|
+    uniform sampler2D tRef;
+    uniform int uMode;   // 0 rgb, 1 red, 2 alpha, 3 signed CoC, 4 |src-ref|
     uniform float uScale;
     varying vec2 vUv;
     void main() {
@@ -140,10 +141,12 @@ export function makeDebugBlit() {
       if (uMode == 1) c = vec3(s.r * uScale);
       else if (uMode == 2) c = vec3(s.a * uScale);
       else if (uMode == 3) c = vec3(max(s.a, 0.0), max(-s.a, 0.0), 0.0) * uScale;
+      else if (uMode == 4) c = abs(s.rgb - texture2D(tRef, vUv).rgb) * uScale;
       gl_FragColor = vec4(fxLinearToSRGB(fxSafe(c)), 1.0);
     }
   `, {
     tSrc: { value: null },
+    tRef: { value: null },
     uMode: { value: 0 },
     uScale: { value: 1 },
   });

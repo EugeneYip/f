@@ -533,6 +533,7 @@ export class PostFX {
 
     // --- 6. depth of field --------------------------------------------------
     const focus = this._focus(ctx, depthTex);
+    this._preDofTex = colour;
     if (this.dof && !skip.dof) {
       const cocScale = DoF.cocScale(cam.fov, focus, cfg.dof, this.h >> 1);
       this._lastCocScale = cocScale;
@@ -689,6 +690,11 @@ export class PostFX {
 
   _debugBlit(mode, colour, depthTex) {
     const map = {
+      // What did DoF actually change, and where? Amplified 20x.
+      dofdelta: [colour, 4, 20, this._preDofTex],
+      dofnear: [this.dof?.rtNear.texture, 2, 1],
+      dofnearmax: [this.dof?.rtMaxB.texture, 1, 0.2],
+      doffar: [this.dof?.rtFar.texture, 0, 1],
       ao: [this.ao?.texture, 1, 1],
       bloom: [this.bloom?.texture, 0, 6],
       rays: [this.rays?.texture, 0, 3],
@@ -701,6 +707,7 @@ export class PostFX {
     this.blit.u.tSrc.value = entry[0];
     this.blit.u.uMode.value = entry[1];
     this.blit.u.uScale.value = entry[2];
+    this.blit.u.tRef.value = entry[3] ?? null;
     this.blit.render(this.renderer, null);
     return true;
   }

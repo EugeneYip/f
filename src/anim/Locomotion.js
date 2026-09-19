@@ -61,6 +61,9 @@ const H_CLEAR = 0.034;
 const U_LIFT = 0.17;
 const U_PLANT = 0.74;
 
+/** Hind contact planted this far caudal of its rest patch (metres). */
+const HIND_SET_BACK = -0.024;
+
 /**
  * Gait table. `speed` and `cycle` together define the stride; `duty` is the
  * stance fraction; `offsets` are the cycle phase at which each limb touches
@@ -343,7 +346,12 @@ export class Locomotion {
     const yaw = this.yaw + this.yawRate * lead;
     const c = Math.cos(yaw), s = Math.sin(yaw);
     const lx = rc.x * this.track;
-    const lz = rc.z;
+    // The rest pose puts the hind contact patch 27 mm CRANIAL of the hip
+    // joint, which stands the animal camped under itself. Planting a little
+    // further back squares the stance and brings the metatarsus upright,
+    // which is what makes the hock read as a hock. Hind limb reach is 268 mm
+    // against a 208 mm stand, so this costs nothing in the envelope.
+    const lz = rc.z + (f.limb.front ? 0 : HIND_SET_BACK);
     out.set(
       this.pos.x + this.vel.x * lead + (lx * c + lz * s),
       0,
