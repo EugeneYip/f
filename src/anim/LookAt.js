@@ -76,11 +76,15 @@ export class LookAt {
     // Banking the head into a big turn is very canid and costs one line.
     const tr = clamp(-ty * 0.22, -0.20, 0.20);
 
-    const om = 9 + 13 * saturate(sharp);
-    const z = 0.92 - 0.18 * saturate(sharp);
+    // ART_DIRECTION §8b. This is the most visible spring on the animal — it
+    // aims the skull — and it was the most under-damped: zeta fell to 0.74 at
+    // high alertness, so every saccade overshot and rang. At or just above
+    // critical, and stiffer, so a glance lands crisply instead of wobbling in.
+    const om = 15 + 16 * saturate(sharp);
+    const z = 1.06 - 0.05 * saturate(sharp);
     this.yaw = spring(this.yaw, ty, this.yawS, om, z, h);
     this.pitch = spring(this.pitch, tp, this.pitchS, om, z, h);
-    this.roll = spring(this.roll, tr, this.rollS, om * 0.8, 0.95, h);
+    this.roll = spring(this.roll, tr, this.rollS, om * 0.85, 1.02, h);
 
     this.gazeYaw = clamp(this.wantYaw - this.yaw, -0.55, 0.55);
     this.gazePitch = clamp(this.wantPitch - this.pitch, -0.42, 0.42);

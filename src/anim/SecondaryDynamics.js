@@ -166,8 +166,12 @@ export class SecondaryDynamics {
       const flick = inp[`earFlick${s}`] || 0;
       let px = tgt.x + clamp(-inp.headAccelZ * 0.010, -0.2, 0.2) + flick * 0.55;
       let py = tgt.y + clamp(inp.yawRate * 0.10, -0.18, 0.18);
+      // Shake gain trimmed after anatomy re-shaped the pinna: the ear is now
+      // 63.5 mm on its axis and stands 37 mm proud (was 27), so the same
+      // angle throws the tip ~37% further. Measured cumulative Z during a
+      // shake was 41 deg on the old gain.
       let pz = tgt.z + sgn * clamp(inp.accelX * 0.008, -0.12, 0.12)
-        + sgn * inp.shake * 0.85 * Math.sin(t * 52 + (s === 'L' ? 0 : 1.7));
+        + sgn * inp.shake * 0.55 * Math.sin(t * 52 + (s === 'L' ? 0 : 1.7));
       const ex0 = px, ey0 = py, ez0 = pz;
       for (let i = 0; i < EAR_N; i++) {
         const k = i === 0 ? 1 : 0.55;
