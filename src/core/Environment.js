@@ -108,12 +108,14 @@ export class Environment {
     this._iblApplied = hasIBL;
 
     if (hasIBL) {
-      // 0.85 rather than 1.0: the sky-only PMREM is bright at twilight and a
-      // full-strength handover flattened the animal. Final contrast belongs to
-      // the postfx grade, not to four competing light intensities -- this just
-      // removes the double-count so there is one knob to turn.
-      ctx.scene.environmentIntensity = 0.85;
-      this.hemi.intensity = 0.18;   // floor only; the IBL does the real work
+      // Set at the postfx agent's request, with their reasoning: the animal's
+      // key-to-fill ratio was under ~2 stops -- its lit and shade sides
+      // measured within a level or two of each other -- and a grade can set
+      // the black point and the shoulder but cannot put back separation that
+      // was never rendered. Lowering ambient is the correct fix; lifting
+      // contrast in the grade would only stretch noise.
+      ctx.scene.environmentIntensity = 0.70;
+      this.hemi.intensity = 0.10;   // floor only; the IBL does the real work
       this.rim.intensity = 0.22;    // IBL already wraps light round the far side
     } else {
       this.hemi.intensity = 1.25;
