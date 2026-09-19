@@ -100,17 +100,24 @@ export const LANDMARKS = {
   earR03: [0.0423, 0.3589, 0.1921],
   earR_tip: [0.0485, 0.3718, 0.1915],
 
-  // tail: carried low with a gentle continuous curve, tip clear of the snow
+  // Tail: the animal's TRUE skeletal rest — carried low with a gentle
+  // continuous curve, tip clear of the snow (§4b).
+  //
+  // Do NOT bake carriage compensation in here. Tail height is state-dependent
+  // (idle / alert / run all differ), so the gait engine owns it: src/anim
+  // applies a `tailLift` on top of this rest pose. A static offset here that
+  // cancels a dynamic one there is invisible to both owners and breaks the
+  // moment either side is retuned.
   tail01: [0, 0.2270, -0.2060],
   tail02: [0, 0.2130, -0.2390],
   tail03: [0, 0.1940, -0.2690],
   tail04: [0, 0.1710, -0.2950],
   tail05: [0, 0.1450, -0.3160],
   tail06: [0, 0.1175, -0.3320],
-  tail07: [0, 0.0850, -0.3470],
-  tail08: [0, 0.0630, -0.3580],
-  tail09: [0, 0.0430, -0.3670],
-  tail_tip: [0, 0.0280, -0.3740],
+  tail07: [0, 0.0900, -0.3470],
+  tail08: [0, 0.0700, -0.3580],
+  tail09: [0, 0.0520, -0.3670],
+  tail_tip: [0, 0.0370, -0.3740],
 
   shoulderR: [0.0430, 0.2330, 0.0590],
   upperArmR: [0.0478, 0.1841, 0.0843],
