@@ -179,3 +179,52 @@ damped and range-limited so the user cannot find a bad angle.
 - 60 fps at 1× DPR on an M-series Mac at `high`; graceful degradation to `medium`/`low`.
 - Adaptive resolution scaling before anything else is sacrificed.
 - Never block the main thread >16 ms after load. Build heavy geometry/textures progressively.
+
+## 4c. Correction to §4b — the head over-corrected into chunky
+
+**This section supersedes §4b on these two points. §4b remains binding on
+everything else.**
+
+When I wrote §4b from the client's reference photographs I over-stated the
+bluntness, and anatomy implemented what I wrote faithfully. The result reads
+**chunky and bear-like**, which is not what the photographs show. Re-reading
+them:
+
+### Ears: rounded triangles, NOT semicircular paddles
+§4b said "rounded almost to a semicircle". That is wrong. In every reference
+photograph the ear is a **triangle with a rounded tip** — clearly wider at the
+base and tapering upward to a soft point. It is small and thickly furred
+*relative to a red fox*, which is the real distinction; it is not a paddle.
+- Height should visibly exceed... roughly match base width, not be less than it.
+- The tip is **rounded, not flat** — a soft apex, not an arc.
+- Keep the wide-set, low, outward-leaning placement from §4b. That part was right.
+
+### Muzzle: short but genuinely tapering to a point
+§4b said "near cat-like" and a taper ratio near 1:1 was the result. Also wrong.
+The arctic fox muzzle is **short relative to a red fox, but it still tapers to
+a distinct point at the nose.** In the running photograph the wedge from cheek
+to nose is obvious. A taper around **1.4–1.6 : 1** is the target, not 1.23 : 1.
+- The nose pad sits at a **defined apex**, not on a blunt dome.
+- Shorten by all means; do not blunt.
+
+### The principle behind both
+"Short" and "blunt" are different axes and I conflated them. An arctic fox is
+a **short-faced, small-eared fox** — it is not a cat and it is not a bear. When
+the two readings conflict, preserve the **fox wedge**: a clear taper front-to-
+back on the skull and a clear taper base-to-tip on the ear.
+
+## 8b. Motion should not read as lag
+
+The secondary dynamics are currently visible **as lag** — the viewer notices
+the tail, ears and head trailing rather than reading them as mass. That is the
+failure mode of an under-damped or over-delayed spring chain, and it is worse
+than no secondary motion at all.
+
+- Follow-through should be **felt, not seen**. If a reviewer can point at a
+  part and say "that is lagging", it is wrong.
+- Raise damping toward critical and reduce the phase delay down each chain.
+  A 9-joint tail that accumulates delay per joint will read as rubber.
+- Anticipation matters as much as follow-through: real animals *lead* a turn
+  with the head, they do not only trail with the tail.
+- Prefer slightly stiff over slightly loose. Stiff reads as an alert animal;
+  loose reads as a broken rig.
