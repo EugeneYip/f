@@ -44,18 +44,20 @@ const MYS_ROWS = 5;
 const MYS_COLS = 5;
 const MYS_BACK = [0.0030, 0.0175];   // distance caudal of the nose anchor
 const MYS_AZ = [0.62, -0.52];        // azimuth about the muzzle axis, dorsal +
-const MYS_LEN = [0.030, 0.082];      // rostro-ventral shortest, caudo-dorsal longest
+// §4b wants them "well past the cheek line", which on this skull is ~40 mm —
+// not the 82 mm that rendered as a starburst reaching past the whole head.
+const MYS_LEN = [0.021, 0.054];      // rostro-ventral shortest, caudo-dorsal longest
 
 const BROW_N = 4;
-const BROW_LEN = [0.018, 0.031];
+const BROW_LEN = [0.013, 0.022];
 
 const GENAL_N = 3;                   // a few on the cheek behind the pad
-const GENAL_LEN = [0.030, 0.048];
+const GENAL_LEN = [0.022, 0.034];
 
-const THICK_ROOT = 0.000150;         // 0.15 mm at the follicle — a real vibrissa
-const THICK_TIP = 0.000030;
+const THICK_ROOT = 0.000105;         // 0.105 mm at the follicle — a real vibrissa
+const THICK_TIP = 0.000016;
 
-const MIN_PX = 1.35;                 // screen-space width floor
+const MIN_PX = 1.10;                 // screen-space width floor
 
 const WHISKER_GLSL = /* glsl */ `
 // Prefixed fw* — this is a standalone program, but the convention is shared
@@ -179,8 +181,8 @@ export class Whiskers {
       // Mystacial and genal whiskers droop under their own weight; the
       // superciliary row arcs UP and back over the brow instead (droop < 0),
       // which is both correct and stops them sagging across the eye.
-      const cv = back.clone().multiplyScalar(0.30 + 0.22 * rand())
-        .addScaledVector(U, -(0.16 + 0.20 * rand()) * droop);
+      const cv = back.clone().multiplyScalar(0.46 + 0.28 * rand())
+        .addScaledVector(U, -(0.24 + 0.26 * rand()) * droop);
       const cvMag = cv.length() * len;
       const curve = cv.transformDirection(rotToBone).multiplyScalar(cvMag);
 
@@ -290,7 +292,7 @@ export class Whiskers {
         if (tg.lengthSq() < 1e-12) tg.copy(s.dir);
         tg.normalize();
         // Taper: a vibrissa is a smooth cone, thinning fast near the tip.
-        const w = lerp(THICK_ROOT, THICK_TIP, Math.pow(t, 0.75)) * 0.5;
+        const w = lerp(THICK_ROOT, THICK_TIP, Math.pow(t, 0.55)) * 0.5;
         for (const sd of [-1, 1]) {
           position[v * 3] = p.x; position[v * 3 + 1] = p.y; position[v * 3 + 2] = p.z;
           tangent[v * 3] = tg.x; tangent[v * 3 + 1] = tg.y; tangent[v * 3 + 2] = tg.z;
@@ -423,7 +425,7 @@ void main(){
   // Kajiya-Kay diffuse for a cylinder is sin(T,L); there is no N to dot.
   vec3 amb = (uSkyCol * 0.5 + uBounce * 0.5);
   vec3 col = uTint * (amb + uSunCol * uSunInt * sinTL * 0.16);
-  col += uSunCol * uSunInt * spec * 0.40;
+  col += uSunCol * uSunInt * spec * 0.30;
   col += uSunCol * uSunInt * trans * 0.13;
 
   gl_FragColor = vec4(col, alpha * uOpacity);

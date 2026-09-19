@@ -146,25 +146,76 @@ function buildNose(w, h, d, n, baseAt) {
   return g;
 }
 
-/** A shallow dished cup for the pinna interior. */
-function buildConcha(rx, ry, depth, n = 26) {
+/**
+ * Build the pinna interior as a thin shell fitted to the MEASURED inner
+ * surface of the ear, rather than an ellipsoid authored to fixed dimensions.
+ *
+ * The previous version was a cup sized off the ear's length with a guessed
+ * facing direction. When §4c reshaped the ears from semicircular paddles into
+ * tapering triangles, the cup no longer fitted inside the new outline and its
+ * 10 mm of depth pushed a flesh-coloured ellipsoid out through the BACK of the
+ * far ear — a bald growth on the side of the head, and the first thing a
+ * viewer's eye landed on.
+ *
+ * So nothing here is authored. Each row of the shell binary-searches outward
+ * along the pinna until the ray stops hitting the plate, which recovers the
+ * true silhouette whatever shape the ear currently is; the row is then inset
+ * inside that edge and the vertex sits a third of a millimetre proud of the
+ * skin it just measured. A shell that is by construction inside the outline
+ * and flush to the surface cannot protrude at any viewing angle, and it
+ * re-measures itself the next time the ear moves.
+ *
+ * `probe(t, s, out)` returns true and writes the surface point when (t, s)
+ * lands on the pinna. Returns null when the ear could not be measured at all.
+ */
+function buildConchaFitted(probe, len, rows, cols, opts) {
+  const T0 = opts.t0, T1 = opts.t1, INSET = opts.inset, PROUD = opts.proud;
+  const h = new THREE.Vector3();
+
+  // Widest offset either side of the bone axis that still lands on the plate.
+  const edge = (t, dir) => {
+    if (!probe(t, 0, h)) return 0;
+    let lo = 0, hi = opts.maxHalf;
+    for (let k = 1; k <= 10; k++) {              // expand
+      const s = (k / 10) * opts.maxHalf;
+      if (probe(t, s * dir, h)) lo = s; else { hi = s; break; }
+    }
+    for (let k = 0; k < 6; k++) {                // refine
+      const m = 0.5 * (lo + hi);
+      if (probe(t, m * dir, h)) lo = m; else hi = m;
+    }
+    return lo;
+  };
+
+  const band = [];
+  let any = false;
+  for (let j = 0; j <= rows; j++) {
+    const t = lerp(T0, T1, j / rows);
+    const ep = edge(t, 1) * INSET;
+    const en = edge(t, -1) * INSET;
+    const ok = ep + en > 0.003;
+    if (ok) any = true;
+    band.push({ t, ep, en, ok });
+  }
+  if (!any) return null;
+
   const pos = [], uvs = [], idx = [];
-  for (let j = 0; j <= n; j++) {
-    for (let i = 0; i <= n; i++) {
-      const sx = (i / n) * 2 - 1, sy = (j / n) * 2 - 1;
-      const ux = sx * Math.sqrt(Math.max(0, 1 - 0.5 * sy * sy));
-      const uy = sy * Math.sqrt(Math.max(0, 1 - 0.5 * sx * sx));
-      const r2 = clamp(ux * ux + uy * uy, 0, 1);
-      // Concave: deepest at the base of the cup, opening toward the tip.
-      const z = -depth * Math.pow(Math.max(0, 1 - r2), 0.85) *
-        (0.55 + 0.45 * saturate(0.5 - uy * 0.5));
-      pos.push(ux * rx, uy * ry, z);
-      uvs.push(ux, uy);
+  for (let j = 0; j <= rows; j++) {
+    const r = band[j];
+    for (let i = 0; i <= cols; i++) {
+      const u = (i / cols) * 2 - 1;
+      const s = u >= 0 ? u * r.ep : u * r.en;
+      // A row that missed collapses to zero width: its quads degenerate and
+      // draw nothing, which is what we want at the rounded tip.
+      if (r.ok && probe(r.t, s, h)) pos.push(h.x, h.y, h.z);
+      else if (probe(r.t, 0, h)) pos.push(h.x, h.y, h.z);
+      else { probe(T0, 0, h); pos.push(h.x, h.y, h.z); }
+      uvs.push(u, (j / rows) * 2 - 1);
     }
   }
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      const a = j * (n + 1) + i, b = a + 1, c = a + (n + 1), e = c + 1;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const a = j * (cols + 1) + i, b = a + 1, c = a + (cols + 1), e = c + 1;
       idx.push(a, b, c, b, e, c);
     }
   }
@@ -173,6 +224,7 @@ function buildConcha(rx, ry, depth, n = 26) {
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
+  g.userData.proud = PROUD;
   return g;
 }
 
@@ -360,8 +412,8 @@ export class FaceDetail {
       // with the key behind the animal, the sky and the snow bounce are what
       // actually make a nose look wet.
       clearcoat: 1.0,
-      clearcoatRoughness: 0.09,
-      envMapIntensity: 1.0,
+      clearcoatRoughness: 0.045,
+      envMapIntensity: 0.45,
     });
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.u);
@@ -516,51 +568,108 @@ export class FaceDetail {
    */
   _buildEars(ctx, segs) {
     const fox = ctx.fox;
+    const f = fox.field;
+    if (!f?.raycast) return;
+    const PROUD = 0.00035;      // how far the shell floats off the inner skin
+
     for (const side of ['L', 'R']) {
-      const tip = fox.anchors?.[`earTip${side}`];
       const b1 = fox.bone?.(`ear${side}01`);
-      const b3 = fox.bone?.(`ear${side}03`);
-      if (!tip || !b1 || !b3) continue;
+      const tipA = fox.anchors?.[`earTip${side}`];
+      if (!b1 || !tipA) continue;
+      const base = this._bindPos(fox, b1);
+      const tip = this._bindPos(fox, tipA);
+      if (!base || !tip) continue;
 
-      b1.updateWorldMatrix(true, false);
-      b3.updateWorldMatrix(true, false);
-      tip.updateWorldMatrix(true, false);
-      const pBase = new THREE.Vector3().setFromMatrixPosition(b1.matrixWorld);
-      const pTip = new THREE.Vector3().setFromMatrixPosition(tip.matrixWorld);
-      const len = pBase.distanceTo(pTip);
-      if (!(len > 1e-4)) continue;
+      const up = new THREE.Vector3().subVectors(tip, base);
+      const len = up.length();
+      if (!(len > 1e-3)) continue;
+      up.divideScalar(len);
 
-      // The pinna opens forward and inward; take "up the ear" from the bone
-      // chain and "out of the concha" as the component facing the midline.
-      const upEar = new THREE.Vector3().subVectors(pTip, pBase).normalize();
-      const inward = new THREE.Vector3(side === 'L' ? 1 : -1, 0, 0.62).normalize();
-      const faceDir = inward.projectOnPlane(upEar).normalize();
-      if (!Number.isFinite(faceDir.x) || faceDir.lengthSq() < 1e-6) continue;
+      // --- which way does the concha face? Measured, not guessed ---------
+      // Take a point INSIDE the upper pinna and read the SDF gradient there.
+      // Inside a thin plate the gradient points at the nearest face, so it IS
+      // the plate normal — no guessing, and it tracks any reshape for free.
+      //
+      // The previous attempt marched outward from mid-pinna and took the
+      // normal where it exited. That failed silently after §4c: the ear bone's
+      // origin sits INSIDE the cranium, so the lower half of the base->tip
+      // axis is buried in the skull and the ray exited through the dome,
+      // handing back the dome's normal. Every probe then hit the skull, every
+      // row was rejected, and both conchas quietly built nothing.
+      const inside = base.clone().addScaledVector(up, 0.70 * len);
+      const arr = [0, 0, 0];
+      if (!f.normal) continue;
+      f.normal(inside.x, inside.y, inside.z, 3e-4, arr);
+      const face = new THREE.Vector3().fromArray(arr);
+      if (face.lengthSq() < 1e-10) continue;
+      face.normalize();
+      // The gradient gives the plate normal up to sign; the concha is the face
+      // that looks forward and a little laterally outward.
+      const outward = new THREE.Vector3(side === 'L' ? -0.30 : 0.30, 0.10, 1).normalize();
+      if (face.dot(outward) < 0) face.negate();
+      face.projectOnPlane(up);
+      if (face.lengthSq() < 1e-8) continue;
+      face.normalize();
 
-      const cup = new THREE.Mesh(
-        buildConcha(len * 0.34, len * 0.46, len * 0.20, segs),
-        this._earMaterial(),
-      );
+      const sideV = new THREE.Vector3().crossVectors(up, face);
+      if (sideV.lengthSq() < 1e-8) continue;
+      sideV.normalize();
+      const upO = new THREE.Vector3().crossVectors(face, sideV).normalize();
+
+      // --- probe: does (t along the ear, s across it) land on the pinna? --
+      const q = new THREE.Vector3(), o = new THREE.Vector3();
+      const probe = (t, sOff, out) => {
+        q.copy(base).addScaledVector(upO, t * len).addScaledVector(sideV, sOff);
+        o.copy(q).addScaledVector(face, 0.040);
+        const d = f.raycast(o.x, o.y, o.z, -face.x, -face.y, -face.z, 0.085);
+        if (!(d > 0)) return false;
+        out.copy(o).addScaledVector(face, -d);
+        // Anything much further out than the plate's own half-thickness is a
+        // different surface (the skull behind, or a miss past the rim).
+        const off = out.clone().sub(q).dot(face);
+        if (off < -0.002 || off > 0.020) return false;
+        out.addScaledVector(face, PROUD);
+        return true;
+      };
+
+      const g = buildConchaFitted(probe, len, segs, Math.max(6, segs - 4), {
+        t0: 0.18, t1: 0.93, inset: 0.82, proud: PROUD, maxHalf: 0.045,
+      });
+      if (!g) continue;                       // ear not measurable; draw nothing
+
+      // Bind space -> ear01's local frame, then ride the bone.
+      const bones = fox.skeleton?.bones;
+      const bi = bones ? bones.indexOf(b1) : -1;
+      const inv = bi >= 0 ? fox.skeleton.boneInverses?.[bi] : null;
+      if (!inv) { g.dispose(); continue; }
+      g.applyMatrix4(inv);
+      g.computeVertexNormals();
+
+      const cup = new THREE.Mesh(g, this._earMaterial());
       cup.name = `foxConcha${side}`;
       cup.castShadow = false;
-
-      // Place it in the middle of the pinna, in b3's local frame.
-      const mid = new THREE.Vector3().copy(pBase).addScaledVector(upEar, len * 0.52);
-      mid.addScaledVector(faceDir, len * 0.055);
-      b3.worldToLocal(mid);
-      cup.position.copy(mid);
-
-      const rot = new THREE.Matrix4().extractRotation(b3.matrixWorld).invert();
-      const zAxis = faceDir.clone().transformDirection(rot).normalize();
-      const yAxis = upEar.clone().transformDirection(rot).normalize();
-      const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
-      yAxis.crossVectors(zAxis, xAxis).normalize();
-      cup.quaternion.setFromRotationMatrix(
-        new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
-
-      b3.add(cup);
+      cup.receiveShadow = true;
+      b1.add(cup);
       this.parts.push(cup);
     }
+  }
+
+  /** Bind-pose position, in the skinned mesh's object space, of a bone or of
+   *  an Object3D parented to one. */
+  _bindPos(fox, obj) {
+    const sk = fox.skeleton;
+    const bones = sk?.bones;
+    if (!bones) return null;
+    const isBone = !!obj.isBone;
+    const bone = isBone ? obj : obj.parent;
+    const bi = bones.indexOf(bone);
+    const inv = bi >= 0 ? sk.boneInverses?.[bi] : null;
+    if (!inv) return null;
+    const bind = new THREE.Matrix4().copy(inv).invert();
+    const p = new THREE.Vector3();
+    if (isBone) p.setFromMatrixPosition(bind);
+    else p.copy(obj.position).applyMatrix4(bind);
+    return p;
   }
 
   /**
@@ -591,12 +700,20 @@ export class FaceDetail {
         sh.fragmentShader
           .replace('#include <map_fragment>', /* glsl */ `
   float fdRr = length(vEarUv);
-  // Fine hair running up out of the concha.
+  // Fine hair running up out of the concha. The pinna interior is furred, not
+  // bare skin, so the hair is what should dominate the read.
   float fdHair = snoise(vec3(vEarUv.x * 40.0, vEarUv.y * 9.0, 2.0)) * 0.5 + 0.5;
-  vec3 fdCol = mix(uEarSkin, uEarRim, smoothstep(0.35, 1.0, fdRr));
-  fdCol *= mix(0.86, 1.10, fdHair);
-  // Deep in the cup it is shadowed; that depth is what reads as an ear.
-  fdCol *= mix(0.42, 1.0, smoothstep(0.0, 0.75, fdRr));
+  float fdHair2 = snoise(vec3(vEarUv.x * 96.0, vEarUv.y * 21.0, 7.0)) * 0.5 + 0.5;
+  // Faint warmth only in the bottom of the bowl; white fur everywhere else.
+  vec3 fdCol = mix(uEarSkin, uEarRim, smoothstep(0.10, 0.62, fdRr));
+  fdCol *= mix(0.88, 1.08, fdHair * 0.65 + fdHair2 * 0.35);
+  // Depth without saturation. The bowl of the ear is in shade, and rubric C
+  // is explicit that white fur in shade goes BLUE, not merely darker — so the
+  // interior reads as a real furred cup rather than a flat cutout, while the
+  // only warm value on the animal stays confined to transmitted light.
+  float fdDeep = 1.0 - smoothstep(0.0, 0.80, fdRr);
+  fdCol = mix(fdCol, fdCol * vec3(0.70, 0.79, 0.96), fdDeep * 0.88);
+  fdCol *= mix(0.50, 1.0, smoothstep(0.0, 0.82, fdRr));
   diffuseColor.rgb = fdCol;
 `)
           .replace('#include <lights_fragment_end>', /* glsl */ `
@@ -606,7 +723,11 @@ export class FaceDetail {
   // where we are looking toward the sun.
   float fdBack = fdSat(dot(-vEarWN, normalize(uSunL)));
   float fdThin = smoothstep(0.30, 1.0, length(vEarUv));
-  reflectedLight.directDiffuse += uEarRim * pow(fdBack, 2.2) * fdThin * 1.9;
+  // Transmitted light is the one place a warm tint is physically right: it
+  // has passed through tissue. Keep it dim so it only shows when genuinely
+  // backlit, and never tints the ear in ambient.
+  reflectedLight.directDiffuse += mix(uEarRim, uEarSkin, 0.75) *
+    pow(fdBack, 2.4) * fdThin * 1.15;
 `);
     };
     m.customProgramCacheKey = () => 'foxConchaMat';
@@ -620,8 +741,14 @@ export class FaceDetail {
       // takes a shadow and never crushes (non-negotiable #3).
       uNoseCol: { value: new THREE.Color(0x1f232b) },
       uNostrilCol: { value: new THREE.Color(0x05060a) },
-      uEarSkin: { value: new THREE.Color(0xd9cfc4) },
-      uEarRim: { value: new THREE.Color(0xe8b48c) },
+      // §4b forbids any warm cast on this animal, and the inner ear is the
+      // one place a little is legitimate — but only a little. A real arctic
+      // fox pinna is densely furred and reads nearly white, with faint warmth
+      // only deep in the bowl. uEarSkin is that deep tint; uEarRim is the
+      // furred outer field. The previous pair (#d9cfc4 -> #e8b48c) put the
+      // SATURATED value on the rim, which rendered the ear as orange plastic.
+      uEarSkin: { value: new THREE.Color(0xc9b8ae) },
+      uEarRim: { value: new THREE.Color(0xeef1f5) },
       uLipCol: { value: new THREE.Color(0x100d0e) },
       uSunL: { value: new THREE.Vector3().copy(ctx.sunDirection) },
       uCamL: { value: new THREE.Vector3() },
