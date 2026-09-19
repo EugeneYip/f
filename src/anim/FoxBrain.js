@@ -59,7 +59,7 @@ const FOOT_SPLAY = 0.045;
  */
 const CLAMP_ON = 0.032;
 /** Lower bound on airborne limb extension — stops the elbow folding shut. */
-const MIN_EXT = 0.30;
+const MIN_EXT = 0.42;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
 const MAX_REACH_DROP = 0.055;
 /**
@@ -705,7 +705,11 @@ export class FoxBrain {
       const want = D > maxR ? maxR : D < minR ? minR : 0;
       if (!want) continue;
       const k = want / D;
-      f._A.set(_v.x + dx * k, _v.y + dy * k, _v.z + dz * k);
+      // Never push a paw DOWN. The min case scales the hip→ankle vector up,
+      // and that vector points mostly at the ground, so an unguarded clamp
+      // would drive a swinging paw through the snow to open the stifle. The
+      // max case only ever raises Y, so this guard is a no-op there.
+      f._A.set(_v.x + dx * k, Math.max(_v.y + dy * k, f._A.y), _v.z + dz * k);
     }
 
     // 3. solve

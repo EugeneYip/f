@@ -208,6 +208,10 @@ const main = async () => {
         // one), which hung roughly 1 run in 3. We already own determinism:
         // the render loop is paused and we drive frames by hand.
         await shotWithRetry(page, file);
+        if (info.renderFrameDropped) {
+          consoleErrors.push(`renderFrame from [${info.renderFrameClaimed.join(', ')}] ` +
+            'threw and was disabled — this frame is an UNPOST-PROCESSED fallback');
+        }
         report.poses[name] = { ok: true, ms: Date.now() - t0, ...info };
         console.log(`[shoot] ${name.padEnd(12)} ${info.drawCalls} calls, ${(info.triangles / 1000).toFixed(0)}k tris`);
       } catch (e) {

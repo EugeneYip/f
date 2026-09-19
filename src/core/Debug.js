@@ -182,7 +182,16 @@ export class Debug {
 
       stats: () => {
         const i = ctx.renderer.info;
+        // A system whose renderFrame throws is dropped permanently for the
+        // session, but it still exists and still declares renderFrame -- so
+        // "does a postfx system exist" is NOT the same question as "is post
+        // actually running". Report both; the fur agent was misled by exactly
+        // this and tuned against an unresolved dither.
+        const claimants = ctx.app.systems.filter((s) => s.renderFrame);
         return {
+          renderFrameClaimed: claimants.map((s) => s.name),
+          renderFrameActive: ctx.app._renderer ? ctx.app._renderer.name : null,
+          renderFrameDropped: claimants.length > 0 && !ctx.app._renderer,
           fps: +ctx.quality.fps.toFixed(1),
           frameMs: +ctx.quality.avgFrameMs.toFixed(2),
           tier: ctx.quality.tier,

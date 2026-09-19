@@ -95,7 +95,7 @@ export const GAITS = {
   run: {
     speed: 1.30, cycle: 0.345, duty: 0.325,
     offsets: { RL: 0, RR: 0.095, FR: 0.44, FL: 0.535 },
-    lift: 0.080, drop: 0.038, track: 0.60, sink: 0.015, uLift: 0.11, uPlant: 0.86,
+    lift: 0.070, drop: 0.038, track: 0.60, sink: 0.015, uLift: 0.11, uPlant: 0.86,
     press: 0.30, bob: 0.015, bobBeats: 1, sway: 0.004, pitch: -2.6,
     scapula: 24, spineFlex: 6.0, yawSway: 0.5,
   },

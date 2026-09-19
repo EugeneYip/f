@@ -223,6 +223,10 @@ const main = async () => {
         `${(p.triangles / 1e6).toFixed(2)}M tris`, 'warn');
     }
 
+    const rf = await page.evaluate(() => window.FoxDebug.stats());
+    record('post-processing actually running', !rf.renderFrameDropped,
+      `claimed by [${(rf.renderFrameClaimed || []).join(', ')}], active: ${rf.renderFrameActive}`);
+
     report.materials = await page.evaluate(() => window.FoxDebug.materials());
 
     // --- 6. console hygiene ----------------------------------------------
