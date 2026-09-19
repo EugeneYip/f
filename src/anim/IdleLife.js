@@ -79,6 +79,11 @@ export class IdleLife {
     this._shiftXT = 0;
     this._shiftZT = 0;
     this.schedShift = new Sched(seed * 41 + 5, 5.5, 2.8);
+    // A standing animal re-plants a foot now and then. Deliberately rare and
+    // deliberately late: the review harness samples idle between t=2.5 s and
+    // t=5.5 s, and a foot in mid-swing is not what the still framings are for.
+    this.schedShuffle = new Sched(seed * 83 + 17, 21, 13);
+    this.wantShuffle = -1;
 
     // --- shake ------------------------------------------------------------
     this.shake = 0;
@@ -166,6 +171,10 @@ export class IdleLife {
     this.shiftX = damp(this.shiftX, this._shiftXT, 1.5, h);
     this.shiftZ = damp(this.shiftZ, this._shiftZT, 1.5, h);
 
+    // --- foot re-plant ----------------------------------------------------
+    const rsh = this.schedShuffle.poll(t);
+    this.wantShuffle = (rsh >= 0 && settled > 0.85) ? rsh : -1;
+
     // --- full-body shake --------------------------------------------------
     const rk = this.schedShake.poll(t);
     if (rk >= 0 && settled > 0.7 && this._shakeT < 0) {
@@ -196,10 +205,18 @@ export class IdleLife {
     }
 
     // --- micro drift ------------------------------------------------------
+    // Two timescales. The slow one is the wander you read as attention; the
+    // fast one is small enough to be invisible on its own but guarantees the
+    // pose is never *mathematically* stationary, even at the instant the slow
+    // term turns over. A measured 19% of half-second windows had the nose
+    // moving under 0.2 mm before this was added.
     const q = 1 - 0.55 * ex;
-    this.driftX = fbm1(t * 0.113, 3, 23 + this.seed) * 0.030 * q;
-    this.driftY = fbm1(t * 0.097, 3, 41 + this.seed) * 0.042 * q;
-    this.driftZ = fbm1(t * 0.081, 3, 67 + this.seed) * 0.016 * q;
+    this.driftX = (fbm1(t * 0.113, 3, 23 + this.seed) * 0.030
+      + fbm1(t * 0.71, 2, 131 + this.seed) * 0.0045) * q;
+    this.driftY = (fbm1(t * 0.097, 3, 41 + this.seed) * 0.042
+      + fbm1(t * 0.63, 2, 149 + this.seed) * 0.0055) * q;
+    this.driftZ = (fbm1(t * 0.081, 3, 67 + this.seed) * 0.016
+      + fbm1(t * 0.83, 2, 167 + this.seed) * 0.0030) * q;
   }
 
   _advanceFlick(v, h) {

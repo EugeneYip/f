@@ -506,8 +506,14 @@ export class FoxBrain {
 
   _maybeShuffle() {
     if (!this.loco.frozen) return;
+    // Either the stance has drifted out from under the animal, or the idle
+    // scheduler has simply decided it is time to shift weight. One foot only.
     const w = this.loco.worstPlacement();
-    if (w && w.dist > 0.042) this.loco.requestShuffle(w.foot.key);
+    if (w && w.dist > 0.042) { this.loco.requestShuffle(w.foot.key); return; }
+    const r = this.life.wantShuffle;
+    if (r < 0) return;
+    const keys = ['RL', 'FL', 'RR', 'FR'];
+    this.loco.requestShuffle(keys[Math.min(3, (r * 4) | 0)]);
   }
 
   _fillSecInput() {
@@ -582,11 +588,12 @@ export class FoxBrain {
     // Chest rise, counter-lifted humeri so the front feet are not dragged up
     // (the IK would absorb it anyway, but this keeps the shoulder angle sane).
     const br = life.breathCurve() * life.breathAmp;
-    rig.add('spine03', 0.0052 * br, 0, 0);
-    rig.add('spine04', -0.0038 * br, 0, 0);
-    rig.add('spine02', 0.0022 * br, 0, 0);
-    rig.add('chest', 0.0030 * br, 0, 0);
-    rig.offset('spine03', 0, 0.0021 * br, 0);
+    rig.add('spine03', 0.0079 * br, 0, 0);
+    rig.add('spine04', -0.0058 * br, 0, 0);
+    rig.add('spine02', 0.0034 * br, 0, 0);
+    rig.add('chest', 0.0046 * br, 0, 0);
+    rig.offset('spine03', 0, 0.0034 * br, 0);
+    rig.offset('chest', 0, 0.0016 * br, 0);
     // Nostril flare / jaw float on the breath, plus the yawn.
     const yawn = life.yawn;
     rig.add('jaw', 0.012 * Math.max(0, br) + yawn * 0.62, 0, 0);

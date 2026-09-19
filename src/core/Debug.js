@@ -21,10 +21,10 @@ export const POSES = {
   hero:        { pos: [0.904, 0.316, 0.854], target: [0.100, 0.190, 0.020], fov: 40, focus: 1.25 },
 
   // Head fills ~70% of frame height. Long-ish lens to stay flattering.
-  portrait:    { pos: [0.379, 0.325, 0.585], target: [0.015, 0.285, 0.175], fov: 26, focus: 0.55 },
+  portrait:    { anchor: 'head', dir: [0.661, 0.072, 0.746], dist: 0.55, fov: 26 },
 
   // Extreme close on the RIGHT eye — iris parallax, corneal highlight, lids, lashes.
-  macro_eye:   { pos: [0.107, 0.302, 0.302], target: [0.029, 0.281, 0.200], fov: 18, focus: 0.13 },
+  macro_eye:   { anchor: 'eyeR', dir: [0.600, 0.161, 0.784], dist: 0.13, fov: 18 },
 
   // Camera looks almost straight into the sun with the fox between: the
   // definitive fur test for rim translucency and silhouette break-up.
@@ -49,8 +49,61 @@ export const POSES = {
   terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70 },
 
   // Behind and above the head: ruff depth and ear interior.
-  nape:        { pos: [-0.231, 0.529, -0.299], target: [0.000, 0.282, 0.135], fov: 34, focus: 0.55 },
+  nape:        { anchor: 'head', dir: [-0.419, 0.449, -0.789], dist: 0.55, fov: 34 },
 };
+
+/**
+ * Resolve an anchor-relative pose against the live rig.
+ *
+ * Head framings were breaking every time the anatomy changed: the skull has
+ * moved three times now (down 34 mm, back 22 mm, down another 7 mm, scaled
+ * 1.10 then 1.18), and each time `portrait` and `macro_eye` silently framed
+ * empty space or the back of the neck. A pose that misses its subject wastes
+ * a whole review round before anyone notices.
+ *
+ * So these poses are authored as a DIRECTION and a DISTANCE from a named
+ * anchor, and resolve against wherever that anchor actually is. Body framings
+ * stay absolute — they want a fixed relationship to the horizon and the sun,
+ * not to the animal.
+ */
+function resolvePose(pose, ctx) {
+  if (!pose.anchor) return pose;
+  const fox = ctx.fox;
+  const t = new THREE.Vector3();
+  let found = false;
+
+  if (fox) {
+    const a = fox.anchors?.[pose.anchor];
+    if (a) {
+      a.updateWorldMatrix(true, false);
+      t.setFromMatrixPosition(a.matrixWorld);
+      found = true;
+    } else if (fox.bone?.(pose.anchor)) {
+      const b = fox.bone(pose.anchor);
+      b.updateWorldMatrix(true, false);
+      t.setFromMatrixPosition(b.matrixWorld);
+      found = true;
+    } else if (pose.anchor === 'head' && fox.anchors?.eyeL && fox.anchors?.eyeR) {
+      // Midpoint of the eyes, nudged back into the skull.
+      const l = new THREE.Vector3(), r = new THREE.Vector3();
+      fox.anchors.eyeL.updateWorldMatrix(true, false);
+      fox.anchors.eyeR.updateWorldMatrix(true, false);
+      l.setFromMatrixPosition(fox.anchors.eyeL.matrixWorld);
+      r.setFromMatrixPosition(fox.anchors.eyeR.matrixWorld);
+      t.addVectors(l, r).multiplyScalar(0.5);
+      found = true;
+    }
+  }
+  if (!found) {
+    console.warn(`[debug] pose anchor "${pose.anchor}" not found; using origin`);
+    t.set(0, 0.28, 0.17);
+  }
+  if (pose.offset) t.add(new THREE.Vector3().fromArray(pose.offset));
+
+  const dir = new THREE.Vector3().fromArray(pose.dir).normalize();
+  const pos = t.clone().addScaledVector(dir, pose.dist);
+  return { pos: pos.toArray(), target: t.toArray(), fov: pose.fov, focus: pose.focus ?? pose.dist };
+}
 
 export class Debug {
   name = 'debug';
@@ -84,8 +137,9 @@ export class Debug {
       render: () => ctx.app.render(),
 
       setPose: (p) => {
-        const pose = typeof p === 'string' ? POSES[p] : p;
+        let pose = typeof p === 'string' ? POSES[p] : p;
         if (!pose) throw new Error(`Unknown pose: ${p}`);
+        pose = resolvePose(pose, ctx);
         const rig = ctx.systemsByName.get('cameraRig');
         if (rig?.applyPose) { rig.applyPose(pose, ctx); }
         else {
