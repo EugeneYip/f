@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyAdaptiveFov } from './App.js';
 
 /**
  * The review harness contract.
@@ -145,7 +146,14 @@ export class Debug {
         else {
           ctx.camera.position.fromArray(pose.pos);
           ctx.camera.lookAt(new THREE.Vector3().fromArray(pose.target));
-          if (pose.fov) { ctx.camera.fov = pose.fov; ctx.camera.updateProjectionMatrix(); }
+        }
+        // Apply AFTER the rig, not instead of it. The rig sets the authored
+        // vertical fov, which on a narrow viewport collapses the horizontal
+        // field and crops the subject out of frame -- this reinstates the
+        // intended horizontal field for whatever aspect we are actually at.
+        if (pose.fov) {
+          ctx.baseFov = pose.fov;
+          applyAdaptiveFov(ctx.camera, pose.fov, ctx.camera.aspect);
         }
         if (pose.focus) ctx.focusDistance = pose.focus;
         ctx.camera.updateMatrixWorld(true);
@@ -191,20 +199,42 @@ export class Debug {
         ctx.sunDirty = true;
       },
 
-      /** Numeric probes for tools/audit.mjs — see REVIEW.md category E/H. */
+      /**
+       * Numeric probes for tools/audit.mjs.
+       *
+       * CRITICAL: report the SKELETON BONE world position, not the anchor.
+       * The anchors are IK targets — during stance their world x/z are pinned
+       * by construction, identical to five decimal places frame after frame,
+       * while the rendered bone drifts. Measuring the anchor therefore
+       * reported foot slide of exactly 0.0000 m/s for every paw in every
+       * state, which is not a passing grade, it is a broken instrument.
+       * Found by the review critic; the bug had been silently validating the
+       * gait engine for several rounds.
+       */
       probe: () => {
         const f = ctx.fox;
-        const out = { t: +ctx.time.toFixed(4), paws: {}, ground: {}, root: null };
+        const out = { t: +ctx.time.toFixed(4), paws: {}, targets: {}, ground: {}, root: null };
         if (!f) return out;
         f.root?.updateWorldMatrix?.(true, true);
-        out.root = f.root ? f.root.position.toArray() : null;
+        out.root = f.root ? f.root.position.toArray().map((n) => +n.toFixed(6)) : null;
         const v = new THREE.Vector3();
-        for (const k of ['pawFL', 'pawFR', 'pawRL', 'pawRR']) {
-          const a = f.anchors?.[k];
-          if (!a) continue;
-          a.updateWorldMatrix(true, false);
-          out.paws[k] = v.setFromMatrixPosition(a.matrixWorld).toArray().map((n) => +n.toFixed(6));
-          out.ground[k] = +(ctx.terrain?.heightAt?.(out.paws[k][0], out.paws[k][2]) ?? 0).toFixed(6);
+
+        // Front feet ride `paw*`; hind feet ride `foot*` (the metatarsus ends
+        // at the hock, so the hind ground contact is one bone further down).
+        const BONES = { pawFL: 'pawL', pawFR: 'pawR', pawRL: 'footL', pawRR: 'footR' };
+        for (const [key, boneName] of Object.entries(BONES)) {
+          const b = f.bone?.(boneName);
+          if (b) {
+            b.updateWorldMatrix(true, false);
+            out.paws[key] = v.setFromMatrixPosition(b.matrixWorld).toArray().map((n) => +n.toFixed(6));
+            out.ground[key] = +(ctx.terrain?.heightAt?.(out.paws[key][0], out.paws[key][2]) ?? 0).toFixed(6);
+          }
+          // Keep the anchor too, so target-vs-bone divergence stays visible.
+          const a = f.anchors?.[key];
+          if (a) {
+            a.updateWorldMatrix(true, false);
+            out.targets[key] = v.setFromMatrixPosition(a.matrixWorld).toArray().map((n) => +n.toFixed(6));
+          }
         }
         out.state = ctx.systemsByName.get('foxBrain')?.state ?? null;
         out.speed = ctx.fox?.velocity?.length?.() ?? null;

@@ -29,6 +29,11 @@ const BUDGET = {
   triangles: 3_500_000,
   // A paw locked in stance may drift this much per second (metres).
   footSlideMaxMps: 0.045,
+  // Where the foot sits while bearing weight. This is the check that matters;
+  // the old 'is it ever near the ground' test could not fail.
+  stanceClearanceMax: 0.025,
+  swingLiftMin: 0.018,
+  ikDivergenceMax: 0.035,
   // How far a paw may sit above/below the snow surface (metres).
   pawFloatMax: 0.055,
   pawSinkMax: 0.05,
@@ -37,6 +42,48 @@ const BUDGET = {
 const checks = [];
 const record = (name, ok, detail, severity = 'error') =>
   checks.push({ name, ok: !!ok, detail, severity });
+
+/** Frames where a paw crosses downward through the contact threshold. */
+function touchdowns(series, key, thresh) {
+  const out = [];
+  for (let i = 1; i < series.length; i++) {
+    const a = series[i - 1], b = series[i];
+    if (!a.paws[key] || !b.paws[key]) continue;
+    const c0 = a.paws[key][1] - (a.ground[key] ?? 0);
+    const c1 = b.paws[key][1] - (b.ground[key] ?? 0);
+    if (c0 > thresh && c1 <= thresh) out.push(b.t);
+  }
+  return out;
+}
+
+/** Cyclic sequence of first touchdowns, e.g. ['pawRL','pawFL','pawRR','pawFR']. */
+function footfallOrder(series, keys, thresh) {
+  const first = [];
+  for (const k of keys) {
+    const td = touchdowns(series, k, thresh);
+    if (td.length) first.push([k, td[0]]);
+  }
+  first.sort((a, b) => a[1] - b[1]);
+  return first.map((f) => f[0]);
+}
+
+/** Does `got` match `want` under cyclic rotation? */
+function cyclicMatch(got, want) {
+  if (got.length !== want.length) return false;
+  const j = want.join(',');
+  for (let r = 0; r < got.length; r++) {
+    if (got.slice(r).concat(got.slice(0, r)).join(',') === j) return true;
+  }
+  return false;
+}
+
+// Real canid footfall orders. LH-LF-RH-RF is the lateral-sequence walk every
+// dog and fox uses; a diagonal-sequence walk reads as a primate.
+const FOOTFALL = {
+  walk: ['pawRL', 'pawFL', 'pawRR', 'pawFR'],
+  run:  ['pawRL', 'pawRR', 'pawFR', 'pawFL'],   // rotary gallop
+};
+const DIAGONAL_PAIRS = [['pawFL', 'pawRR'], ['pawFR', 'pawRL']];
 
 async function startServer() {
   if (has('--build')) {
@@ -108,6 +155,8 @@ const main = async () => {
 
       for (const k of pawKeys) {
         let maxSlide = 0, minClear = Infinity, maxClear = -Infinity, stanceFrames = 0;
+        let divSum = 0, divN = 0;
+        const stanceClear = [];
         for (let i = 1; i < out.length; i++) {
           const a = out[i - 1].paws[k], b = out[i].paws[k];
           if (!a || !b) continue;
@@ -115,18 +164,26 @@ const main = async () => {
           const clearance = b[1] - g;
           minClear = Math.min(minClear, clearance);
           maxClear = Math.max(maxClear, clearance);
-          // "In stance" = essentially touching the snow.
+
+          const tgt = out[i].targets?.[k];
+          if (tgt) { divSum += Math.hypot(b[0] - tgt[0], b[1] - tgt[1], b[2] - tgt[2]); divN++; }
+
           if (clearance < 0.022) {
             stanceFrames++;
+            stanceClear.push(clearance);
             const dx = b[0] - a[0], dz = b[2] - a[2];
             maxSlide = Math.max(maxSlide, Math.hypot(dx, dz) / h);
           }
         }
+        stanceClear.sort((x, y) => x - y);
         st.paws[k] = {
           maxSlideMps: +maxSlide.toFixed(4),
           minClearance: +minClear.toFixed(4),
           maxClearance: +maxClear.toFixed(4),
+          medianStanceClearance: stanceClear.length
+            ? +stanceClear[stanceClear.length >> 1].toFixed(4) : 0,
           stanceRatio: +(stanceFrames / out.length).toFixed(3),
+          targetDivergence: divN ? +(divSum / divN).toFixed(4) : null,
         };
       }
 
@@ -144,12 +201,56 @@ const main = async () => {
         record(`[${state}] ${k} no foot slide`,
           v.maxSlideMps <= BUDGET.footSlideMaxMps,
           `${v.maxSlideMps} m/s in stance (max ${BUDGET.footSlideMaxMps})`);
-        record(`[${state}] ${k} not floating`,
-          v.minClearance <= BUDGET.pawFloatMax,
-          `closest approach to snow ${v.minClearance} m`);
+
+        // The old check was `minClearance <= 0.055`, which passes if the paw
+        // is EVER near the ground and therefore can never fail. What matters
+        // is where the foot sits while it is bearing weight.
+        record(`[${state}] ${k} plants on the snow`,
+          Math.abs(v.medianStanceClearance) <= BUDGET.stanceClearanceMax,
+          `median stance clearance ${(v.medianStanceClearance * 1000).toFixed(1)} mm ` +
+          `(max ${BUDGET.stanceClearanceMax * 1000} mm)`);
         record(`[${state}] ${k} not sunk`,
           v.minClearance >= -BUDGET.pawSinkMax,
           `penetrates ${(-v.minClearance).toFixed(4)} m below snow`);
+
+        // A foot that never leaves the ground is not walking.
+        if (state !== 'idle' && state !== 'sit' && state !== 'sleep') {
+          record(`[${state}] ${k} actually lifts`,
+            v.maxClearance >= BUDGET.swingLiftMin,
+            `peak lift ${(v.maxClearance * 1000).toFixed(1)} mm ` +
+            `(min ${BUDGET.swingLiftMin * 1000} mm)`, 'warn');
+        }
+
+        // Surface how far the rendered bone is from the IK target it is
+        // chasing. Large divergence means the solver is not converging.
+        if (v.targetDivergence != null) {
+          record(`[${state}] ${k} IK converges`,
+            v.targetDivergence <= BUDGET.ikDivergenceMax,
+            `bone is ${(v.targetDivergence * 1000).toFixed(1)} mm from its target`, 'warn');
+        }
+      }
+
+      // Footfall order — §8 of the art bible, and previously unchecked.
+      if (FOOTFALL[state]) {
+        const got = footfallOrder(out, pawKeys, 0.022);
+        record(`[${state}] canid footfall order`,
+          cyclicMatch(got, FOOTFALL[state]),
+          `got ${got.join(' -> ') || '(no touchdowns detected)'}; ` +
+          `want ${FOOTFALL[state].join(' -> ')} (cyclic)`);
+      }
+      if (state === 'trot') {
+        // Diagonal pairs should land together.
+        let worst = 0, measured = false;
+        for (const [a, b] of DIAGONAL_PAIRS) {
+          const ta = touchdowns(out, a, 0.022), tb = touchdowns(out, b, 0.022);
+          if (!ta.length || !tb.length) continue;
+          measured = true;
+          worst = Math.max(worst, Math.abs(ta[0] - tb[0]));
+        }
+        record('[trot] diagonal pairs land together',
+          measured && worst <= 0.06,
+          measured ? `worst pair offset ${(worst * 1000).toFixed(0)} ms (max 60 ms)`
+                   : 'no touchdowns detected');
       }
       if (state !== 'idle' && state !== 'sit') {
         record(`[${state}] actually moves`, (st.travelled ?? 0) > 0.15,

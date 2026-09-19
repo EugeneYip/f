@@ -52,6 +52,32 @@ function patchShadowClear(renderer) {
   shadowMap.__clearPatched = true;
 }
 
+/**
+ * three's PerspectiveCamera.fov is VERTICAL. Setting only `aspect` from w/h
+ * therefore keeps the vertical field fixed and lets the horizontal field
+ * collapse as the viewport narrows: at 390x844 a 40 degree vertical fov gives
+ * about 19.5 degrees horizontally, against about 60 degrees on a desktop
+ * 16:10. The subject gets cropped out of frame on a phone.
+ *
+ * Below a reference aspect we therefore hold the HORIZONTAL field constant and
+ * widen the vertical one, which is what every camera app does when you rotate
+ * the device. Above it, the authored vertical fov is used unchanged.
+ */
+export const REF_ASPECT = 16 / 10;
+
+export function applyAdaptiveFov(camera, baseFov, aspect) {
+  const baseRad = baseFov * Math.PI / 180;
+  if (aspect < REF_ASPECT) {
+    const hFov = 2 * Math.atan(Math.tan(baseRad / 2) * REF_ASPECT);
+    camera.fov = 2 * Math.atan(Math.tan(hFov / 2) / Math.max(aspect, 0.2)) * 180 / Math.PI;
+  } else {
+    camera.fov = baseFov;
+  }
+  camera.fov = Math.min(camera.fov, 140);
+  camera.updateProjectionMatrix();
+  return camera.fov;
+}
+
 export class App {
   constructor(canvas) {
     this.canvas = canvas;
@@ -203,7 +229,7 @@ export class App {
     this.renderer.setPixelRatio(dpr * scale);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    applyAdaptiveFov(this.camera, this.ctx.baseFov ?? this.camera.fov, this.camera.aspect);
     const bw = Math.round(w * dpr * scale);
     const bh = Math.round(h * dpr * scale);
     this.ctx.bufferSize = { width: bw, height: bh };
