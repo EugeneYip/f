@@ -535,6 +535,7 @@ export class PostFX {
     const focus = this._focus(ctx, depthTex);
     if (this.dof && !skip.dof) {
       const cocScale = DoF.cocScale(cam.fov, focus, cfg.dof, this.h >> 1);
+      this._lastCocScale = cocScale;
       colour = this.dof.render(colour, colour, depthTex,
         { cocScale, focus, near, far, cfg: cfg.dof });
     }
@@ -715,6 +716,8 @@ export class PostFX {
       bloomMips: this.bloom?.mips.length ?? 0,
       taaSamples: this.taa ? this.taa.n + 1 : 0,
       focus: this._afDistance,
+      ctxFocus: this.ctx?.focusDistance,
+      cocScale: this._lastCocScale ?? null,
       fStop: this.ctx ? DoF.effectiveFStop(this.ctx.camera.fov,
         this._afDistance, this.cfg.dof, this.h >> 1) : null,
     };
