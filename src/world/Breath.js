@@ -97,10 +97,19 @@ export class Breath {
       uSkyColor: { value: new THREE.Vector3() },
       uBounce: { value: new THREE.Vector3() },
       uR0: { value: 0.017 },
-      uR1: { value: 0.115 },
-      // Condensation is thin. At 0.5 this rendered as an opaque cotton ball;
-      // real breath is a haze you can see the background through.
-      uDensity: { value: 0.21 },
+      uR1: { value: 0.085 },
+      // Condensation is THIN. The client's reference photographs show no
+      // visible breath at all, so this errs hard toward subtlety: a faint
+      // wisp, never a feature. At 0.5 it was an opaque cotton ball; at 0.21
+      // it still veiled the whole face in `portrait`.
+      uDensity: { value: 0.075 },
+      // Per-blob near fade. `portrait` frames the head from 0.55 m and
+      // `macro_eye` from 0.13 m, where the camera is effectively INSIDE the
+      // plume -- a puff sized to read at 2 m covers the entire face there.
+      // Fading each blob by its own distance to the camera is the same
+      // treatment the snow near-layer already gets, and it is physically what
+      // happens: you cannot see a haze you are standing in.
+      uNear: { value: new THREE.Vector2(0.40, 1.50) },
       uWindDir: { value: new THREE.Vector3(1, 0, 0) },
       uShear: { value: 0.55 },
     };
@@ -114,7 +123,8 @@ export class Breath {
         attribute vec4 aExtra;
         uniform vec4 uPuff[MAX_PUFFS];
         uniform vec4 uPuffDir[MAX_PUFFS];
-        uniform vec3 uCamRight, uCamUp, uWindDir;
+        uniform vec3 uCamRight, uCamUp, uWindDir, uCamPos;
+        uniform vec2 uNear;
         uniform float uR0, uR1, uShear;
         varying vec2 vUv;
         varying float vAge, vFade, vSeed, vRot;
@@ -161,7 +171,8 @@ export class Breath {
           vec3 world = c + uCamRight * off.x + uCamUp * off.y;
 
           // Fade in over the first 12%, then thin out as it expands.
-          vFade = smoothstep(0.0, 0.05, age) * (1.0 - smoothstep(0.18, 1.0, age));
+          vFade = smoothstep(0.0, 0.05, age) * (1.0 - smoothstep(0.18, 1.0, age))
+                * smoothstep(uNear.x, uNear.y, length(world - uCamPos));
           vAge = age;
           vSeed = aExtra.y;
           vRot = aExtra.z + age * 1.1;

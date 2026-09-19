@@ -173,7 +173,9 @@ export class Aurora {
   _buildCurtains(ctx, sky) {
     const steps = Math.max(4, ctx.quality.get('auroraSteps') || 12);
     this._steps = steps;
-    this.BASE_SCALE = 0.0112;
+    // Retuned after the postfx pipeline landed: the new exposure and
+    // tonemap put the curtains far below where they were authored.
+    this.BASE_SCALE = 0.024;
 
     // Arc frame. Rotated so the bands run ACROSS the aurora pose's view
     // rather than straight away from it.
@@ -207,7 +209,11 @@ export class Aurora {
       uColHigh: { value: new THREE.Color(0xa77dff) },
       uColTop: { value: new THREE.Color(0xff5d84) },
       uScale: { value: 0.0125 },
-      uSkyKill: { value: 4.5 },
+      // Lower suppression lets the 15-24 degree bands survive the sun's
+      // glow. Those are the ones seen closest to side-on, and therefore
+      // the ones whose vertical striations actually project large
+      // enough to read in a wide framing.
+      uSkyKill: { value: 2.8 },
     };
 
     this._applySteps(steps);

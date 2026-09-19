@@ -47,13 +47,19 @@ const FOOT_CONFORM = 0.72;
 /** Toes splay outward by this much (radians). */
 const FOOT_SPLAY = 0.045;
 /**
- * Clearance window over which the airborne reach clamp fades in. Both ends
- * sit well above the audit's 22 mm stance band on purpose: the clamp moves a
- * foot horizontally, so it must be impossible for it to act on any frame that
- * could be classified as contact.
+ * Clearance at which a foot stops being the body-drop backstop's problem and
+ * becomes the airborne clamp's. One threshold, not a fade: a fade left a band
+ * where the backstop had bowed out but the clamp was only partly applied, and
+ * a galloping fox picked up 5.7 mm of genuine reach error in it. No pop
+ * results, because the clamp's correction factor is `limit/D`, which passes
+ * through 1 exactly as D crosses the limit.
+ *
+ * Sits above the audit's 22 mm stance band with margin: the clamp moves a foot
+ * horizontally, so it must never touch a frame that could count as contact.
  */
-const CLAMP_FADE_LO = 0.046;
-const CLAMP_FADE_HI = 0.072;
+const CLAMP_ON = 0.032;
+/** Lower bound on airborne limb extension — stops the elbow folding shut. */
+const MIN_EXT = 0.30;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
 const MAX_REACH_DROP = 0.055;
 /**
@@ -107,55 +113,55 @@ const SLEEP_POSE = {
 const STATES = {
   idle: {
     gait: 'idle', alert: 0.32, exert: 0.00, settled: 1,
-    tailLift: 0.030, tailCurl: 0.000, tailStiff: 1.00,
+    tailLift: 0.34, tailCurl: 0.00, tailStiff: 1.00,
     ears: { x: -0.02, y: 0.085, z: 0.030 },
     drop: 0, look: 0.85, frontIK: 1, hindIK: 1,
   },
   alert: {
     gait: 'idle', alert: 1.00, exert: 0.10, settled: 0.85,
-    tailLift: 0.175, tailCurl: -0.020, tailStiff: 1.40,
+    tailLift: 0.80, tailCurl: -0.12, tailStiff: 1.40,
     ears: { x: -0.105, y: 0.155, z: -0.065 },
     drop: -0.005, look: 1.0, frontIK: 1, hindIK: 1,
     pose: { neck01: [-7, 0, 0], neck02: [-8.5, 0, 0], head: [-2, 0, 0], spine04: [-2, 0, 0], spine03: [-1, 0, 0] },
   },
   walk: {
     gait: 'walk', alert: 0.50, exert: 0.17, settled: 0,
-    tailLift: 0.085, tailCurl: 0.015, tailStiff: 1.05,
+    tailLift: 0.50, tailCurl: 0.09, tailStiff: 1.05,
     ears: { x: -0.045, y: 0.100, z: 0.010 },
     drop: 0, look: 0.62, frontIK: 1, hindIK: 1,
     pose: { neck01: [-2, 0, 0], neck02: [-2, 0, 0] },
   },
   trot: {
     gait: 'trot', alert: 0.62, exert: 0.46, settled: 0,
-    tailLift: 0.165, tailCurl: -0.010, tailStiff: 1.25,
+    tailLift: 0.72, tailCurl: -0.06, tailStiff: 1.25,
     ears: { x: -0.075, y: 0.120, z: -0.030 },
     drop: 0, look: 0.45, frontIK: 1, hindIK: 1,
     pose: { neck01: [-3, 0, 0], neck02: [-3, 0, 0], head: [1, 0, 0] },
   },
   run: {
     gait: 'run', alert: 0.88, exert: 1.00, settled: 0,
-    tailLift: 0.330, tailCurl: -0.045, tailStiff: 1.55,
+    tailLift: 1.15, tailCurl: -0.27, tailStiff: 1.55,
     ears: { x: 0.060, y: 0.060, z: -0.140 },
     drop: 0, look: 0.28, frontIK: 1, hindIK: 1,
     pose: { neck01: [7, 0, 0], neck02: [5, 0, 0], head: [-7, 0, 0], jaw: [7, 0, 0] },
   },
   sit: {
     gait: 'idle', alert: 0.45, exert: 0.02, settled: 1,
-    tailLift: -0.060, tailCurl: 0.090, tailStiff: 0.85,
+    tailLift: -0.05, tailCurl: 0.55, tailStiff: 0.85,
     ears: { x: -0.035, y: 0.110, z: 0.020 },
     drop: 0.055, look: 0.90, frontIK: 1, hindIK: 0,
     pose: SIT_POSE,
   },
   sleep: {
     gait: 'idle', alert: 0.02, exert: 0.00, settled: 1,
-    tailLift: -0.230, tailCurl: 0.300, tailStiff: 0.55,
+    tailLift: -0.55, tailCurl: 1.50, tailStiff: 0.55,
     ears: { x: 0.090, y: 0.020, z: 0.120 },
     drop: 0.138, look: 0.05, frontIK: 0, hindIK: 0,
     pose: SLEEP_POSE,
   },
   pounce: {
     gait: 'idle', alert: 1.00, exert: 0.75, settled: 0,
-    tailLift: 0.080, tailCurl: 0.030, tailStiff: 1.30,
+    tailLift: 0.48, tailCurl: 0.18, tailStiff: 1.30,
     ears: { x: -0.115, y: 0.170, z: -0.080 },
     drop: 0, look: 1.0, frontIK: 1, hindIK: 1,
     special: 'pounce',
@@ -513,8 +519,8 @@ export class FoxBrain {
     i.gaitPhase = loco.phase;
     i.airborne = loco.airborne;
     i.tailLift = lerp(a.tailLift, b.tailLift, w)
-      + (this.pounceCrouch || 0) * -0.10
-      + this.life.driftY * 0.25;
+      + (this.pounceCrouch || 0) * -0.35
+      + this.life.driftY * 1.2;
     i.tailCurl = lerp(a.tailCurl ?? 0, b.tailCurl ?? 0, w);
     i.tailStiff = lerp(a.tailStiff ?? 1, b.tailStiff ?? 1, w);
 
@@ -655,25 +661,6 @@ export class FoxBrain {
       f.limb.ankleFor(f.target, f._qf, f._A);
     }
 
-    // 1b. Airborne reach clamp. A saturated IK target does not just look
-    //     stiff — the solver leaves the paw short of it, and that shortfall
-    //     changes every frame, which is indistinguishable from sliding. So
-    //     pull an unreachable *swing* target in toward its shoulder; the limb
-    //     folds instead of locking straight. Gated on commanded clearance so
-    //     it can only ever act well above the audit's 22 mm stance band, and
-    //     never on a planted foot.
-    for (const f of feet) {
-      if (f.stance || f.clear < CLAMP_FADE_LO) continue;
-      const L = f.limb;
-      L.hip(_v);
-      const dx = f._A.x - _v.x, dy = f._A.y - _v.y, dz = f._A.z - _v.z;
-      const D = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const maxR = L.Ltot * REACH_MAX;
-      if (D <= maxR || D < 1e-6) continue;
-      const w = smoothstep(CLAMP_FADE_LO, CLAMP_FADE_HI, f.clear);
-      const k = lerp(1, maxR / D, w);
-      f._A.set(_v.x + dx * k, _v.y + dy * k, _v.z + dz * k);
-    }
 
     // 2. exact reach backstop — drop the body until every target is inside
     //    its limb's envelope. A Y translation on the root bone moves all four
@@ -682,6 +669,12 @@ export class FoxBrain {
     for (const f of feet) {
       const w = f.limb.front ? this.frontIK : this.hindIK;
       if (w < 0.5) continue;
+      // ONLY feet that are down, or close enough to the snow that the clamp
+      // above has stopped helping. Including airborne feet here made a
+      // galloping fox drop its whole body 42 mm to chase a paw that was
+      // 80 mm in the air — which then folded the elbow flat. The two
+      // mechanisms are complementary and must not overlap.
+      if (!f.stance && f.clear >= CLAMP_ON) continue;
       drop = Math.max(drop, f.limb.requiredDrop(f._A, f.limb.Ltot * REACH_MAX));
     }
     drop = Math.min(drop, MAX_REACH_DROP);
@@ -689,6 +682,30 @@ export class FoxBrain {
     if (drop > 1e-6) {
       this.rootBone.position.y -= drop;
       this.fox.root.updateMatrixWorld(true);
+    }
+
+    // 2b. Airborne reach clamp — AFTER the drop, because the drop moves every
+    //     hip and would otherwise invalidate the distances measured here. A
+    //     saturated IK target does not just look stiff: the solver leaves the
+    //     paw short of it, and that shortfall changes every frame, which is
+    //     indistinguishable from sliding. Pull an unreachable *swing* target
+    //     toward its shoulder so the limb folds instead of locking straight.
+    for (const f of feet) {
+      if (f.stance || f.clear < CLAMP_ON) continue;
+      const L = f.limb;
+      L.hip(_v);
+      const dx = f._A.x - _v.x, dy = f._A.y - _v.y, dz = f._A.z - _v.z;
+      const D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (D < 1e-6) continue;
+      const maxR = L.Ltot * REACH_MAX;
+      const minR = L.Ltot * MIN_EXT;
+      // Too far locks the limb straight; too close folds the elbow back on
+      // itself. Both are poses no canid owns, and both were measured on this
+      // rig before this clamp existed.
+      const want = D > maxR ? maxR : D < minR ? minR : 0;
+      if (!want) continue;
+      const k = want / D;
+      f._A.set(_v.x + dx * k, _v.y + dy * k, _v.z + dz * k);
     }
 
     // 3. solve

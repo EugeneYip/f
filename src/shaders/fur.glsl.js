@@ -40,6 +40,7 @@ uniform vec3  uGroundBounce;
 uniform float uAmbient;
 uniform float uAmbientSat;
 uniform float uSunSat;
+uniform float uTransSat;
 
 // --- dynamics --------------------------------------------------------------
 uniform float uTime;
@@ -424,7 +425,13 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   float thin  = mix(0.10, 1.0, t * t);
   float graze = pow(1.0 - ndv, 2.0);
   float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
-  col += uSunColor * uSunIntensity * uTransTint * albedo *
+  // Reference photographs (bible 4b): an arctic fox has NO warm cast, in any
+  // light, including direct low sun — shaded fur goes blue-grey, never pink.
+  // Light that has scattered through a deep white coat is heavily decorrelated
+  // from the sun's own chromaticity, so the transmitted colour is desaturated
+  // hard rather than carrying the sun's orange straight through.
+  vec3 transLight = mix(vec3(luma(uSunColor)), uSunColor, uTransSat);
+  col += transLight * uSunIntensity * uTransTint * albedo *
          (uTrans * RECIPROCAL_PI * fwd * thin * (0.06 + 1.30 * graze)
           * thinness * (0.30 + 0.95 * shell));
 

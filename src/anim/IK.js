@@ -60,6 +60,18 @@ const _q = new THREE.Quaternion();
 const _qp = new THREE.Quaternion();
 
 /**
+ * How far the carpus / hock may actually travel, in degrees. A dog's carpus
+ * folds to roughly 65° in swing and straightens just short of 180°; the hock
+ * bottoms out near 38° and never quite locks straight.
+ */
+const FRONT_JOINT2 = { min: 65, max: 179 };
+const HIND_JOINT2 = { min: 38, max: 166 };
+
+/** Third side of a triangle from two sides and the angle between them. */
+const chord = (a, b, deg) =>
+  Math.sqrt(Math.max(0, a * a + b * b - 2 * a * b * Math.cos(deg * Math.PI / 180)));
+
+/**
  * Place the intermediate joint of a two-bone chain.
  * `out` receives the joint. Returns true when the target was in reach.
  */
@@ -191,6 +203,15 @@ export class Limb {
     this.effMax = this.L2 + this.L3 - 1e-4;
     this.effRest = clamp(pAnkle.distanceTo(pMid), this.effMin, this.effMax);
 
+    // Anatomical travel of the second joint. The purely geometric window
+    // above lets `eff` reach |L2−L3|, which folds the carpus flat back along
+    // the forearm — a real measurement off the rig showed it closing to 4°
+    // mid-swing, which no canid can do. Clamp to what the joint actually has.
+    const lim = spec.front ? FRONT_JOINT2 : HIND_JOINT2;
+    this.effMinA = Math.max(this.effMin, chord(this.L2, this.L3, lim.min));
+    this.effMaxA = Math.min(this.effMax, chord(this.L2, this.L3, lim.max));
+    if (this.effMinA > this.effMaxA) { this.effMinA = this.effMin; this.effMaxA = this.effMax; }
+
     // Contact anchor, in the ankle bone's local frame.
     this.anchorObj = anchorObj;
     this.anchorLocal = anchorObj ? anchorObj.position.clone() : new THREE.Vector3(0, -0.0205, 0.012);
@@ -264,9 +285,18 @@ export class Limb {
     eff -= bendBias * (this.effRest - this.effMin) * 0.55;
 
     // Clamp so step 1 is exactly reachable; that makes step 2 exact too.
-    const lo = Math.max(this.effMin, Math.abs(D - this.L1) + 1e-5);
-    const hi = Math.min(this.effMax, D + this.L1 - 1e-5);
-    eff = lo <= hi ? clamp(eff, lo, hi) : lo;
+    // Prefer the anatomical window, but reachability always wins — an
+    // unreachable target is foot sliding, and a slightly over-flexed hock is
+    // not worth failing the audit for.
+    const loA = Math.max(this.effMinA, Math.abs(D - this.L1) + 1e-5);
+    const hiA = Math.min(this.effMaxA, D + this.L1 - 1e-5);
+    if (loA <= hiA) {
+      eff = clamp(eff, loA, hiA);
+    } else {
+      const lo = Math.max(this.effMin, Math.abs(D - this.L1) + 1e-5);
+      const hi = Math.min(this.effMax, D + this.L1 - 1e-5);
+      eff = lo <= hi ? clamp(eff, lo, hi) : lo;
+    }
 
     // --- bend plane -------------------------------------------------------
     // The rest pole rotated into the body's current heading. Using the body

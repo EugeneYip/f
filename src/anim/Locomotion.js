@@ -70,7 +70,7 @@ export const GAITS = {
   idle: {
     speed: 0, cycle: 1.0, duty: 1.0,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.030, drop: 0.012, track: 1.0, sink: 0.006, uLift: 0.17, uPlant: 0.74,
+    lift: 0.030, drop: 0.018, track: 1.0, sink: 0.006, uLift: 0.17, uPlant: 0.74,
     press: 0.13, bob: 0.0, bobBeats: 2, sway: 0.0, pitch: 0,
     scapula: 0, spineFlex: 0, yawSway: 0,
   },
@@ -78,7 +78,7 @@ export const GAITS = {
   walk: {
     speed: 0.36, cycle: 0.66, duty: 0.655,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.045, drop: 0.021, track: 0.97, sink: 0.009, uLift: 0.17, uPlant: 0.74,
+    lift: 0.045, drop: 0.027, track: 0.97, sink: 0.009, uLift: 0.17, uPlant: 0.74,
     press: 0.17, bob: 0.0045, bobBeats: 2, sway: 0.0075, pitch: -0.9,
     scapula: 9.5, spineFlex: 0.9, yawSway: 1.6,
   },
@@ -86,7 +86,7 @@ export const GAITS = {
   trot: {
     speed: 0.72, cycle: 0.455, duty: 0.475,
     offsets: { RL: 0, FR: 0, RR: 0.5, FL: 0.5 },
-    lift: 0.058, drop: 0.026, track: 0.84, sink: 0.011, uLift: 0.15, uPlant: 0.79,
+    lift: 0.058, drop: 0.032, track: 0.84, sink: 0.011, uLift: 0.15, uPlant: 0.79,
     press: 0.22, bob: 0.0105, bobBeats: 2, sway: 0.0045, pitch: -1.6,
     scapula: 13, spineFlex: 1.6, yawSway: 0.8,
   },
@@ -95,9 +95,9 @@ export const GAITS = {
   run: {
     speed: 1.30, cycle: 0.345, duty: 0.325,
     offsets: { RL: 0, RR: 0.095, FR: 0.44, FL: 0.535 },
-    lift: 0.080, drop: 0.033, track: 0.60, sink: 0.015, uLift: 0.11, uPlant: 0.86,
-    press: 0.30, bob: 0.026, bobBeats: 1, sway: 0.004, pitch: -2.6,
-    scapula: 24, spineFlex: 8.5, yawSway: 0.5,
+    lift: 0.080, drop: 0.038, track: 0.60, sink: 0.015, uLift: 0.11, uPlant: 0.86,
+    press: 0.30, bob: 0.015, bobBeats: 1, sway: 0.004, pitch: -2.6,
+    scapula: 24, spineFlex: 6.0, yawSway: 0.5,
   },
 };
 

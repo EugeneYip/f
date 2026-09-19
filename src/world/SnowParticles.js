@@ -37,20 +37,23 @@ export class SnowParticles {
     // Metres, m/s. share is the fraction of ctx.quality snowParticles.
     this.defs = {
       near: {
-        share: 0.10, box: [8, 6, 8], size: 0.016, fall: 0.85,
-        curlAmp: 0.40, curlFreq: 0.10, curlTime: 0.03, streak: 0.26, spin: 2.2,
-        near: [0.55, 1.9], opacity: 0.70, crystal: false, groundFade: 0.10, scatter: 1.0,
+        share: 0.10, box: [8, 6, 8], size: 0.008, fall: 0.85,
+        curlAmp: 0.40, curlFreq: 0.10, curlTime: 0.03, streak: 0.10, spin: 2.2,
+        // Bigger/closer than this and the post DoF turns them into bokeh
+        // discs that read as dirt on the lens, which the bible forbids
+        // outright. Held back to where the CoC can still resolve them.
+        near: [0.95, 2.6], opacity: 0.55, crystal: false, groundFade: 0.10, scatter: 1.0,
         sheet: 0.16, sheetK: 0.30,
       },
       mid: {
-        share: 0.34, box: [26, 14, 26], size: 0.017, fall: 0.70,
-        curlAmp: 1.70, curlFreq: 0.045, curlTime: 0.05, streak: 0.30, spin: 1.1,
-        near: [0.7, 2.4], opacity: 0.60, crystal: false, groundFade: 0.18, scatter: 0.95,
+        share: 0.34, box: [26, 14, 26], size: 0.009, fall: 0.70,
+        curlAmp: 1.70, curlFreq: 0.045, curlTime: 0.05, streak: 0.12, spin: 1.1,
+        near: [1.0, 2.9], opacity: 0.60, crystal: false, groundFade: 0.18, scatter: 0.95,
         sheet: 0.075, sheetK: 0.72,
       },
       far: {
         share: 0.30, box: [62, 26, 62], size: 0.038, fall: 0.45,
-        curlAmp: 0.90, curlFreq: 0.018, curlTime: 0.04, streak: 0.18, spin: 0.4,
+        curlAmp: 0.90, curlFreq: 0.018, curlTime: 0.04, streak: 0.10, spin: 0.4,
         near: [5, 15], opacity: 0.20, crystal: false, groundFade: 0.4, scatter: 0.85,
         sheet: 0.035, sheetK: 0.85,
       },
@@ -58,8 +61,12 @@ export class SnowParticles {
       // reads as "polar wind" -- snow in the air just reads as weather.
       spindrift: {
         share: 0.26, box: [48, 0.55, 48], size: 0.060, fall: 0.0,
-        curlAmp: 0.55, curlFreq: 0.075, curlTime: 0.16, streak: 0.95, spin: 0.0,
-        near: [0.5, 2.0], opacity: 0.75, crystal: false, groundFade: 0.0, scatter: 1.15,
+        curlAmp: 0.55, curlFreq: 0.075, curlTime: 0.16, streak: 0.70, spin: 0.0,
+        // A 0.3 m streamer 0.8 m from the lens is a 20-degree smear across
+        // the sky, and heavily defocused it reads as a smudge on the
+        // glass. Held well back; it still reads from 2 m out, which is
+        // where every body-framing pose sits.
+        near: [1.7, 4.2], opacity: 0.55, crystal: false, groundFade: 0.0, scatter: 1.15,
         ground: true, sheet: 0.09, sheetK: 0.62,
       },
     };
@@ -231,9 +238,11 @@ export class SnowParticles {
           vec2 perp = vec2(-vdir.y, vdir.x);
 
           float sz = uSize * (0.55 + 0.95 * aRand.x);
-          // Always a little elongated, then stretched hard by screen-space
-          // speed. A perfectly round sprite is what makes particles read as
-          // dots on glass rather than snow going past at 4 m/s.
+          // Only slightly elongated for the airborne layers. A streaked
+          // sprite that is also heavily defocused reads as a smudge on the
+          // lens; a round one reads as bokeh. Spindrift keeps its long
+          // streaks because it sits near the focal plane and is what sells
+          // the wind.
           // Capped: ctx.windSpeed is authored elsewhere and a high value would
           // otherwise turn every flake into a screen-long smear, which is both
           // ugly and a fill-rate cliff.

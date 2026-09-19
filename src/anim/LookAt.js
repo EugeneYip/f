@@ -131,7 +131,9 @@ export class Interest {
       const wide = 1.35 - 0.65 * alertness;
       const a = yaw + (r2 * 2 - 1) * wide;
       const dist = 1.2 + r3 * 16;
-      let y = origin.y + 0.10 + (r4 - 0.35) * 0.9;
+      // Centred a little above eye level: a fox that spends half its time
+      // staring at the snow in front of its feet reads as depressed, not alert.
+      let y = origin.y + 0.26 + (r4 - 0.5) * 0.62;
 
       if (camera && r4 > 0.74) {
         // Every so often it clocks the viewer — the single most alive thing

@@ -41,11 +41,16 @@ import { Field } from './AnatField.js';
  * reads as a marten. On a real arctic fox the head sits close to and slightly
  * in front of the shoulders, and in winter the ruff swallows the neck almost
  * entirely — with the coat on, the top of the head clears the withers by
- * barely a centimetre. The head is also proportionally LARGE, hence the 1.10.
+ * barely a centimetre. The head is also proportionally LARGE, hence the 1.18.
+ *
+ * ART_DIRECTION §4b (reference photographs): the cranium is a BROAD DOME and
+ * the widest part of the head is the CHEEKS, not the skull — so the braincase
+ * is widened but the cheek mass is widened more, and the muzzle is shortened
+ * until it is closer to cat-like than to any fox stereotype.
  */
 export const SKULL_REF = [0, 0.3100, 0.2050];
-export const SKULL_AT = [0, 0.2760, 0.1830];
-export const SKULL_SCALE = 1.10;
+export const SKULL_AT = [0, 0.2690, 0.1815];
+export const SKULL_SCALE = 1.18;
 export const skullXf = (p) => [
   SKULL_AT[0] + (p[0] - SKULL_REF[0]) * SKULL_SCALE,
   SKULL_AT[1] + (p[1] - SKULL_REF[1]) * SKULL_SCALE,
@@ -79,10 +84,10 @@ export const TORSO_REGIONS = new Set([
 export const LANDMARKS = {
   root: [0, 0, 0],
 
-  hips: [0, 0.2375, -0.1600],
-  spine01: [0, 0.2430, -0.1095],
-  spine02: [0, 0.2455, -0.0595],
-  spine03: [0, 0.2450, -0.0105],
+  hips: [0, 0.2375, -0.1450],
+  spine01: [0, 0.2430, -0.0965],
+  spine02: [0, 0.2455, -0.0505],
+  spine03: [0, 0.2450, -0.0065],
   spine04: [0, 0.2465, 0.0395],
   chest: [0, 0.2510, 0.0815],
   neck01: [0, 0.2613, 0.1120],
@@ -90,22 +95,22 @@ export const LANDMARKS = {
   head: [0, 0.3155, 0.1875],
   jaw: [0, 0.3005, 0.2085],
 
-  earR01: [0.0282, 0.3305, 0.1910],
-  earR02: [0.0332, 0.3398, 0.1903],
-  earR03: [0.0381, 0.3492, 0.1895],
-  earR_tip: [0.0430, 0.3585, 0.1888],
+  earR01: [0.0330, 0.3235, 0.1930],
+  earR02: [0.0377, 0.3363, 0.1924],
+  earR03: [0.0424, 0.3491, 0.1918],
+  earR_tip: [0.0470, 0.3620, 0.1912],
 
   // tail: carried low with a gentle continuous curve, tip clear of the snow
-  tail01: [0, 0.2280, -0.2210],
-  tail02: [0, 0.2180, -0.2530],
-  tail03: [0, 0.2035, -0.2830],
-  tail04: [0, 0.1850, -0.3090],
-  tail05: [0, 0.1635, -0.3310],
-  tail06: [0, 0.1400, -0.3480],
-  tail07: [0, 0.1150, -0.3610],
-  tail08: [0, 0.0905, -0.3700],
-  tail09: [0, 0.0680, -0.3750],
-  tail_tip: [0, 0.0480, -0.3775],
+  tail01: [0, 0.2270, -0.2060],
+  tail02: [0, 0.2130, -0.2390],
+  tail03: [0, 0.1940, -0.2690],
+  tail04: [0, 0.1710, -0.2950],
+  tail05: [0, 0.1450, -0.3160],
+  tail06: [0, 0.1175, -0.3320],
+  tail07: [0, 0.0900, -0.3470],
+  tail08: [0, 0.0700, -0.3580],
+  tail09: [0, 0.0520, -0.3670],
+  tail_tip: [0, 0.0370, -0.3740],
 
   shoulderR: [0.0430, 0.2330, 0.0590],
   upperArmR: [0.0475, 0.1830, 0.0760],
@@ -114,12 +119,12 @@ export const LANDMARKS = {
   pawR: [0.0455, 0.0205, 0.0750],
   pawR_tip: [0.0452, 0.0110, 0.1120],
 
-  thighR: [0.0400, 0.2280, -0.1530],
-  shinR: [0.0465, 0.1550, -0.1030],
-  hockR: [0.0460, 0.0860, -0.1810],
-  footR: [0.0450, 0.0205, -0.1440],
-  toeR: [0.0450, 0.0145, -0.1180],
-  toeR_tip: [0.0448, 0.0105, -0.1000],
+  thighR: [0.0400, 0.2280, -0.1380],
+  shinR: [0.0465, 0.1550, -0.0880],
+  hockR: [0.0460, 0.0860, -0.1660],
+  footR: [0.0450, 0.0205, -0.1290],
+  toeR: [0.0450, 0.0145, -0.1030],
+  toeR_tip: [0.0448, 0.0105, -0.0850],
 };
 
 // Map the head group into place. Done before mirroring so the *L bones inherit
@@ -188,7 +193,7 @@ export const FUR = {
   [R.shoulder]: [0.0385, 0.66],
   [R.back]: [0.0425, 0.86],
   [R.flank]: [0.0480, 0.62],
-  [R.belly]: [0.0440, 0.24],
+  [R.belly]: [0.0490, 0.22],
   [R.croup]: [0.0450, 0.80],
   [R.haunch]: [0.0410, 0.66],
   [R.legFrontUpper]: [0.0250, 0.60],
@@ -222,10 +227,10 @@ const mirrorX = (p) => [-p[0], p[1], p[2]];
  */
 const TRUNK = [
   // z,       y,       r,      sqx,  region
-  [-0.1850, 0.2125, 0.0530, 0.94, R.croup],
-  [-0.1570, 0.1905, 0.0705, 0.97, R.croup],
-  [-0.1120, 0.1850, 0.0735, 0.95, R.flank],
-  [-0.0580, 0.1800, 0.0772, 0.94, R.flank],
+  [-0.1700, 0.2125, 0.0530, 0.94, R.croup],
+  [-0.1420, 0.1905, 0.0705, 0.97, R.croup],
+  [-0.1000, 0.1850, 0.0738, 0.95, R.flank],
+  [-0.0520, 0.1800, 0.0772, 0.94, R.flank],
   [0.0000, 0.1770, 0.0800, 0.93, R.flank],
   [0.0500, 0.1775, 0.0795, 0.91, R.chest],
   [0.0860, 0.1880, 0.0720, 0.89, R.chest],
@@ -234,7 +239,7 @@ const TRUNK = [
   [0.1450, 0.2480, 0.0555, 0.93, R.neck],
 ];
 
-const TAIL_R = [0.0238, 0.0248, 0.0244, 0.0234, 0.0220, 0.0202, 0.0180, 0.0154, 0.0126, 0.0096];
+const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0226, 0.0202, 0.0172, 0.0140, 0.0108];
 
 
 /**
@@ -304,7 +309,7 @@ export function buildField() {
   // --------------------------------------------------------------- throat ---
   // Fills the jaw-to-brisket hollow so the ruff has something to sit on.
   f.add({
-    name: 'throat', a: [0, 0.2530, 0.1690], b: [0, 0.2090, 0.1160], ra: 0.0300, rb: 0.0455,
+    name: 'throat', a: [0, 0.2430, 0.1620], b: [0, 0.2060, 0.1120], ra: 0.0310, rb: 0.0465,
     squash: [0.92, 0.92, 1], k: 0.016, ...furOf(R.throat),
     flowDir: [0, -0.55, -0.55], flowRadial: 0.60, tint: TINT_FUR,
   });
@@ -321,12 +326,12 @@ export function buildField() {
   const H = skullXf;
   f.add({
     name: 'braincase', a: H([0, 0.3140, 0.1985]), ra: sr(0.0412),
-    squash: [0.645, 0.880, 0.98], k: 0.013, ...furOf(R.skull),
+    squash: [0.780, 0.880, 0.96], k: 0.013, ...furOf(R.skull),
     flowDir: [0, 0.16, -1], flowRadial: 0.22, tint: TINT_FUR,
   });
   f.add({
     name: 'occiput', a: H([0, 0.3040, 0.1790]), ra: sr(0.0378),
-    squash: [0.665, 0.880, 0.78], k: 0.014, ...furOf(R.skull),
+    squash: [0.780, 0.880, 0.78], k: 0.014, ...furOf(R.skull),
     flowDir: [0, 0.10, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Domed forehead with a gentle stop — arctic fox, not red fox.
@@ -343,33 +348,33 @@ export function buildField() {
   // Short and BLUNT: 2:1 taper read as a point once fur was on it, so the
   // muzzle now barely narrows and stops well short of the old nose position.
   f.add({
-    name: 'muzzle', a: H([0, 0.3030, 0.2230]), b: H([0, 0.2948, 0.2470]),
-    ra: sr(0.0272), rb: sr(0.0182),
+    name: 'muzzle', a: H([0, 0.3020, 0.2260]), b: H([0, 0.2955, 0.2320]),
+    ra: sr(0.0268), rb: sr(0.0206),
     squash: [1.0, 0.90, 1.0], k: 0.014, ...furOf(R.muzzle),
     flowDir: [0, 0.05, -1], flowRadial: 0.34, tint: TINT_FUR,
   });
   f.add({
-    name: 'nosePad', a: H([0, 0.2930, 0.2560]), ra: sr(0.0140),
+    name: 'nosePad', a: H([0, 0.2938, 0.2450]), ra: sr(0.0140),
     squash: [1.0, 0.86, 0.80], k: 0.006, ...furOf(R.nose),
     flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_SKIN,
   });
   f.add({
-    name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2880, 0.2455]),
-    ra: sr(0.0224), rb: sr(0.0142),
+    name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2898, 0.2330]),
+    ra: sr(0.0224), rb: sr(0.0168),
     squash: [0.95, 0.80, 1.0], k: 0.010, ...furOf(R.jawLower),
     flowDir: [0, -0.30, -1], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Whisker pads — the paired swellings at the muzzle root. Small, but they
   // are most of what stops a canid muzzle reading as a plain cone.
   f.addMirrored({
-    name: 'whiskerPadR', a: H([0.0152, 0.2950, 0.2370]), ra: sr(0.0140),
+    name: 'whiskerPadR', a: H([0.0165, 0.2955, 0.2310]), ra: sr(0.0150),
     squash: [0.86, 0.80, 1.05], k: 0.011, ...furOf(R.muzzle),
     flowDir: [0.18, -0.25, -0.95], flowRadial: 0.35, tint: TINT_FUR,
   });
   f.addMirrored({
-    name: 'cheek', a: H([0.0206, 0.2995, 0.2150]), b: H([0.0224, 0.2962, 0.1960]),
+    name: 'cheek', a: H([0.0228, 0.2990, 0.2120]), b: H([0.0246, 0.2958, 0.1940]),
     ra: sr(0.0248), rb: sr(0.0246),
-    squash: [0.72, 0.86, 1.00], k: 0.017, ...furOf(R.cheek),
+    squash: [0.80, 0.88, 1.02], k: 0.017, ...furOf(R.cheek),
     flowDir: [0.55, -0.25, -0.55], flowRadial: 0.90, tint: TINT_FUR,
   });
 
@@ -378,8 +383,8 @@ export function buildField() {
   const earA = [L.earR01[0] - 0.003, L.earR01[1] + 0.002, L.earR01[2] - 0.001];
   const earB = L.earR_tip;
   f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0274), rb: sr(0.0232),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.62, 1.0, 1.0],
+    name: 'earR', a: earA, b: earB, ra: sr(0.0250), rb: sr(0.0228),
+    frame: 'axis', normal: EAR_NORMAL, squash: [0.52, 1.0, 1.0],
     k: 0.013, ...furOf(R.earOuter),
     flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
   });
@@ -430,23 +435,23 @@ export function buildField() {
   // -------------------------------------------------------------- hindlimb ---
   // Haunch mass first: it is the widest point of the animal from behind.
   f.addMirrored({
-    name: 'haunchR', a: [0.0400, 0.2060, -0.1510], b: [0.0468, 0.1560, -0.1050],
+    name: 'haunchR', a: [0.0400, 0.2060, -0.1360], b: [0.0468, 0.1560, -0.0900],
     ra: 0.0492, rb: 0.0300, squash: [0.62, 1.00, 1.06], k: 0.018, ...furOf(R.haunch),
     flowDir: [0.10, -0.75, -0.55], flowRadial: 0.30, tint: TINT_FUR,
   });
   // Tibia + gastrocnemius: thick at the stifle, thin at the hock.
   f.addMirrored({
-    name: 'tibiaR', a: [0.0465, 0.1580, -0.1050], b: [0.0460, 0.0910, -0.1755],
+    name: 'tibiaR', a: [0.0465, 0.1580, -0.0900], b: [0.0460, 0.0910, -0.1605],
     ra: 0.0272, rb: 0.0156, squash: [0.82, 1.0, 1.0], k: 0.013, ...furOf(R.legHindUpper),
     flowDir: [0, -1, -0.30], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Long metatarsus — the "backwards knee" is the hock joint at its top.
   f.addMirrored({
-    name: 'metatarsusR', a: [0.0460, 0.0880, -0.1785], b: [0.0452, 0.0255, -0.1465],
+    name: 'metatarsusR', a: [0.0460, 0.0880, -0.1635], b: [0.0452, 0.0255, -0.1315],
     ra: 0.0166, rb: 0.0156, squash: [0.88, 1.0, 1.0], k: 0.009, ...furOf(R.hock),
     flowDir: [0, -1, 0.35], flowRadial: 0.40, tint: TINT_FUR,
   });
-  addPaw(f, furOf, 0.0450, -0.1450, +1, R.pawHind, 0.0212, 0.0184);
+  addPaw(f, furOf, 0.0450, -0.1300, +1, R.pawHind, 0.0212, 0.0184);
 
   // ------------------------------------------------------------------ tail ---
   const tailKeys = ['tail01', 'tail02', 'tail03', 'tail04', 'tail05',

@@ -100,26 +100,35 @@ export class SecondaryDynamics {
     const life2 = fbm1(t * 0.41 + 31, 3, 53);
     const sway = Math.sin(TAU * inp.gaitPhase * 1 + 0.6) * 0.055 * saturate(inp.speed / 0.5);
 
-    let driveY = clamp(inp.yawRate * 0.30, -0.55, 0.55)
-      - clamp(inp.accelX * 0.030, -0.35, 0.35)
-      + sway + life * 0.045 * (1 - saturate(inp.speed));
-    let driveX = inp.tailLift
-      + clamp(-inp.accelY * 0.012, -0.22, 0.22)
-      + clamp(inp.accelZ * 0.020, -0.25, 0.25)
-      + life2 * 0.030 * (1 - saturate(inp.speed))
-      + inp.shake * 0.55 * Math.sin(t * 46);
+    // IMPORTANT: these are *whole-tail* angles, in radians, not per-joint.
+    // Nine joints each rotating by X accumulate to 9X at the tip, and with a
+    // transmit of 1.055 the steady-state sum is ~11.4X — a measured tail tip
+    // sat 85 mm above its rest height on a drive of 0.085. So carriage is
+    // divided across the chain and only the *dynamic* part is propagated.
+    const dynY = (clamp(inp.yawRate * 0.34, -0.62, 0.62)
+      - clamp(inp.accelX * 0.034, -0.40, 0.40)
+      + sway + life * 0.055 * (1 - saturate(inp.speed))) / TAIL_N;
+    const dynX = (clamp(-inp.accelY * 0.014, -0.26, 0.26)
+      + clamp(inp.accelZ * 0.023, -0.28, 0.28)
+      + life2 * 0.038 * (1 - saturate(inp.speed))
+      + inp.shake * 0.62 * Math.sin(t * 46)) / TAIL_N;
 
     const stiff = inp.tailStiff ?? 1;
     const transmit = 1.055;
-    let prevX = driveX, prevY = driveY;
+    // Carriage is front-loaded: a real tail lifts from the base and the tip
+    // follows, rather than every vertebra hinging by the same amount.
+    const CARRY = TAIL_N * 0.5 * (1.4 + 0.6);   // normaliser for the taper below
+    let prevX = dynX, prevY = dynY;
     for (let i = 0; i < TAIL_N; i++) {
       const w = i / (TAIL_N - 1);
-      const tgtX = (i === 0 ? driveX : prevX * transmit) + inp.tailCurl * (0.25 + w);
-      const tgtY = (i === 0 ? driveY : prevY * transmit);
+      const taper = (1.4 - 0.8 * w) * TAIL_N / CARRY;
+      const biasX = (inp.tailLift + inp.tailCurl * (2 * w - 0.6)) * taper / TAIL_N;
+      const tgtX = biasX + (i === 0 ? dynX : prevX * transmit);
+      const tgtY = (i === 0 ? dynY : prevY * transmit);
       const om = this.tOmega[i] * stiff;
-      this.tX[i] = clamp(spring(this.tX[i], tgtX, this.tXs[i], om, this.tZeta[i], h), -0.55, 0.62);
-      this.tY[i] = clamp(spring(this.tY[i], tgtY, this.tYs[i], om, this.tZeta[i], h), -0.42, 0.42);
-      prevX = this.tX[i];
+      this.tX[i] = clamp(spring(this.tX[i], tgtX, this.tXs[i], om, this.tZeta[i], h), -0.42, 0.42);
+      this.tY[i] = clamp(spring(this.tY[i], tgtY, this.tYs[i], om, this.tZeta[i], h), -0.34, 0.34);
+      prevX = this.tX[i] - biasX;      // propagate the dynamic part only
       prevY = this.tY[i];
     }
 

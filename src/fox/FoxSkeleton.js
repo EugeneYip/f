@@ -119,8 +119,20 @@ const SIDE_DEAD = 0.006;   // |x| below this: both sides permitted (midline)
 // pose presets (deg). Approximate by design — they exist for review framings;
 // the animation agent owns real posing.
 // ---------------------------------------------------------------------------
+/**
+ * Review pose presets. Approximate by design — they exist for review framings
+ * and for the face/fur agents to check silhouettes; the animation agent owns
+ * real posing and IK.
+ *
+ * ART_DIRECTION §4b: **tail carriage is pose-dependent, not a fixed rest
+ * value.** The bind pose carries it low and close to the ground (standing).
+ * Sitting or lying curls it around the flank — `sit` below does that. A
+ * running animal carries it straight out behind, which is the gait engine's
+ * job, not a preset here.
+ */
 export const POSE_PRESETS = {
   stand: { root: [0, 0, 0], rot: {} },
+
   alert: {
     root: [0, 0, 0],
     rot: {
@@ -130,6 +142,7 @@ export const POSE_PRESETS = {
       spine04: [-2, 0, 0],
     },
   },
+
   sit: {
     root: [0, -0.052, -0.022],
     rot: {
@@ -142,7 +155,38 @@ export const POSE_PRESETS = {
       footL: [10, 0, 0], footR: [10, 0, 0],
       upperArmL: [6, 0, 0], upperArmR: [6, 0, 0],
       lowerArmL: [-8, 0, 0], lowerArmR: [-8, 0, 0],
-      tail01: [18, 0, 0], tail02: [10, 0, 0], tail03: [6, 0, 0],
+      // Tail curls round the RIGHT flank rather than lifting: ~130 deg of
+      // cumulative yaw down the chain, which sweeps the brush from behind the
+      // hocks round to the side of the body.
+      tail01: [12, 22, 0], tail02: [4, 18, 0], tail03: [2, 16, 0],
+      tail04: [0, 15, 0], tail05: [0, 14, 0], tail06: [0, 13, 0],
+      tail07: [0, 12, 0], tail08: [0, 11, 0], tail09: [0, 10, 0],
+    },
+  },
+
+  /**
+   * Curled — "very nearly a sphere" (§4b). Bone rotations only, no IK, so this
+   * is an approximation: the spine and neck coil to one side, the limbs fold
+   * under, and the tail wraps forward over the flank toward the muzzle.
+   */
+  curled: {
+    root: [0, -0.108, -0.010],
+    rot: {
+      hips: [-26, 0, 0],
+      spine01: [-13, 9, 0], spine02: [-13, 10, 0],
+      spine03: [-12, 11, 0], spine04: [-11, 11, 0],
+      chest: [-10, 10, 0],
+      neck01: [-16, 16, 0], neck02: [-18, 18, 0], head: [-10, 20, 0],
+      thighL: [-98, 0, 0], thighR: [-98, 0, 0],
+      shinL: [118, 0, 0], shinR: [118, 0, 0],
+      hockL: [-72, 0, 0], hockR: [-72, 0, 0],
+      footL: [34, 0, 0], footR: [34, 0, 0],
+      upperArmL: [64, 0, 0], upperArmR: [64, 0, 0],
+      lowerArmL: [-104, 0, 0], lowerArmR: [-104, 0, 0],
+      wristL: [44, 0, 0], wristR: [44, 0, 0],
+      tail01: [8, 24, 0], tail02: [4, 22, 0], tail03: [2, 21, 0],
+      tail04: [0, 20, 0], tail05: [0, 19, 0], tail06: [0, 18, 0],
+      tail07: [0, 17, 0], tail08: [0, 16, 0], tail09: [0, 15, 0],
     },
   },
 };
