@@ -174,6 +174,18 @@ export async function buildFoxSurface(skeleton, {
       if (w > 0.5) reg = R.throat;
     }
 
+    // --- leg coat thins toward the foot ------------------------------------
+    // A single length per leg region filled in the hock notch, so the joint
+    // that REVIEW blocker 6 asks for was geometrically present (42 mm of
+    // caudal protrusion) but buried under coat. Real leg fur shortens sharply
+    // below the elbow and stifle; tapering it by height exposes the hock
+    // without contradicting §4b's "belly fur obscures the top of the leg",
+    // which is about the leg TOP, not the joint.
+    if (reg === R.legHindUpper || reg === R.hock ||
+        reg === R.legFrontUpper || reg === R.legFrontLower) {
+      len *= 0.55 + 0.45 * smoothstep(0.055, 0.150, y);
+    }
+
     // Never let a hair point into the body.
     const dn = fx * nx + fy * ny + fz * nz;
     if (dn < 0.04) {

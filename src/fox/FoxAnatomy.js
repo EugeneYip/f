@@ -107,10 +107,10 @@ export const LANDMARKS = {
   tail04: [0, 0.1710, -0.2950],
   tail05: [0, 0.1450, -0.3160],
   tail06: [0, 0.1175, -0.3320],
-  tail07: [0, 0.0900, -0.3470],
-  tail08: [0, 0.0700, -0.3580],
-  tail09: [0, 0.0520, -0.3670],
-  tail_tip: [0, 0.0370, -0.3740],
+  tail07: [0, 0.0850, -0.3470],
+  tail08: [0, 0.0630, -0.3580],
+  tail09: [0, 0.0430, -0.3670],
+  tail_tip: [0, 0.0280, -0.3740],
 
   shoulderR: [0.0430, 0.2330, 0.0590],
   upperArmR: [0.0478, 0.1841, 0.0843],
@@ -121,7 +121,7 @@ export const LANDMARKS = {
 
   thighR: [0.0400, 0.2280, -0.1380],
   shinR: [0.0465, 0.1550, -0.0880],
-  hockR: [0.0460, 0.0860, -0.1660],
+  hockR: [0.0462, 0.0905, -0.1790],
   footR: [0.0450, 0.0205, -0.1290],
   toeR: [0.0450, 0.0145, -0.1030],
   toeR_tip: [0.0448, 0.0105, -0.0850],
@@ -196,11 +196,11 @@ export const FUR = {
   [R.belly]: [0.0490, 0.22],
   [R.croup]: [0.0450, 0.80],
   [R.haunch]: [0.0410, 0.66],
-  [R.legFrontUpper]: [0.0250, 0.60],
-  [R.legFrontLower]: [0.0115, 0.68],
+  [R.legFrontUpper]: [0.0340, 0.58],
+  [R.legFrontLower]: [0.0145, 0.66],
   [R.pawFront]: [0.0038, 0.86],
-  [R.legHindUpper]: [0.0300, 0.62],
-  [R.hock]: [0.0165, 0.50],
+  [R.legHindUpper]: [0.0380, 0.60],
+  [R.hock]: [0.0120, 0.52],
   [R.pawHind]: [0.0038, 0.86],
   [R.tailBase]: [0.0480, 0.78],
   [R.tailMid]: [0.0540, 0.80],
@@ -225,21 +225,25 @@ const mirrorX = (p) => [-p[0], p[1], p[2]];
  * z = 0 (0.145 m deep), a slight belly tuck over the loin, then the neck crest
  * rising to the poll. That is a stocky canid, not a tube.
  */
-const TRUNK = [
-  // z,       y,       r,      sqx,  region
-  [-0.1700, 0.2125, 0.0530, 0.94, R.croup],
-  [-0.1420, 0.1905, 0.0705, 0.97, R.croup],
-  [-0.1000, 0.1850, 0.0738, 0.95, R.flank],
-  [-0.0520, 0.1800, 0.0772, 0.94, R.flank],
-  [0.0000, 0.1770, 0.0800, 0.93, R.flank],
-  [0.0500, 0.1775, 0.0795, 0.91, R.chest],
-  [0.0860, 0.1880, 0.0720, 0.89, R.chest],
-  [0.1110, 0.2150, 0.0640, 0.89, R.ruff],
-  [0.1300, 0.2330, 0.0600, 0.91, R.neck],
-  [0.1450, 0.2480, 0.0555, 0.93, R.neck],
+// z, TOP, BOTTOM, sqx, region  — silhouette-first authoring; see below.
+const TRUNK_PROFILE = [
+  [-0.1880, 0.2270, 0.1930, 0.90, R.croup],
+  [-0.1700, 0.2420, 0.1740, 0.92, R.croup],
+  [-0.1420, 0.2620, 0.1340, 0.95, R.croup],
+  [-0.1000, 0.2720, 0.1170, 0.95, R.flank],
+  [-0.0520, 0.2690, 0.1050, 0.94, R.flank],
+  [0.0000, 0.2600, 0.0995, 0.93, R.flank],
+  [0.0500, 0.2605, 0.1020, 0.91, R.chest],
+  [0.0860, 0.2720, 0.1210, 0.89, R.chest],
+  [0.1110, 0.2790, 0.1510, 0.89, R.ruff],
+  [0.1300, 0.2930, 0.1730, 0.91, R.neck],
+  [0.1450, 0.3035, 0.1925, 0.93, R.neck],
 ];
+// (z, centre-y, radius, squash-x, region) — what the field builder consumes.
+const TRUNK = TRUNK_PROFILE.map(([z, top, bot, sx, reg]) =>
+  [z, (top + bot) * 0.5, (top - bot) * 0.5, sx, reg]);
 
-const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0226, 0.0202, 0.0172, 0.0140, 0.0108];
+const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0224, 0.0196, 0.0160, 0.0118, 0.0050];
 
 
 /**
@@ -444,16 +448,25 @@ export function buildField() {
   });
   // Tibia + gastrocnemius: thick at the stifle, thin at the hock.
   f.addMirrored({
-    name: 'tibiaR', a: [0.0465, 0.1580, -0.0900], b: [0.0460, 0.0910, -0.1605],
-    ra: 0.0272, rb: 0.0156, squash: [0.82, 1.0, 1.0], k: 0.013, ...furOf(R.legHindUpper),
+    name: 'tibiaR', a: [0.0465, 0.1580, -0.0880], b: [0.0461, 0.0940, -0.1735],
+    ra: 0.0312, rb: 0.0118, squash: [0.80, 1.0, 1.0], k: 0.013, ...furOf(R.legHindUpper),
     flowDir: [0, -1, -0.30], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Long metatarsus — the "backwards knee" is the hock joint at its top.
   f.addMirrored({
-    name: 'metatarsusR', a: [0.0460, 0.0880, -0.1635], b: [0.0452, 0.0255, -0.1315],
-    ra: 0.0166, rb: 0.0156, squash: [0.88, 1.0, 1.0], k: 0.009, ...furOf(R.hock),
+    name: 'metatarsusR', a: [0.0461, 0.0900, -0.1755], b: [0.0452, 0.0255, -0.1315],
+    ra: 0.0140, rb: 0.0152, squash: [0.88, 1.0, 1.0], k: 0.009, ...furOf(R.hock),
     flowDir: [0, -1, 0.35], flowRadial: 0.40, tint: TINT_FUR,
   });
+  // Calcaneal tuber: the heel bone projects caudally as the Achilles lever and
+  // is what makes a hock read on a live canid. Without it the joint is just a
+  // bend in a tube and the fur fills it in.
+  f.addMirrored({
+    name: 'calcaneusR', a: [0.0461, 0.0935, -0.1735], b: [0.0461, 0.0975, -0.1885],
+    ra: 0.0125, rb: 0.0092, squash: [0.84, 1.0, 1.0], k: 0.010, ...furOf(R.hock),
+    flowDir: [0, -0.55, -0.84], flowRadial: 0.45, tint: TINT_FUR,
+  });
+
   addPaw(f, furOf, 0.0450, -0.1300, +1, R.pawHind, 0.0212, 0.0184);
 
   // ------------------------------------------------------------------ tail ---

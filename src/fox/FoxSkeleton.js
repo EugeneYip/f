@@ -94,18 +94,28 @@ const REGION_BONES = {
   [R.earInner]: ['ear?01', 'ear?02', 'ear?03', 'head'],
   [R.throat]: ['neck01', 'neck02', 'head', 'jaw', 'chest'],
   [R.neck]: ['neck01', 'neck02', 'head', 'chest'],
-  [R.ruff]: ['chest', 'neck01', 'neck02', 'spine04'],
-  [R.chest]: ['chest', 'spine04', 'spine03', 'shoulder?', 'neck01'],
+  [R.ruff]: ['chest', 'neck01', 'neck02', 'spine04', 'shoulder?~'],
+  [R.chest]: ['chest', 'spine04', 'spine03', 'shoulder?', 'upperArm?~', 'neck01'],
   [R.shoulder]: ['shoulder?', 'chest', 'spine04', 'upperArm?'],
-  [R.back]: ['hips', 'spine01', 'spine02', 'spine03', 'spine04', 'chest'],
-  [R.flank]: ['hips', 'spine01', 'spine02', 'spine03', 'spine04', 'chest'],
-  [R.belly]: ['hips', 'spine01', 'spine02', 'spine03', 'spine04', 'chest'],
+  [R.back]: ['hips', 'spine01', 'spine02', 'spine03', 'spine04', 'chest',
+    'shoulder?~', 'thigh?~'],
+  // flank and belly must be allowed a little limb influence. Forbidding it
+  // outright put a hard weight discontinuity exactly at the region boundary
+  // over the hip and shoulder — 0.91 limb on one side, 0.22 on the other,
+  // 25 mm apart — which is what tore the hip open in walk and pushed limb
+  // geometry through the flank in trot. The distance falloff keeps the
+  // contribution negligible away from the limb root; the side gate still
+  // prevents any left/right bleed.
+  [R.flank]: ['hips', 'spine01', 'spine02', 'spine03', 'spine04', 'chest',
+    'thigh?~', 'shoulder?~', 'lowerArm?~'],
+  [R.belly]: ['hips', 'spine01', 'spine02', 'spine03', 'spine04', 'chest',
+    'thigh?~', 'upperArm?~'],
   [R.croup]: ['hips', 'spine01', 'tail01', 'thigh?'],
   [R.haunch]: ['hips', 'thigh?', 'spine01', 'shin?'],
-  [R.legFrontUpper]: ['upperArm?', 'lowerArm?', 'shoulder?', 'chest'],
-  [R.legFrontLower]: ['lowerArm?', 'wrist?', 'paw?', 'upperArm?'],
+  [R.legFrontUpper]: ['upperArm?', 'lowerArm?', 'shoulder?', 'chest', 'spine04~'],
+  [R.legFrontLower]: ['lowerArm?', 'wrist?', 'paw?', 'upperArm?', 'chest~'],
   [R.pawFront]: ['paw?', 'wrist?'],
-  [R.legHindUpper]: ['thigh?', 'shin?', 'hips', 'hock?'],
+  [R.legHindUpper]: ['thigh?', 'shin?', 'hips', 'hock?', 'spine01~'],
   [R.hock]: ['hock?', 'shin?', 'foot?'],
   [R.pawHind]: ['foot?', 'toe?', 'hock?'],
   [R.tailBase]: ['tail01', 'tail02', 'tail03', 'hips'],
@@ -114,6 +124,15 @@ const REGION_BONES = {
 };
 
 const SIDE_DEAD = 0.006;   // |x| below this: both sides permitted (midline)
+
+/**
+ * A bone name suffixed `~` is a SOFT influence: permitted in that region, but
+ * with a much smaller falloff radius. This exists so a limb can carry the skin
+ * across its own joint without reaching halfway down the torso. Forbidding it
+ * outright leaves a weight cliff at the region boundary (the hip tore open in
+ * walk); allowing it at full radius lets the femur dominate the whole flank.
+ */
+const SOFT_RADIUS = 0.42;
 
 // ---------------------------------------------------------------------------
 // pose presets (deg). Approximate by design — they exist for review framings;
@@ -249,13 +268,22 @@ export class FoxSkeleton {
 
     // Resolve region -> bone-index lists once (with `?` expanded per side).
     this._allow = {};
-    for (const [reg, names] of Object.entries(REGION_BONES)) {
+    this._soft = new Set();
+    for (const [reg, raw] of Object.entries(REGION_BONES)) {
       const L = [], Rr = [], both = [];
-      for (const nm of names) {
+      for (const entry of raw) {
+        const soft = entry.endsWith('~');
+        const nm = soft ? entry.slice(0, -1) : entry;
+        const push = (n) => {
+          const i = this.index.get(n);
+          if (i === undefined) throw new Error(`FoxSkeleton: unknown bone "${n}"`);
+          if (soft) this._soft.add(reg + ':' + i);
+          return i;
+        };
         if (nm.includes('?')) {
-          L.push(this.index.get(nm.replace('?', 'L')));
-          Rr.push(this.index.get(nm.replace('?', 'R')));
-        } else both.push(this.index.get(nm));
+          L.push(push(nm.replace('?', 'L')));
+          Rr.push(push(nm.replace('?', 'R')));
+        } else both.push(push(nm));
       }
       this._allow[reg] = { L, R: Rr, both };
     }
@@ -300,7 +328,7 @@ export class FoxSkeleton {
    * @param region Float32Array of region ids (one per vertex)
    * @param adj    {start, nb} CSR adjacency for the smoothing pass
    */
-  computeWeights(pos, region, adj, { smoothIters = 4, lambda = 0.45 } = {}) {
+  computeWeights(pos, region, adj, { smoothIters = 6, lambda = 0.45 } = {}) {
     const nv = pos.length / 3;
     const nb = this.boneList.length;
     const SLOTS = 10;                       // per-vertex sparse capacity
@@ -314,15 +342,24 @@ export class FoxSkeleton {
 
     for (let v = 0; v < nv; v++) {
       const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
-      this._candidates(region[v] | 0, x, cand);
+      const reg = region[v] | 0;
+      this._candidates(reg, x, cand);
       let n = 0, total = 0;
       for (const i of cand) {
         if (i === undefined || n >= SLOTS) continue;
         const d = this._segDist(i, x, y, z);
-        const Rb = this._segLen * 1.55 + 0.055;
+        let Rb = this._segLen * 1.55 + 0.055;
+        if (this._soft.has(reg + ':' + i)) Rb *= SOFT_RADIUS;
         if (d >= Rb) continue;
         const t = 1 - d / Rb;
-        const w = (t * t) / (d + 0.004);
+        // The 4 mm floor made weights enormously peaked at the bone (w -> 250
+        // as d -> 0), so a vertex within a few mm of the femur ended up ~100 %
+        // bound to it and the handover to the torso happened over ~25 mm. That
+        // is what tore the hip open in walk and drove limb geometry through the
+        // flank in trot (REVIEW blocker 7). A 12 mm floor plus more smoothing
+        // spreads the transition over ~70 mm without letting regions bleed —
+        // the per-iteration re-mask still forbids that.
+        const w = (t * t) / (d + 0.012);
         idx[v * SLOTS + n] = i;
         wts[v * SLOTS + n] = w;
         total += w; n++;
