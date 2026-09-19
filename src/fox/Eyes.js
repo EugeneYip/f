@@ -62,21 +62,63 @@ const IRIS_R = 0.86;        // iris radius / limbus radius (cornea magnifies it 
 
 // --- palpebral aperture, in gnomonic tangent units on the globe ------------
 // (x, y) here are tan(angle) from the optical axis, so 0.70 ~ 35 degrees.
-const AP_W = 0.700;         // angular half-width  (canthus to canthus)
-const AP_UP = 0.345;        // upper margin height at u = 0
-const AP_DN = 0.300;        // lower margin depth  at u = 0
+const AP_W = 0.620;         // angular half-width  (canthus to canthus)
+const AP_UP = 0.330;        // upper margin height at u = 0
+const AP_DN = 0.280;        // lower margin depth  at u = 0
 const AP_TILT = 0.045;      // canthal tilt — outer corner rides higher
-const BAND_UP = 0.520;      // how far the upper lid band reaches into the orbit
-const BAND_DN = 0.400;
-const OUTER_WIDEN = 0.30;   // the band splays past the canthi to cover corners
 
 // How far proud of the *surrounding skin* the corneal apex is seated. The
 // socket the anatomy agent carves is a shallow dish and the fur agent only
 // fades the coat to ~25% at the aperture, so a flush eye is a buried eye.
-const APEX_CLEARANCE = 0.0021;
+const APEX_CLEARANCE = 0.0018;
 const MAX_SEAT_PUSH = 0.0045;   // never shove the eye more than this far out
+const MAX_SEAT_PULL = -0.0022;  // ...nor sink it
+
+// Globe-to-socket fit. Past the aperture the globe must sit inside the skin.
+const FIT_ANGLE = 50 * Math.PI / 180;
+const FIT_MARGIN = 0.97;
+
+// How far the lid band sweeps outward over the globe, in radians of arc from
+// its own margin. It has to reach from the aperture edge to wherever the skin
+// starts covering the globe (about 50 degrees off axis) with room to spare,
+// or a ring of bare sclera shows between lid and face.
+const LID_SPREAD = 0.62;         // fallback when the SDF is unavailable
+const LID_SLACK = 0.10;          // tuck this much further under the skin
+const LID_SPREAD_MIN = 0.17;     // always enough band for a margin + a blend
+const LID_SPREAD_MAX = 0.95;
+
+const smoothstep01 = (a, b, x) => {
+  const t = clamp((x - a) / (b - a || 1e-9), 0, 1);
+  return t * t * (3 - 2 * t);
+};
 
 const F0_TEAR = 0.028;      // tear film, n = 1.336
+
+/**
+ * EVERY uniform this file injects, declared in ONE place.
+ *
+ * This block is prepended unconditionally to all five of our shader stages.
+ * It used to be split across the aperture/globe/iris chunks, and because each
+ * stage concatenates a DIFFERENT SUBSET of those chunks, a uniform used in one
+ * chunk but declared in another compiled fine in one stage and failed in
+ * another — `uR` and `uSunCol` were used by the iris chunk but declared only
+ * by the globe chunk, which the globe's *fragment* stage does not include.
+ * That surfaced as an intermittent "undeclared identifier", App.js disabled
+ * the whole system, and the untextured blob left behind was mistaken for a
+ * post-processing wash by two other agents. One block, no subsets, no repeat.
+ *
+ * Unused declarations in a given stage are free — GLSL compilers strip them.
+ */
+const EYE_UNIFORMS = /* glsl */ `
+uniform float uR, uRc, uZc, uK;
+uniform float uIrisR, uLimbusR, uPupilR, uFibreN, uCollarette, uEta, uIrisZ;
+uniform float uCaustic, uWetness, uSunInt;
+uniform float uApW, uApUp, uApDn, uApTilt, uBlinkU, uBlinkD;
+uniform float uSpread;
+uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
+uniform vec3 uMarginCol, uLidSkin, uLidFur;
+uniform vec3 uCamL, uSunL, uSunCol, uSkyCol, uBounceCol;
+`;
 
 /**
  * Shared GLSL: the aperture curves. Lid geometry and the globe's contact
@@ -90,12 +132,14 @@ const F0_TEAR = 0.028;      // tear film, n = 1.336
  * prefix is cheap; finding that bug is not.
  */
 const APERTURE_GLSL = /* glsl */ `
-uniform float uApW, uApUp, uApDn, uApTilt;
-uniform float uBlinkU, uBlinkD;
 float feSat(float x){ return clamp(x, 0.0, 1.0); }
 float feApShape(float u, float p){ return pow(max(1.0 - u*u, 0.0), p); }
-float feApUpY(float u){ return uApUp * feApShape(u, 0.58) + uApTilt * u; }
-float feApDnY(float u){ return -uApDn * feApShape(u, 0.72) + uApTilt * u; }
+// The two margins meet exactly at u = +/-1, and "exactly" leaves a one-pixel
+// crack at the canthus that the dark sclera shows through as a black notch.
+// Lap them over each other slightly at the corners instead.
+float feLap(float u){ return 0.022 * smoothstep(0.78, 1.0, abs(u)); }
+float feApUpY(float u){ return uApUp * feApShape(u, 0.58) + uApTilt * u - feLap(u); }
+float feApDnY(float u){ return -uApDn * feApShape(u, 0.72) + uApTilt * u + feLap(u); }
 float feApClosedY(float u){ return -0.17 * uApDn * feApShape(u, 0.50) + uApTilt * u; }
 float feLidUpY(float u){ return mix(feApUpY(u), feApClosedY(u), uBlinkU); }
 float feLidDnY(float u){ return mix(feApDnY(u), feApClosedY(u), uBlinkD); }
@@ -103,7 +147,6 @@ float feLidDnY(float u){ return mix(feApDnY(u), feApClosedY(u), uBlinkD); }
 
 /** Shared GLSL: the globe's surface of revolution z = f(rho). */
 const GLOBE_GLSL = /* glsl */ `
-uniform float uR, uRc, uZc, uK;
 float feSmaxK(float a, float b, float k){
   float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
   return mix(b, a, h) + k * h * (1.0 - h);
@@ -194,12 +237,13 @@ function buildCornea(Rc, zc, thetaMax, segW, segH) {
  * vertex position is evaluated in the shader from (aU, aS, aLid) so that a
  * blink costs one uniform write and no CPU work at all.
  */
-function buildLids(R, nu, ns) {
+function buildLids(R, nu, ns, spreadAt) {
   const count = 2 * (nu + 1) * (ns + 1);
   const pos = new Float32Array(count * 3);
   const aU = new Float32Array(count);
   const aS = new Float32Array(count);
   const aLid = new Float32Array(count);
+  const aSpread = new Float32Array(count);
   const idx = [];
   let v = 0;
   for (let lid = 0; lid < 2; lid++) {
@@ -209,17 +253,19 @@ function buildLids(R, nu, ns) {
       const s = j / ns;
       for (let i = 0; i <= nu; i++) {
         const u = (i / nu) * 2 - 1;
-        const ax = u * AP_W * (1 + OUTER_WIDEN * s);
-        const margin = sign > 0 ? AP_UP * Math.pow(Math.max(1 - u * u, 0), 0.58)
-          : -AP_DN * Math.pow(Math.max(1 - u * u, 0), 0.72);
-        const band = sign * (sign > 0 ? BAND_UP : BAND_DN) *
-          Math.pow(Math.max(1 - u * u, 0), 0.45);
-        const ay = margin + AP_TILT * u + band * s;
+        const ax = u * AP_W;
+        const ay = (sign > 0 ? AP_UP * Math.pow(Math.max(1 - u * u, 0), 0.58)
+          : -AP_DN * Math.pow(Math.max(1 - u * u, 0), 0.72)) + AP_TILT * u;
         const l = Math.hypot(ax, ay, 1) || 1;
-        pos[v * 3] = (ax / l) * R * 1.06;
-        pos[v * 3 + 1] = (ay / l) * R * 1.06;
-        pos[v * 3 + 2] = (1 / l) * R * 1.06;
+        const inx = ax / l, iny = ay / l, inz = 1 / l;
+        const rl = Math.hypot(inx, iny) || 1;
+        const th = Math.acos(clamp(inz, -1, 1)) + spreadAt(sign, u) * s;
+        const st = Math.sin(th);
+        pos[v * 3] = (inx / rl) * st * R * 1.06;
+        pos[v * 3 + 1] = (iny / rl) * st * R * 1.06;
+        pos[v * 3 + 2] = Math.cos(th) * R * 1.06;
         aU[v] = u; aS[v] = s; aLid[v] = sign;
+        aSpread[v] = spreadAt(sign, u);
         v++;
       }
     }
@@ -241,6 +287,7 @@ function buildLids(R, nu, ns) {
   g.setAttribute('aU', new THREE.BufferAttribute(aU, 1));
   g.setAttribute('aS', new THREE.BufferAttribute(aS, 1));
   g.setAttribute('aLid', new THREE.BufferAttribute(aLid, 1));
+  g.setAttribute('aSpread', new THREE.BufferAttribute(aSpread, 1));
   g.setIndex(idx);
   // The shader moves vertices; give the culler a sphere that covers every
   // blink position rather than letting three derive one from the rest pose.
@@ -253,10 +300,6 @@ function buildLids(R, nu, ns) {
 // ---------------------------------------------------------------------------
 
 const IRIS_GLSL = /* glsl */ `
-uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
-uniform float uIrisR, uLimbusR, uPupilR, uFibreN, uCollarette, uEta, uIrisZ;
-uniform float uCaustic, uWetness, uR;
-uniform vec3 uCamL, uSunL, uSunCol;
 
 /** Procedural iris. r is normalised to the iris radius, a is the angle. */
 vec3 feIris(float r, float a){
@@ -265,10 +308,15 @@ vec3 feIris(float r, float a){
   // Radial stromal fibres. The angle is warped with radius so the fibres are
   // not dead-straight spokes, and three incommensurate harmonics keep them
   // from reading as a regular star.
+  // atan() jumps by 2*PI across the -X axis. sin(k*a) only survives that jump
+  // when k is an INTEGER, so the harmonic multipliers are integers rather than
+  // the pretty irrational ratios you would otherwise reach for — 2.37 and 0.51
+  // drew a hard seam straight across the iris. The warp is a function of
+  // cos(a)/sin(a) and so is continuous on its own.
   float aw = a + 0.19 * snoise(vec3(cos(a) * 2.1, sin(a) * 2.1, rr * 1.9));
-  float fib = 0.52 * sin(aw * uFibreN)
-            + 0.30 * sin(aw * uFibreN * 2.37 + 1.7)
-            + 0.42 * sin(aw * uFibreN * 0.51 - 0.9);
+  float fib = 0.52 * sin(aw * 118.0)
+            + 0.30 * sin(aw * 279.0 + 1.7)
+            + 0.42 * sin(aw * 61.0 - 0.9);
   fib = fib * 0.5 + 0.5;
   float fibAmt = smoothstep(0.26, 0.92, rr) * 0.58 + 0.10;
 
@@ -278,8 +326,11 @@ vec3 feIris(float r, float a){
   float crypt = smoothstep(0.12, 0.60, w);
 
   // §4b / §3 palette: warm amber core, golden-brown mid, dark outer ring.
-  vec3 c = mix(uIrisInner, uIrisMid, smoothstep(0.08, 0.58, rr));
-  c = mix(c, uIrisOuter, smoothstep(0.55, 0.90, rr));
+  // Keep the amber broad. §4b wants "noticeably warm"; ramping to the dark
+  // outer ring too early leaves a thin gold annulus on black, which is what
+  // the first pass rendered and it reads as a doll's eye.
+  vec3 c = mix(uIrisInner, uIrisMid, smoothstep(0.10, 0.62, rr));
+  c = mix(c, uIrisOuter, smoothstep(0.68, 0.94, rr));
 
   // Collarette: the raised ruff about 40% out, brighter and crenulated.
   float coll = exp(-pow((rr - uCollarette) / 0.080, 2.0)) * (0.70 + 0.55 * fib);
@@ -289,7 +340,7 @@ vec3 feIris(float r, float a){
   c *= mix(0.84, 1.07, crypt);
 
   // Limbal ring — §4b's "darker outer ring". Hard and nearly black.
-  c = mix(c, uLimbal, smoothstep(0.84, 1.00, rr) * 0.94);
+  c = mix(c, uLimbal, smoothstep(0.90, 1.02, rr) * 0.92);
 
   // Round black pupil with a thin bright pupillary ruff at its margin.
   c = mix(uPupilCol, c, smoothstep(uPupilR * 0.93, uPupilR * 1.07, rr));
@@ -325,7 +376,7 @@ export class Eyes {
     const seg = (tier === 'low' ? 0 : tier === 'medium' ? 1 : 2);
     const GW = [28, 48, 72][seg], GH = [20, 34, 52][seg];
     const CW = [20, 30, 44][seg], CH = [8, 12, 18][seg];
-    const LU = [20, 34, 52][seg], LS = [4, 6, 8][seg];
+    const LU = [20, 34, 52][seg], LS = [5, 9, 13][seg];
 
     this.group = new THREE.Group();
     this.group.name = 'eyes';
@@ -351,13 +402,27 @@ export class Eyes {
     const anchor = fox.anchors[`eye${side}`];
     const meta = fox.eyes?.[side] ?? null;
 
-    // --- globe radius, measured, never assumed ----------------------------
-    let R = 0.0116;
+    // --- globe radius: what the anatomy says, CLAMPED to what fits --------
+    // The rig's nominal ball radius and the depth of the socket carved for it
+    // are independent numbers, and right now they disagree: the ball is
+    // 11.56 mm but the socket floor is only 8.56 mm down and the skin does not
+    // wrap the ball until about 55 degrees off axis. Taking the nominal radius
+    // literally puts a third of a 23 mm sphere outside the face — a marble
+    // stuck on the head, which is what the first pass rendered.
+    //
+    // So: measure how much room the socket really has and shrink to fit. This
+    // only ever shrinks, and it re-measures from the live SDF, so if the
+    // anatomy agent deepens the socket the globe grows back on its own.
+    let rNominal = 0.0116;
     if (meta?.centre && meta?.surface) {
-      const c = meta.centre, s = meta.surface;
-      R = Math.hypot(s[0] - c[0], s[1] - c[1], s[2] - c[2]) + (meta.cornealProud ?? 0.003);
+      const c = meta.centre, sf = meta.surface;
+      rNominal = Math.hypot(sf[0] - c[0], sf[1] - c[1], sf[2] - c[2]) +
+        (meta.cornealProud ?? 0.003);
     }
-    R = clamp(R, 0.006, 0.020);
+    rNominal = clamp(rNominal, 0.006, 0.020);
+    const rFit = this._fitGlobeRadius(fox, meta);
+    const R = rFit > 0 ? clamp(Math.min(rNominal, rFit), 0.55 * rNominal, rNominal)
+                       : rNominal;
 
     const Rc = CORNEA_R * R;
     const zc = R * (1 + CORNEA_BULGE) - Rc;       // cornea sphere centre on +Z
@@ -379,15 +444,29 @@ export class Eyes {
     // `meta.look` lives in the skinned mesh's object space; the anchor hangs
     // off the head bone. Map one to the other through the bind inverse so a
     // reposed or rescaled skull changes nothing here.
-    const axis = new THREE.Vector3(side === 'R' ? 0.58 : -0.58, 0.15, 0.80);
-    if (meta?.look) axis.fromArray(meta.look);
-    axis.normalize();
+    //
+    // The orientation is composed as (bindInverse * qField) rather than taken
+    // straight from the rotated axis, because those two differ by a TWIST
+    // about the optical axis and the twist decides which way is "up" for the
+    // eyelids. _lidSpreadSampler measures the skin through qField, so the
+    // geometry has to be built in the same frame or the upper lid's measured
+    // clearance gets applied to the side of the eye.
+    const look = new THREE.Vector3(side === 'R' ? 0.58 : -0.58, 0.15, 0.80);
+    if (meta?.look) look.fromArray(meta.look);
+    look.normalize();
+    const qField = new THREE.Quaternion()
+      .setFromUnitVectors(new THREE.Vector3(0, 0, 1), look);
+
     const head = fox.bone?.('head');
     const bones = fox.skeleton?.bones;
     const bi = bones ? bones.indexOf(head) : -1;
+    const qBind = new THREE.Quaternion();
     if (bi >= 0 && fox.skeleton.boneInverses?.[bi]) {
-      axis.transformDirection(fox.skeleton.boneInverses[bi]).normalize();
+      qBind.setFromRotationMatrix(
+        new THREE.Matrix4().extractRotation(fox.skeleton.boneInverses[bi]));
     }
+    const qLocal = qBind.clone().multiply(qField);
+    const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(qLocal).normalize();
 
     // --- seat the eye so the cornea clears the coat ------------------------
     // March out along the optical axis and find the skin. The fur agent fades
@@ -396,12 +475,12 @@ export class Eyes {
     // push so a bad measurement can never eject the eyeball out of the head.
     let seat = 0;
     const meas = this._measureSkin(fox, meta, R);
-    if (meas > 0) seat = clamp(meas + APEX_CLEARANCE - apexZ, -0.0005, MAX_SEAT_PUSH);
+    if (meas > 0) seat = clamp(meas + APEX_CLEARANCE - apexZ, MAX_SEAT_PULL, MAX_SEAT_PUSH);
 
     // --- assemble ----------------------------------------------------------
     const root = new THREE.Group();
     root.name = `eye${side}`;
-    root.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
+    root.quaternion.copy(qLocal);
     root.position.copy(axis).multiplyScalar(seat);
     anchor.add(root);
 
@@ -430,7 +509,8 @@ export class Eyes {
     cornea.castShadow = false;
     ball.add(cornea);
 
-    const lids = new THREE.Mesh(buildLids(R, segs.LU, segs.LS), this._lidMaterial(u));
+    const spreadAt = this._lidSpreadSampler(fox, meta, R);
+    const lids = new THREE.Mesh(buildLids(R, segs.LU, segs.LS, spreadAt), this._lidMaterial(u));
     lids.name = `eyeLids${side}`;
     lids.castShadow = false;
     lids.receiveShadow = false;
@@ -449,6 +529,102 @@ export class Eyes {
    * Uses the anatomy agent's own SDF, so it re-measures correctly after their
    * rework. Returns -1 when the field is unavailable or the ray misses.
    */
+  /**
+   * Build `spreadAt(lidSign, u)` — how far, in radians of arc, the lid band at
+   * column `u` must sweep before the fox's own skin closes over the globe.
+   *
+   * Sampled at COLS columns per lid and linearly interpolated; the skin varies
+   * smoothly enough around one socket that more would be wasted raycasts.
+   * Falls back to a constant if the SDF is not available.
+   */
+  _lidSpreadSampler(fox, meta, R) {
+    const COLS = 15;
+    const f = fox.field;
+    const flat = () => LID_SPREAD;
+    if (!f?.raycast || !meta?.centre || !meta?.look) return flat;
+
+    const c = meta.centre;
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(meta.look).normalize());
+    const d = new THREE.Vector3();
+    const need = R + 0.0009;          // globe + the lid's own thickness
+
+    // Distance to the skin along a direction given in EYE-LOCAL coordinates.
+    const skinAt = (lx, ly, lz) => {
+      d.set(lx, ly, lz).normalize().applyQuaternion(q);
+      const t = f.raycast(c[0] + d.x * 1e-3, c[1] + d.y * 1e-3, c[2] + d.z * 1e-3,
+        d.x, d.y, d.z, 0.07);
+      return t > 0 ? 1e-3 + t : Infinity;
+    };
+
+    const table = [new Float32Array(COLS), new Float32Array(COLS)];
+    for (let li = 0; li < 2; li++) {
+      const sign = li === 0 ? 1 : -1;
+      for (let i = 0; i < COLS; i++) {
+        const u = (i / (COLS - 1)) * 2 - 1;
+        const shp = (pw) => Math.pow(Math.max(1 - u * u, 0), pw);
+        const lap = 0.022 * smoothstep01(0.78, 1.0, Math.abs(u));
+        const ay = sign > 0 ? AP_UP * shp(0.58) + AP_TILT * u - lap
+          : -AP_DN * shp(0.72) + AP_TILT * u + lap;
+        const ax = u * AP_W;
+        const l = Math.hypot(ax, ay, 1);
+        const th0 = Math.acos(clamp(1 / l, -1, 1));
+        const rl = Math.hypot(ax, ay) || 1;
+        const rx = ax / rl, ry = ay / rl;
+
+        // March outward until the skin has closed over the globe.
+        let found = LID_SPREAD;
+        for (let k = 1; k <= 14; k++) {
+          const th = th0 + (k / 14) * 1.05;
+          const st = Math.sin(th), ct = Math.cos(th);
+          if (skinAt(rx * st, ry * st, ct) >= need) { found = th - th0; break; }
+        }
+        table[li][i] = clamp(found + LID_SLACK, LID_SPREAD_MIN, LID_SPREAD_MAX);
+      }
+    }
+
+    return (sign, u) => {
+      const t = clamp((u + 1) * 0.5, 0, 1) * (COLS - 1);
+      const i = Math.min(COLS - 2, Math.floor(t));
+      const row = table[sign > 0 ? 0 : 1];
+      return lerp(row[i], row[i + 1], t - i);
+    };
+  }
+
+  /**
+   * Largest globe radius that the socket can swallow.
+   *
+   * Marches out from the eyeball centre on a cone at FIT_ANGLE and takes the
+   * nearest skin hit over eight azimuths. Beyond the palpebral aperture the
+   * globe has to be INSIDE the skin, or it bulges through the face; inside the
+   * aperture it is the lids' job to cover it. Returns -1 if the field is not
+   * available, in which case the caller keeps the nominal radius.
+   */
+  _fitGlobeRadius(fox, meta) {
+    const f = fox.field;
+    if (!f?.raycast || !meta?.centre || !meta?.look) return -1;
+    const c = meta.centre, n = meta.look;
+    // An orthonormal basis about the optical axis.
+    const up = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let t = [n[1] * up[2] - n[2] * up[1], n[2] * up[0] - n[0] * up[2],
+      n[0] * up[1] - n[1] * up[0]];
+    const tl = Math.hypot(t[0], t[1], t[2]) || 1;
+    t = [t[0] / tl, t[1] / tl, t[2] / tl];
+    const b = [n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2],
+      n[0] * t[1] - n[1] * t[0]];
+
+    const ca = Math.cos(FIT_ANGLE), sa = Math.sin(FIT_ANGLE);
+    let best = Infinity;
+    for (let i = 0; i < 8; i++) {
+      const az = (i / 8) * TAU, cb = Math.cos(az), sb = Math.sin(az);
+      const d = [0, 1, 2].map((j) => n[j] * ca + (t[j] * cb + b[j] * sb) * sa);
+      const hit = f.raycast(c[0] + d[0] * 1e-3, c[1] + d[1] * 1e-3, c[2] + d[2] * 1e-3,
+        d[0], d[1], d[2], 0.06);
+      if (hit > 0) best = Math.min(best, 1e-3 + hit);
+    }
+    return Number.isFinite(best) ? best * FIT_MARGIN : -1;
+  }
+
   _measureSkin(fox, meta, R) {
     const f = fox.field;
     if (!f?.raycast || !meta?.centre || !meta?.look) return -1;
@@ -471,13 +647,13 @@ export class Eyes {
 
       uIrisInner: { value: new THREE.Color(0xe8ae59) },
       uIrisMid: { value: new THREE.Color(0xba8334) },
-      uIrisOuter: { value: new THREE.Color(0x6b4a18) },
+      uIrisOuter: { value: new THREE.Color(0x8a6028) },
       uLimbal: { value: new THREE.Color(0x1a1206) },
       uPupilCol: { value: new THREE.Color(0x05040a) },
       uSclera: { value: new THREE.Color(0x2a231d) },
 
       uMarginCol: { value: new THREE.Color(0x0d0b0c) },
-      uLidSkin: { value: new THREE.Color(0x6e6158) },
+      uLidSkin: { value: new THREE.Color(0x8d8076) },
       uLidFur: { value: new THREE.Color(0xf2f4f8) },
 
       uCamL: { value: new THREE.Vector3(0, 0, 1) },
@@ -491,8 +667,7 @@ export class Eyes {
       uApW: { value: AP_W }, uApUp: { value: AP_UP },
       uApDn: { value: AP_DN }, uApTilt: { value: AP_TILT },
       uBlinkU: { value: 0 }, uBlinkD: { value: 0 },
-      uBandUp: { value: BAND_UP }, uBandDn: { value: BAND_DN },
-      uWiden: { value: OUTER_WIDEN },
+      uSpread: { value: LID_SPREAD },
     };
   }
 
@@ -517,7 +692,7 @@ export class Eyes {
       // bounce reflecting off the cornea.
       clearcoat: 1.0,
       clearcoatRoughness: 0.028,
-      envMapIntensity: 1.35,
+      envMapIntensity: 0.85,
     });
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, u);
@@ -526,7 +701,7 @@ export class Eyes {
         .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  vLN = objectNormal;');
 
       sh.fragmentShader = 'varying vec3 vLP; varying vec3 vLN;\n' +
-        HASH + SIMPLEX3 + WORLEY3 + UTIL + APERTURE_GLSL + IRIS_GLSL +
+        EYE_UNIFORMS + HASH + SIMPLEX3 + WORLEY3 + UTIL + APERTURE_GLSL + IRIS_GLSL +
         sh.fragmentShader
           .replace('#include <map_fragment>', /* glsl */ `
   // Everything here is prefixed ey* — three's own chunks own the short names
@@ -596,7 +771,13 @@ export class Eyes {
           .replace('#include <lights_physical_fragment>', /* glsl */ `
 #include <lights_physical_fragment>
   material.clearcoat = mix(0.55, 1.0, eyOnCornea) * (1.0 - max(eyShU, eyShD) * 0.7);
-  material.clearcoatRoughness = mix(0.10, 0.022, eyOnCornea);
+  // A real cornea is mirror-smooth, but our env map is a 256 px PMREM: at
+  // mirror roughness it reflects the sky/ground horizon as a HARD LINE across
+  // the eye, which reads as a rendering artifact rather than as a reflection.
+  // Roughing the tear film slightly turns that into the soft vertical
+  // gradient a photograph actually shows, and widens the catchlight enough to
+  // survive the bloom downsample.
+  material.clearcoatRoughness = mix(0.16, 0.075, eyOnCornea);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeGlobe';
@@ -625,9 +806,7 @@ void main(){
   vWN = normalize(mat3(modelMatrix) * normal);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`,
-      fragmentShader: UTIL + APERTURE_GLSL + /* glsl */ `
-uniform vec3 uCamL, uSunL, uSunCol, uSkyCol, uBounceCol;
-uniform float uSunInt, uR, uLimbusR, uWetness;
+      fragmentShader: EYE_UNIFORMS + UTIL + APERTURE_GLSL + /* glsl */ `
 varying vec3 vLP; varying vec3 vLN; varying vec3 vWN;
 
 void main(){
@@ -696,45 +875,82 @@ void main(){
       Object.assign(sh.uniforms, u);
       sh.vertexShader =
         'attribute float aU; attribute float aS; attribute float aLid;\n' +
+        'attribute float aSpread;\n' +
         'varying float vU; varying float vS; varying float vLid; varying vec3 vLP;\n' +
-        'uniform float uBandUp, uBandDn, uWiden;\n' + APERTURE_GLSL + GLOBE_GLSL +
+        EYE_UNIFORMS + APERTURE_GLSL + GLOBE_GLSL +
         sh.vertexShader
           // beginnormal_vertex runs first, so the direction is solved there
           // once and both hooks use the same vector — an approximated normal
           // that disagrees with the position is what makes a shell read as
           // faceted plastic.
           .replace('#include <beginnormal_vertex>', /* glsl */ `
-  float feShp = pow(max(1.0 - aU * aU, 0.0), 0.45);
-  float feYIn  = aLid > 0.0 ? feLidUpY(aU) : feLidDnY(aU);
-  float feYOut = (aLid > 0.0 ? feApUpY(aU) + uBandUp * feShp
-                             : feApDnY(aU) - uBandDn * feShp);
-  vec3 feDir = normalize(vec3(aU * uApW * (1.0 + uWiden * aS),
-                              mix(feYIn, feYOut, aS), 1.0));
+  // The lid margin is authored in gnomonic tangent coordinates, which are
+  // convenient for an almond but diverge at 90 degrees — and the band has to
+  // wrap past the aperture to meet the skin. So place the margin gnomonically,
+  // then sweep OUTWARD as an arc over the globe. At the canthi the outward
+  // direction is horizontal, so the two lids splay sideways and meet there.
+  //
+  // aSpread is MEASURED per column against the real skin (see
+  // _measureLidSpread) rather than being one constant. It has to be: the skin
+  // closes over the globe about 27 degrees off axis above the eye but not
+  // until 50 degrees below it, so a single spread either leaves bare sclera
+  // under the eye or stands the upper lid out over the brow as a hard-edged
+  // slab. Measuring makes the lid tuck under the coat in every direction, and
+  // re-measures itself if the anatomy changes.
+  // Build the band from the REST margin, then close it by ROTATING the whole
+  // lid about the eye's X axis — which is what an eyelid physically does.
+  //
+  // Sweeping outward from the *blinked* margin instead looks equivalent and is
+  // not: once the upper lid's margin crosses the optical axis, "radially away
+  // from the axis" flips to point DOWNWARD, so the closing upper lid swept its
+  // band below the eye and left the top of the aperture wide open. A blink
+  // shut the bottom half only.
+  float feYRest = aLid > 0.0 ? feApUpY(aU) : feApDnY(aU);
+  vec3 feRest = normalize(vec3(aU * uApW, feYRest, 1.0));
+  vec3 feRad = vec3(feRest.xy, 0.0);
+  float feRl = length(feRad);
+  feRad = feRl > 1e-5 ? feRad / feRl : vec3(0.0, aLid, 0.0);
+  float feTh = acos(clamp(feRest.z, -1.0, 1.0)) + aSpread * aS;
+  vec3 feDir = vec3(0.0, 0.0, cos(feTh)) + feRad * sin(feTh);
+
+  // Rotation angle, tapered to zero at the canthi so the corners of the
+  // fissure stay pinned exactly where a real one does.
+  float feB = aLid > 0.0 ? uBlinkU : uBlinkD;
+  float feRestA = aLid > 0.0 ? atan(uApUp) : -atan(uApDn);
+  float feClosA = atan(-0.17 * uApDn);
+  float feRot = (feRestA - feClosA) * feB * feApShape(aU, 0.5);
+  float feCs = cos(feRot), feSn = sin(feRot);
+  feDir = vec3(feDir.x, feDir.y * feCs - feDir.z * feSn,
+                        feDir.y * feSn + feDir.z * feCs);
   vec3 objectNormal = feDir;
 `)
           .replace('#include <begin_vertex>', /* glsl */ `
   vU = aU; vS = aS; vLid = aLid;
   // Sit on the real globe surface — the corneal dome stands proud of the
   // scleral sphere and a closing lid sweeps straight across it — plus a lid
-  // thickness that swells into a fold and then tucks back under the skin, so
-  // the outer edge of the band is never visible against the coat.
-  float feProud = uR * (mix(0.050, 0.005, smoothstep(0.55, 1.0, aS))
-                      + 0.129 * 4.0 * aS * (1.0 - aS));
+  // thickness that is proud enough at the margin to cast a real edge, swells
+  // into the fold, then tucks back onto the globe so the outer boundary
+  // vanishes under the skin instead of ending in a visible rim.
+  float feProud = uR * (0.010 + 0.048 * exp(-aS * 9.0) + 0.070 * 4.0 * aS * (1.0 - aS));
   vec3 transformed = feDir * (feGlobeR(feDir) + feProud);
   vLP = transformed;
 `);
 
       sh.fragmentShader =
         'varying float vU; varying float vS; varying float vLid; varying vec3 vLP;\n' +
-        HASH + SIMPLEX3 + UTIL + /* glsl */ `
-uniform vec3 uMarginCol, uLidSkin, uLidFur, uCamL, uSunL;
-uniform float uR;
-` + sh.fragmentShader
+        EYE_UNIFORMS + HASH + SIMPLEX3 + UTIL + sh.fragmentShader
           .replace('#include <map_fragment>', /* glsl */ `
   // s = 0 is the free edge of the lid. The dark rim §4b demands lives here.
-  float feMargin = 1.0 - smoothstep(0.015, 0.105, vS);
-  float feSkin   = smoothstep(0.06, 0.30, vS);
-  float feFurry  = smoothstep(0.26, 0.62, vS);
+  //
+  // The band sweeps ~35 degrees but the fox's own skin closes over it from
+  // about 40 degrees off axis, so only the first QUARTER of it is ever seen.
+  // Spreading the ramp across the whole band therefore painted the entire
+  // visible lid near-black and the eye read as a hole. These numbers are
+  // tuned to the visible slice: a crisp ~0.4 mm margin, then fur by the time
+  // the skin takes over, so the join is invisible.
+  float feMargin = 1.0 - smoothstep(0.008, 0.055, vS);
+  float feSkin   = smoothstep(0.030, 0.120, vS);
+  float feFurry  = smoothstep(0.100, 0.260, vS);
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
   float feHair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
@@ -750,8 +966,8 @@ uniform float uR;
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
   // Wet meniscus: the tear strip where lid meets globe is the glossiest thing
   // on the face. It dries out quickly into ordinary skin and then into fur.
-  float feWet = 1.0 - smoothstep(0.005, 0.085, vS);
-  float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.25, 0.7, vS)), 0.09, feWet);
+  float feWet = 1.0 - smoothstep(0.003, 0.038, vS);
+  float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.10, 0.30, vS)), 0.09, feWet);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeLid';
