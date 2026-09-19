@@ -113,6 +113,12 @@ vec3 gradeSplitTone(vec3 c, vec3 shadowTint, float shadowAmt,
      a scrim, which is exactly what it was doing. Rolling it off below
      shadowFloor keeps the lift where there is actually signal to tint. */
   float ws = pow(1.0 - l, 2.5) * smoothstep(0.0, shadowFloor, l);
+  /* Same reasoning as the black lift: tinting shadows blue is for NEUTRAL
+     shadows. Pushing blue into an already-saturated warm feature just eats
+     its chroma — it cost the amber iris 2 of its 20 R-B spread. */
+  float mx = max(c.r, max(c.g, c.b));
+  float chroma = (mx - min(c.r, min(c.g, c.b))) / max(mx, 1e-4);
+  ws *= 1.0 - clamp(chroma, 0.0, 1.0);
   float wh = l * l;
   c += shadowTint * (ws * shadowAmt);
   c += highTint   * (wh * highAmt);
@@ -128,11 +134,17 @@ vec3 gradeHighlightDesat(vec3 c, float amount) {
   return mix(c, vec3(l), amount * l * l * l);
 }
 
-vec3 gradeContrastSat(vec3 c, float contrast, float sat) {
+vec3 gradeContrastSat(vec3 c, float contrast, float sat, float shadowSat) {
   // Contrast about 0.5 in display-linear; gentle, AgX already carries the S.
   c = (c - 0.5) * contrast + 0.5;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c = vec3(l) + (c - vec3(l)) * sat;
+  /* Shadow chroma recovery. Any contrast curve that darkens also shrinks the
+     ABSOLUTE distance between channels, so a dark saturated feature loses
+     chroma even when the curve preserves chromaticity exactly. Scaling
+     saturation back up in the low end restores it without lifting the floor,
+     and it is also what the bible wants for the blue snow shadows. */
+  float s = sat + shadowSat * (1.0 - clamp(l, 0.0, 1.0)) * (1.0 - clamp(l, 0.0, 1.0));
+  c = vec3(l) + (c - vec3(l)) * s;
   return max(c, vec3(0.0));
 }
 

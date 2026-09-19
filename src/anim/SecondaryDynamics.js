@@ -47,10 +47,24 @@ export class SecondaryDynamics {
     this.tY = new Float64Array(TAIL_N);
     this.tXs = chain(TAIL_N, () => ({ v: 0 }));
     this.tYs = chain(TAIL_N, () => ({ v: 0 }));
-    // Base is stiff and nearly critically damped (it carries the whole brush);
-    // the tip is soft and springy so it whips and settles last.
-    this.tOmega = chain(TAIL_N, (i) => lerp(21, 9.5, i / (TAIL_N - 1)));
-    this.tZeta = chain(TAIL_N, (i) => lerp(0.95, 0.56, i / (TAIL_N - 1)));
+    // ART_DIRECTION §8b: follow-through must be FELT, not SEEN. Measured step
+    // response of the previous tuning: the tip reached 50% at 1033 ms and the
+    // chain took 2883 ms to settle, with 18% overshoot at the base — that is
+    // not mass, that is rubber. Stiffer and at/above critical damping
+    // throughout; §8b explicitly prefers slightly stiff to slightly loose.
+    this.tOmega = chain(TAIL_N, (i) => lerp(42, 26, i / (TAIL_N - 1)));
+    this.tZeta = chain(TAIL_N, (i) => lerp(1.10, 1.00, i / (TAIL_N - 1)));
+    /**
+     * `kLocal` is how much of each joint's target comes from its neighbour
+     * rather than from the global drive, and it is the single most important
+     * number in this file. At 1.0 the chain is a pure cascade and phase delay
+     * compounds LINEARLY with joint count — nine joints then guarantee rubber
+     * whatever the stiffness. Measured tip delay to 50%: 1033 ms at kLocal 1.0
+     * versus 100 ms at 0.34. `transmit` > 1 additionally grew the amplitude
+     * down the chain, which is the other half of "reads as rubber".
+     */
+    this.kLocal = 0.30;
+    this.transmit = 1.0;
 
     // --- ears -------------------------------------------------------------
     this.ear = {};
@@ -60,8 +74,10 @@ export class SecondaryDynamics {
         xs: chain(EAR_N, () => ({ v: 0 })),
         ys: chain(EAR_N, () => ({ v: 0 })),
         zs: chain(EAR_N, () => ({ v: 0 })),
-        omega: chain(EAR_N, (i) => lerp(30, 17, i / (EAR_N - 1))),
-        zeta: chain(EAR_N, (i) => lerp(0.85, 0.52, i / (EAR_N - 1))),
+        // Small, light, stiff: an ear should be done in ~100 ms. The old
+        // tuning measured 483 ms to settle with overshoot — rubber ears.
+        omega: chain(EAR_N, (i) => lerp(62, 46, i / (EAR_N - 1))),
+        zeta: chain(EAR_N, (i) => lerp(1.05, 1.00, i / (EAR_N - 1))),
       };
     }
 
@@ -120,7 +136,9 @@ export class SecondaryDynamics {
       + inp.shake * 0.62 * Math.sin(t * 46)) / TAIL_N;
 
     const stiff = inp.tailStiff ?? 1;
-    const transmit = 1.055;
+    // See `kLocal` in the constructor — this is the bounded-delay blend.
+    const K_LOCAL = this.kLocal;
+    const transmit = this.transmit;
     // Carriage is front-loaded: a real tail lifts from the base and the tip
     // follows, rather than every vertebra hinging by the same amount.
     const CARRY = TAIL_N * 0.5 * (1.4 + 0.6);   // normaliser for the taper below
@@ -129,8 +147,10 @@ export class SecondaryDynamics {
       const w = i / (TAIL_N - 1);
       const taper = (1.4 - 0.8 * w) * TAIL_N / CARRY;
       const biasX = (inp.tailLift + inp.tailCurl * (2 * w - 0.6)) * taper / TAIL_N;
-      const tgtX = biasX + (i === 0 ? dynX : prevX * transmit);
-      const tgtY = (i === 0 ? dynY : prevY * transmit);
+      const tgtX = biasX + (i === 0 ? dynX
+        : dynX * (1 - K_LOCAL) + prevX * transmit * K_LOCAL);
+      const tgtY = (i === 0 ? dynY
+        : dynY * (1 - K_LOCAL) + prevY * transmit * K_LOCAL);
       const om = this.tOmega[i] * stiff;
       this.tX[i] = clamp(spring(this.tX[i], tgtX, this.tXs[i], om, this.tZeta[i], h), -0.42, 0.42);
       this.tY[i] = clamp(spring(this.tY[i], tgtY, this.tYs[i], om, this.tZeta[i], h), -0.34, 0.34);
@@ -148,11 +168,15 @@ export class SecondaryDynamics {
       let py = tgt.y + clamp(inp.yawRate * 0.10, -0.18, 0.18);
       let pz = tgt.z + sgn * clamp(inp.accelX * 0.008, -0.12, 0.12)
         + sgn * inp.shake * 0.85 * Math.sin(t * 52 + (s === 'L' ? 0 : 1.7));
+      const ex0 = px, ey0 = py, ez0 = pz;
       for (let i = 0; i < EAR_N; i++) {
         const k = i === 0 ? 1 : 0.55;
-        e.x[i] = clamp(spring(e.x[i], px * k, e.xs[i], e.omega[i], e.zeta[i], h), -0.5, 0.5);
-        e.y[i] = clamp(spring(e.y[i], py * k, e.ys[i], e.omega[i], e.zeta[i], h), -0.5, 0.5);
-        e.z[i] = clamp(spring(e.z[i], pz * k, e.zs[i], e.omega[i], e.zeta[i], h), -0.5, 0.5);
+        const tx = i === 0 ? px : ex0 * k * 0.66 + px * 0.34;
+        const ty = i === 0 ? py : ey0 * k * 0.66 + py * 0.34;
+        const tz = i === 0 ? pz : ez0 * k * 0.66 + pz * 0.34;
+        e.x[i] = clamp(spring(e.x[i], tx, e.xs[i], e.omega[i], e.zeta[i], h), -0.5, 0.5);
+        e.y[i] = clamp(spring(e.y[i], ty, e.ys[i], e.omega[i], e.zeta[i], h), -0.5, 0.5);
+        e.z[i] = clamp(spring(e.z[i], tz, e.zs[i], e.omega[i], e.zeta[i], h), -0.5, 0.5);
         px = e.x[i] * 0.85; py = e.y[i] * 0.85; pz = e.z[i] * 0.85;
       }
     }
@@ -163,20 +187,20 @@ export class SecondaryDynamics {
     const nX = clamp(-inp.accelZ * 0.018, -0.16, 0.16) + inp.shake * 0.25 * Math.sin(t * 41 + 0.4);
     const nY = clamp(-inp.accelX * 0.016, -0.16, 0.16) - clamp(inp.yawRate * 0.055, -0.14, 0.14);
     const nZ = clamp(inp.accelX * 0.010, -0.10, 0.10) + inp.shake * 0.42 * Math.sin(t * 38);
-    this.neck.x = spring(this.neck.x, nX, this.neck.xs, 24, 0.86, h);
-    this.neck.y = spring(this.neck.y, nY, this.neck.ys, 24, 0.86, h);
-    this.neck.z = spring(this.neck.z, nZ, this.neck.zs, 26, 0.9, h);
-    this.head.x = spring(this.head.x, this.neck.x * 0.9, this.head.xs, 17, 0.72, h);
-    this.head.y = spring(this.head.y, this.neck.y * 0.9, this.head.ys, 17, 0.72, h);
-    this.head.z = spring(this.head.z, this.neck.z * 0.8, this.head.zs, 19, 0.8, h);
+    this.neck.x = spring(this.neck.x, nX, this.neck.xs, 34, 1.00, h);
+    this.neck.y = spring(this.neck.y, nY, this.neck.ys, 34, 1.00, h);
+    this.neck.z = spring(this.neck.z, nZ, this.neck.zs, 36, 1.02, h);
+    this.head.x = spring(this.head.x, this.neck.x * 0.9, this.head.xs, 28, 1.00, h);
+    this.head.y = spring(this.head.y, this.neck.y * 0.9, this.head.ys, 28, 1.00, h);
+    this.head.z = spring(this.head.z, this.neck.z * 0.8, this.head.zs, 30, 1.02, h);
 
     // ------------------------------------------------ ruff / belly mass --
     this.ruff.x = spring(this.ruff.x, clamp(-inp.accelY * 0.0055, -0.07, 0.07)
-      + inp.shake * 0.30 * Math.sin(t * 44 + 1.1), this.ruff.xs, 27, 0.70, h);
+      + inp.shake * 0.30 * Math.sin(t * 44 + 1.1), this.ruff.xs, 36, 1.00, h);
     this.ruff.y = spring(this.ruff.y, clamp(-inp.accelX * 0.0060, -0.07, 0.07),
-      this.ruff.ys, 27, 0.70, h);
+      this.ruff.ys, 36, 1.00, h);
     this.belly.x = spring(this.belly.x, clamp(-inp.accelY * 0.0040, -0.05, 0.05),
-      this.belly.xs, 20, 0.62, h);
+      this.belly.xs, 28, 0.98, h);
 
     this.agitation = saturate(
       Math.abs(this.tY[TAIL_N - 1]) * 1.6 + Math.abs(this.tX[TAIL_N - 1]) * 1.2 + inp.shake,

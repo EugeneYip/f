@@ -101,6 +101,7 @@ uniform float uTuftAmt;
 uniform float uClumpAO;
 uniform float uAniso;
 uniform float uStrandRound;
+uniform float uStrandAniso;
 uniform float uRim;
 
 // --- stochastic / TAA ------------------------------------------------------
@@ -121,6 +122,7 @@ varying vec3 vNrm;    // world surface normal
 varying vec3 vTan;    // world hair direction at this depth
 varying vec4 vP0;     // x t · y baseTint · z bakedOcclusion · w density
 varying vec4 vP1;     // x clumpScale · y freqScale · z tipWhite · w coatLen
+varying vec3 vAxis;   // BIND-space hair axis — the lattice is stretched along it
 `;
 
 /* ------------------------------------------------------------ vertex helpers */
@@ -224,6 +226,21 @@ float vnoise3(vec3 p){
   return mix(mix(a, b2, f.y), mix(c, d, f.y), f.z);
 }
 
+/**
+ * Stretch a lattice coordinate along the hair axis.
+ *
+ * A 3D Voronoi site is a BALL. Sliced by the shells it becomes a stack of
+ * discs, and over a short coat — the 3 mm muzzle and forehead — those discs
+ * pile up into a flat rounded scale instead of a hair, which is the "reptile
+ * scale" pattern. Compressing the coordinate along the hair makes the cells
+ * elongate along it, so a strand is a TUBE and successive shells cut the same
+ * tube rather than different parts of a sphere.
+ */
+vec3 stretchAlong(vec3 q, vec3 axis, float aniso){
+  float a = dot(q, axis);
+  return q + axis * (a / max(aniso, 1e-3) - a);
+}
+
 float cell8(vec3 q, out vec3 site){
   vec3 ip = floor(q - 0.5);
   float best = 1e9;
@@ -257,7 +274,7 @@ export const FUR_FIELD = /* glsl */ `
  * of being point-sampled, which is what stops the coat crawling at distance.
  */
 vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
-             float freqScale, float shellFill, float pathK, float detail, out vec3 site)
+             float freqScale, float shellFill, float pathK, float detail, vec3 axis, out vec3 site)
 {
   // Large-scale variation: real fur is not uniformly dense.
   float coatVar = snoise(p * uCoatVarFreq) * octaveFade(px, uCoatVarFreq);
@@ -280,7 +297,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // ---- strands -----------------------------------------------------------
   float fs = uStrandFreq * freqScale * (1.0 - 0.10 * coatVar);
   vec3  ssite;
-  float ds = cell8(pPull * fs, ssite);
+  float ds = cell8(stretchAlong(pPull * fs, axis, uStrandAniso), ssite);
   site = ssite / fs;
   float sRand = hash13(ssite * 2.371);
 
@@ -304,7 +321,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   float mLod = octaveFade(px, fm) * detail;
   if (mLod > 0.004){
     vec3  msite;
-    float dm  = cell8(pPull * fm + vec3(11.3, 5.7, 2.9), msite);
+    float dm  = cell8(stretchAlong(pPull * fm, axis, uStrandAniso) + vec3(11.3, 5.7, 2.9), msite);
     float maa = max(px * fm * 1.6, 0.02);
     float mr  = mix(0.34, 0.16, t) * (0.7 + 0.6 * hash13(msite * 3.1));
     float ma  = 1.0 - smoothstep(mr - maa, mr + maa, dm);
@@ -549,6 +566,7 @@ void main(){
   wp.xyz += W * (t * t);
 
   vRoot = position;
+  vAxis = hdir;
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
@@ -634,7 +652,8 @@ ${isShell ? /* glsl */ `
 
   vec3 site = vRoot;
   vec4 hair = vec4(1.0, 0.45, hash13(vRoot * 131.7), 1.0);
-  if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail, site);
+  if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail,
+                              normalize(vAxis), site);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -775,7 +794,7 @@ void main(){
   vec3 wh = normalize(m3 * hO);
 
   vec3 rootW = (modelMatrix * vec4(rootO, 1.0)).xyz;
-  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), rnd, 1.3);
+  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), rnd, 0.85);
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
 
@@ -789,6 +808,7 @@ void main(){
   wp.xyz += B * (side * w);
 
   vRoot = position;
+  vAxis = hdir;
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;

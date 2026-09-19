@@ -72,12 +72,12 @@ function defaults() {
       lookSlope: 1.0, lookOffset: 0.0, lookPower: 1.15, lookSat: 1.0,
       // Bible SS3: "slight lift on the blue channel in shadow". Tiny numbers —
       // these are additive in display-linear, so 0.02 is already visible.
-      blackLift: [0.0006, 0.0010, 0.0020],
+      blackLift: [0.0006, 0.0009, 0.0014],
       shadowTint: [0.0, 0.004, 0.018], shadowAmount: 1.0, shadowFloor: 0.06,
       highlightTint: [0.009, 0.003, -0.006], highlightAmount: 1.0,
       // Contrast lives in agxLook.lookPower, which bends midtones while
       // pinning white. This display-space pivot stays at 1.0.
-      contrast: 1.0, saturation: 1.0, highlightDesat: 0.22,
+      contrast: 1.0, saturation: 1.0, shadowSat: 0.35, highlightDesat: 0.22,
       grain: 0.016, grainSize: 1.9, grainFps: 24,
       chroma: 0.0018, vignette: 0.11, dither: 1 / 255,
     },
@@ -712,6 +712,7 @@ export class PostFX {
     u.uHighlightAmount.value = g.highlightAmount;
     u.uContrast.value = g.contrast;
     u.uSaturation.value = g.saturation;
+    u.uShadowSat.value = g.shadowSat;
     u.uHighlightDesat.value = g.highlightDesat;
     u.uBlackLift.value.fromArray(g.blackLift);
     u.uGrain.value = g.grain;

@@ -25,6 +25,7 @@ uniform vec3  uHighlightTint;
 uniform float uHighlightAmount;
 uniform float uContrast;
 uniform float uSaturation;
+uniform float uShadowSat;
 uniform float uHighlightDesat;
 uniform vec3  uBlackLift;
 uniform float uGrain;
@@ -69,7 +70,7 @@ void main() {
   // --- grade ---------------------------------------------------------------
   c = gradeHighlightDesat(c, uHighlightDesat);
   c = gradeSplitTone(c, uShadowTint, uShadowAmount, uHighlightTint, uHighlightAmount, uShadowFloor);
-  c = gradeContrastSat(c, uContrast, uSaturation);
+  c = gradeContrastSat(c, uContrast, uSaturation, uShadowSat);
 
   /* Chromatic black floor, LAST. Bible SS2.3: shadows must never crush to 0.
      It has to come after the contrast stage — a contrast pivot at 0.5 sends
@@ -128,8 +129,9 @@ export function makeGrade() {
     uHighlightAmount: { value: 1 },
     uContrast: { value: 1.02 },
     uSaturation: { value: 1.05 },
+    uShadowSat: { value: 0.35 },
     uHighlightDesat: { value: 0.25 },
-    uBlackLift: { value: new THREE.Vector3(0.006, 0.009, 0.020) },
+    uBlackLift: { value: new THREE.Vector3(0.0006, 0.0010, 0.0020) },
     uGrain: { value: 0.016 },
     uGrainSize: { value: 1.9 },
     uGrainSeed: { value: 0 },

@@ -51,11 +51,11 @@ export const REGION_TABLE = [
   /* 9 neck          */ { a: [1.00, 1.08, 1.05, 0.35], b: [0.90, 1.00, 1.00, 0.90] },
   /* 10 ruff          */ { a: [1.05, 1.16, 1.15, 0.55], b: [0.72, 0.95, 1.00, 1.60] },
   /* 11 chest         */ { a: [1.00, 1.04, 1.10, 0.38], b: [0.92, 1.00, 1.00, 0.72] },
-  /* 12 shoulder      */ { a: [1.00, 1.08, 1.00, 0.30], b: [0.95, 1.00, 1.00, 0.62] },
-  /* 13 back          */ { a: [1.00, 1.04, 0.85, 0.26], b: [0.95, 1.00, 1.00, 0.78] },
+  /* 12 shoulder      */ { a: [1.00, 1.08, 1.15, 0.30], b: [0.95, 1.00, 1.00, 0.50] },
+  /* 13 back          */ { a: [1.00, 1.04, 1.20, 0.26], b: [0.95, 1.00, 1.00, 0.42] },
   /* 14 flank         */ { a: [1.00, 1.10, 1.05, 0.30], b: [0.90, 1.00, 1.00, 0.82] },
   /* 15 belly         */ { a: [1.00, 1.12, 1.30, 0.42], b: [0.95, 1.05, 0.90, 0.80] },
-  /* 16 croup         */ { a: [1.00, 1.04, 0.95, 0.28], b: [0.92, 1.00, 1.00, 0.82] },
+  /* 16 croup         */ { a: [1.00, 1.04, 1.25, 0.28], b: [0.92, 1.00, 1.00, 0.52] },
   /* 17 haunch        */ { a: [1.00, 1.08, 1.05, 0.30], b: [0.92, 1.00, 1.00, 0.82] },
   /* 18 legFrontUpper */ { a: [1.00, 1.10, 1.00, 0.24], b: [1.10, 1.25, 0.25, 0.65] },
   /* 19 legFrontLower */ { a: [1.00, 1.15, 0.85, 0.24], b: [1.20, 1.45, 0.16, 0.55] },
@@ -107,6 +107,7 @@ export const FUR_DEFAULTS = {
   aoBake: 0.22,
   rim: 0.30,
   strandRound: 0.60,
+  strandAniso: 6.0,   // strand cells are tubes along the hair, not balls
 
   specShiftA: -0.085,
   specShiftB: 0.16,
@@ -118,7 +119,7 @@ export const FUR_DEFAULTS = {
 
   // cards
   cardWidth: 0.115,
-  cardLength: 1.15,
+  cardLength: 1.42,
   cardInner: 0.17,
   cardJitter: 1.05,
   cardOpacity: 1.0,
@@ -202,6 +203,7 @@ export function buildFurUniforms(ctx) {
     uClumpAO: { value: d.clumpAO },
     uAniso: { value: 1 },
     uStrandRound: { value: d.strandRound },
+    uStrandAniso: { value: d.strandAniso },
     uRim: { value: d.rim },
 
     uStochastic: { value: 0 },

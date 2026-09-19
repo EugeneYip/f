@@ -221,6 +221,8 @@ export class FoxBrain {
     this.ikError = 0;
     this.idleShiftX = 0;
     this.idleShiftZ = 0;
+    this.turnLead = 0;
+    this.accelLead = 0;
     this.pounceT = 0;
     this.pounceAir = 0;
 
@@ -338,6 +340,7 @@ export class FoxBrain {
     this._behaviour(h, ctx);
     loco.step(h, ctx);
     this._pounce(h, ctx);
+    this._anticipation(h);
     this._derivatives(h);
 
     this.life.step(h, this.exertion, this.settled);
@@ -495,6 +498,24 @@ export class FoxBrain {
 
   // ------------------------------------------------------------ derivatives --
 
+  /**
+   * Anticipation. ART_DIRECTION §8b: "real animals *lead* a turn with the
+   * head, they do not only trail with the tail." Everything in
+   * SecondaryDynamics trails by construction, so without this the animal can
+   * only ever look like it is being dragged around by its own body.
+   *
+   * The body yaw damps toward its target at rate 2.2; these lead signals damp
+   * at 11 and 8, so the head is already committed to the turn several frames
+   * before the shoulders follow — which is the whole point.
+   */
+  _anticipation(h) {
+    const loco = this.loco;
+    const pend = wrapPi(loco.yawTarget - loco.yaw);
+    this.turnLead = damp(this.turnLead, clamp(pend, -1.3, 1.3), 11, h);
+    const cmd = loco.speedTarget - loco.speed;
+    this.accelLead = damp(this.accelLead, clamp(cmd, -1.5, 1.5), 8, h);
+  }
+
   _derivatives(h) {
     const loco = this.loco;
     const bodyY = loco.pos.y + loco.bob;
@@ -618,6 +639,20 @@ export class FoxBrain {
     rig.add('neck02', life.driftY * 0.26, life.driftX * 0.30, life.driftZ * 0.5);
     rig.add('head', life.driftY * 0.22, life.driftX * 0.26, life.driftZ * 0.8);
     rig.add('spine01', 0, 0, life.driftZ * 0.30 * q);
+
+    // --------------------------------------------------------- anticipation --
+    // Head and neck lead the turn, and bank into it. Applied BEFORE the
+    // trailing layers so the two read as one gesture rather than a fight.
+    const lead = clamp(this.turnLead * 0.38, -0.42, 0.42);
+    rig.add('neck01', 0, lead * 0.30, -lead * 0.10);
+    rig.add('neck02', 0, lead * 0.35, -lead * 0.10);
+    rig.add('head', 0, lead * 0.35, -lead * 0.12);
+    // Gather before accelerating and extend before stopping: a small nose-down
+    // set as the animal commits to speed, released as the speed arrives.
+    const gather = clamp(this.accelLead * 0.085, -0.09, 0.12);
+    rig.add('neck01', gather * 0.55, 0, 0);
+    rig.add('spine04', gather * 0.25, 0, 0);
+    rig.add('head', -gather * 0.30, 0, 0);
 
     // ------------------------------------------------------------- look-at --
     this.look.apply(rig);
