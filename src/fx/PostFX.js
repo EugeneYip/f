@@ -101,7 +101,12 @@ function defaults() {
       fStop: 4.0, sensorHeight: 0.024, scale: 1.0, maxCoC: 26,
       // Background blur ceiling as a fraction of image height, so the look is
       // identical at every resolution and adaptive-resolution step.
-      maxBackgroundCoC: 0.016,
+      // Judgement call, easy to revert: 0.016 (~19 px at 1200p) removed every
+      // high-frequency reference from the background, which makes the eye
+      // read the in-focus subject as soft even though it is bit-identical
+      // with DoF off. 0.011 keeps clear subject separation while leaving
+      // enough background structure to judge sharpness against.
+      maxBackgroundCoC: 0.011,
       nearGain: 1.0, edgeBoost: 0.14, blendLo: 1.0, blendHi: 3.0,
       highlightClamp: 7.0,
     },
@@ -150,7 +155,8 @@ export class PostFX {
   init(ctx) {
     this.ctx = ctx;
     this.renderer = ctx.renderer;
-    ctx.postfx = this._makeApi();
+    this.api = this._makeApi();
+    ctx.postfx = this.api;
     this._build(ctx);
   }
 
@@ -170,6 +176,12 @@ export class PostFX {
          frame's depth, which is the only one safe to sample while the scene
          pass is drawing into the current one. */
       get depthTexture() { return self.publishedDepth; },
+      /* Authoritative: is a TAA resolve actually running this frame? Systems
+         using stochastic/dithered alpha must key off THIS rather than the
+         mere existence of a postfx system — at the `low` tier the chain is
+         live but TAA is gated off, and an unresolved dither reads as a
+         speckled coat. */
+      get taaActive() { return self.ok && self.api?.enabled !== false && !!self.taa; },
       get near() { return self.ctx?.camera?.near ?? 0.05; },
       get far() { return self.ctx?.camera?.far ?? 900; },
       grade: c.grade,
@@ -720,6 +732,7 @@ export class PostFX {
       size: [this.w, this.h],
       tier: this.ctx?.quality?.tier,
       gates: this.gates,
+      taaActive: this.ok && this.api?.enabled !== false && !!this.taa,
       bloomMips: this.bloom?.mips.length ?? 0,
       taaSamples: this.taa ? this.taa.n + 1 : 0,
       focus: this._afDistance,

@@ -190,7 +190,10 @@ export class TAA {
     this.reset();
   }
 
-  reset() { this.needsReset = true; this.n = 0; }
+  /** A hard cut. Rewinds the jitter phase too, so two runs of the same pose
+   *  draw the same Halton samples in the same order and review screenshots
+   *  are bit-reproducible rather than merely visually equivalent. */
+  reset() { this.needsReset = true; this.n = 0; this.index = 0; }
 
   /** Current sub-pixel offset in pixels, in [-0.5, 0.5]. */
   currentJitter() { return this.jitter[this.index % this.jitter.length]; }

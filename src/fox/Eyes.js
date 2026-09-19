@@ -27,10 +27,13 @@
  *            That parallax is the whole difference between a bead and an eye.
  *            Also carries the refractive caustic on the lower iris and the
  *            contact shadow cast by the upper lid.
- *   cornea   additive overlay on the corneal cap only. Owns the wet highlight
- *            — a tight GGX sun lobe plus a broad sky term, Fresnel-weighted.
- *            Because it is a separate surface *in front of* the iris, the
- *            catchlight sits proud of the iris and does not slide with it.
+ *   cornea   additive overlay on the corneal cap only. Two tight GGX lobes,
+ *            Fresnel-weighted: one on the sun, one on the sky. The broad,
+ *            physically-correct env reflection is NOT here — it is three's
+ *            own clearcoat lobe on the globe, so it is lit by the real PMREM
+ *            and by all four of Environment.js's lights. This mesh exists to
+ *            guarantee a discrete, bloomable catchlight that sits in front of
+ *            the refracted iris instead of sliding with it.
  *   lids     one mesh per eye carrying both lids. The palpebral aperture is a
  *            true almond: two curves that meet at the canthi, evaluated in the
  *            vertex shader from a blink uniform, so closure is free and exact.
@@ -47,7 +50,7 @@
  * `ctx.fox.gazeYaw/gazePitch` are used when present and ignored when not.
  */
 import * as THREE from 'three';
-import { clamp, saturate, lerp, smoothstep, TAU } from '../util/math.js';
+import { clamp, saturate, lerp, TAU } from '../util/math.js';
 import { HASH, SIMPLEX3, WORLEY3, UTIL } from '../shaders/noise.glsl.js';
 
 // --- proportions, as fractions of the measured globe radius ----------------
@@ -75,31 +78,57 @@ const MAX_SEAT_PUSH = 0.0045;   // never shove the eye more than this far out
 
 const F0_TEAR = 0.028;      // tear film, n = 1.336
 
-/** Shared GLSL: the aperture curves. Lid geometry and the globe's contact
- *  shadow must agree on these exactly, so they are written once. */
+/**
+ * Shared GLSL: the aperture curves. Lid geometry and the globe's contact
+ * shadow must agree on these exactly, so they are written once.
+ *
+ * NAMING. Everything injected from this file is prefixed `fe` (fox eye).
+ * These chunks are spliced into three's own meshphysical program at a scope
+ * we do not control, and an unprefixed helper that happens to match something
+ * three adds in a future release fails as a shader compile error — which
+ * App.js swallows into a disabled system and a silently empty socket. The
+ * prefix is cheap; finding that bug is not.
+ */
 const APERTURE_GLSL = /* glsl */ `
 uniform float uApW, uApUp, uApDn, uApTilt;
 uniform float uBlinkU, uBlinkD;
-float apShape(float u, float p){ return pow(max(1.0 - u*u, 0.0), p); }
-float apUpY(float u){ return uApUp * apShape(u, 0.58) + uApTilt * u; }
-float apDnY(float u){ return -uApDn * apShape(u, 0.72) + uApTilt * u; }
-float apClosedY(float u){ return -0.17 * uApDn * apShape(u, 0.50) + uApTilt * u; }
-float lidUpY(float u){ return mix(apUpY(u), apClosedY(u), uBlinkU); }
-float lidDnY(float u){ return mix(apDnY(u), apClosedY(u), uBlinkD); }
+float feSat(float x){ return clamp(x, 0.0, 1.0); }
+float feApShape(float u, float p){ return pow(max(1.0 - u*u, 0.0), p); }
+float feApUpY(float u){ return uApUp * feApShape(u, 0.58) + uApTilt * u; }
+float feApDnY(float u){ return -uApDn * feApShape(u, 0.72) + uApTilt * u; }
+float feApClosedY(float u){ return -0.17 * uApDn * feApShape(u, 0.50) + uApTilt * u; }
+float feLidUpY(float u){ return mix(feApUpY(u), feApClosedY(u), uBlinkU); }
+float feLidDnY(float u){ return mix(feApDnY(u), feApClosedY(u), uBlinkD); }
 `;
 
 /** Shared GLSL: the globe's surface of revolution z = f(rho). */
 const GLOBE_GLSL = /* glsl */ `
 uniform float uR, uRc, uZc, uK;
-float smaxK(float a, float b, float k){
+float feSmaxK(float a, float b, float k){
   float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
   return mix(b, a, h) + k * h * (1.0 - h);
 }
-float globeZ(float rho){
+float feGlobeZ(float rho){
   float zs = sqrt(max(uR * uR - rho * rho, 0.0));
   float ic = uRc * uRc - rho * rho;
   if (ic <= 0.0) return zs;
-  return smaxK(zs, uZc + sqrt(ic), uK);
+  return feSmaxK(zs, uZc + sqrt(ic), uK);
+}
+/**
+ * Radius of the globe surface along a unit direction. The profile is given as
+ * z = f(rho), so solve t*d.z = f(t*|d.xy|) by fixed point — it converges in
+ * two steps for anything the lid can reach (d.z stays above ~0.6) and it is
+ * exact on the optical axis. The lid has to ride over the real corneal dome,
+ * not a sphere, or a closing lid saws straight through the cornea.
+ */
+float feGlobeR(vec3 d){
+  float dz = max(d.z, 0.35);
+  float dxy = length(d.xy);
+  float t = uR;
+  t = feGlobeZ(t * dxy) / dz;
+  t = feGlobeZ(t * dxy) / dz;
+  t = feGlobeZ(t * dxy) / dz;
+  return t;
 }
 `;
 
@@ -198,9 +227,12 @@ function buildLids(R, nu, ns) {
       for (let i = 0; i < nu; i++) {
         const a = base + j * (nu + 1) + i;
         const b = a + 1, c = a + (nu + 1), d = c + 1;
-        // Wind so both lids face outward despite the mirrored v direction.
-        if (sign > 0) idx.push(a, c, b, b, c, d);
-        else idx.push(a, b, c, b, d, c);
+        // Both lids must wind counter-clockwise as seen from OUTSIDE the eye
+        // or FrontSide culls them and the bare globe shows through with no
+        // aperture at all. +i is +x for both, but +j is +y on the upper lid
+        // and -y on the lower, so the lower lid's triangles are mirrored.
+        if (sign > 0) idx.push(a, b, c, b, d, c);
+        else idx.push(a, c, b, b, c, d);
       }
     }
   }
@@ -223,11 +255,11 @@ function buildLids(R, nu, ns) {
 const IRIS_GLSL = /* glsl */ `
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform float uIrisR, uLimbusR, uPupilR, uFibreN, uCollarette, uEta, uIrisZ;
-uniform float uCaustic, uWetness;
-uniform vec3 uCamL, uSunL;
+uniform float uCaustic, uWetness, uR;
+uniform vec3 uCamL, uSunL, uSunCol;
 
 /** Procedural iris. r is normalised to the iris radius, a is the angle. */
-vec3 irisColour(float r, float a){
+vec3 feIris(float r, float a){
   float rr = clamp(r, 0.0, 1.35);
 
   // Radial stromal fibres. The angle is warped with radius so the fibres are
@@ -437,10 +469,10 @@ export class Eyes {
       uFibreN: { value: 118.0 }, uCollarette: { value: 0.41 },
       uCaustic: { value: 1.0 }, uWetness: { value: 1.0 },
 
-      uIrisInner: { value: new THREE.Color(0xc08a3c) },
-      uIrisMid: { value: new THREE.Color(0x8a6229) },
-      uIrisOuter: { value: new THREE.Color(0x46310f) },
-      uLimbal: { value: new THREE.Color(0x140d05) },
+      uIrisInner: { value: new THREE.Color(0xe8ae59) },
+      uIrisMid: { value: new THREE.Color(0xba8334) },
+      uIrisOuter: { value: new THREE.Color(0x6b4a18) },
+      uLimbal: { value: new THREE.Color(0x1a1206) },
       uPupilCol: { value: new THREE.Color(0x05040a) },
       uSclera: { value: new THREE.Color(0x2a231d) },
 
@@ -476,8 +508,16 @@ export class Eyes {
       color: 0xffffff,
       roughness: 0.45,
       metalness: 0.0,
-      clearcoat: 0.0,
-      envMapIntensity: 0.55,
+      // The wet corneal layer is three's own clearcoat lobe, modulated per
+      // pixel below. Doing it this way rather than with a hand-rolled
+      // specular means the highlight is lit by the real env map and all four
+      // of Environment.js's lights — which matters enormously here, because
+      // the bible's key is BEHIND the animal: there is no sun catchlight on
+      // a backlit eye, and what sells it is the twilight sky and the snow
+      // bounce reflecting off the cornea.
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.028,
+      envMapIntensity: 1.35,
     });
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, u);
@@ -502,13 +542,19 @@ export class Eyes {
   // plane. The iris therefore sits behind a lens: it shifts as the camera
   // moves and is magnified toward the limbus, which is exactly what stops an
   // eye reading as a painted bead.
-  vec3 eyRd = refract(-eyV, eyN, uEta);
-  if (eyRd.z > -1e-4) eyRd = vec3(eyRd.xy, -1e-4);
+  // Refraction goes unstable right at the limbus: the surface normal swings
+  // through most of a right angle across a couple of vertices, so the
+  // refracted hit point flies outward and the iris edge comes out crenulated.
+  // Fade back to the straight view ray over the outer fifth of the cornea —
+  // nothing is visible through there anyway, it is already limbal ring.
+  float eyRel = eyRho / max(uLimbusR, 1e-6);
+  vec3 eyRd = mix(refract(-eyV, eyN, uEta), -eyV, smoothstep(0.62, 1.0, eyRel));
+  eyRd = normalize(vec3(eyRd.xy, min(eyRd.z, -1e-3)));
   float eyT = (uIrisZ - eyP.z) / eyRd.z;
   vec2 eyIp = eyP.xy + eyRd.xy * max(eyT, 0.0);
-  float eyIr = length(eyIp) / max(uIrisR, 1e-6);
+  float eyIr = min(length(eyIp) / max(uIrisR, 1e-6), 1.12);
 
-  vec3 eyIris = irisColour(eyIr, atan(eyIp.y, eyIp.x));
+  vec3 eyIris = feIris(eyIr, atan(eyIp.y, eyIp.x));
 
   // --- refractive caustic on the lower iris -----------------------------
   // The same bend applied to the SUN: the cornea throws a soft crescent of
@@ -518,7 +564,7 @@ export class Eyes {
   vec2 eyCp = vec2(0.0);
   if (eySr.z < -1e-4) eyCp = eySr.xy * ((uIrisZ - uR * 1.075) / eySr.z);
   float eyCd = length(eyIp - eyCp) / max(uIrisR, 1e-6);
-  float eyLit = saturate(uSunL.z) * saturate(1.0 - eyIr * 0.55);
+  float eyLit = feSat(uSunL.z) * feSat(1.0 - eyIr * 0.55);
   eyIris += uSunCol * exp(-pow(eyCd / 0.34, 2.0)) * uCaustic * 0.42 * eyLit;
 
   // --- sclera -----------------------------------------------------------
@@ -536,14 +582,21 @@ export class Eyes {
   float eyDz = max(eyD.z, 1e-3);
   float eyGu = clamp((eyD.x / eyDz) / uApW, -1.0, 1.0);
   float eyGy = eyD.y / eyDz;
-  float eyShU = smoothstep(-0.30, 0.02, eyGy - lidUpY(eyGu));
-  float eyShD = smoothstep(-0.22, 0.02, lidDnY(eyGu) - eyGy);
+  float eyShU = smoothstep(-0.30, 0.02, eyGy - feLidUpY(eyGu));
+  float eyShD = smoothstep(-0.22, 0.02, feLidDnY(eyGu) - eyGy);
   eyCol *= mix(1.0, 0.30, max(eyShU, eyShD * 0.55));
 
   diffuseColor.rgb = eyCol;
 `)
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
   float roughnessFactor = mix(0.16, 0.50, eyOnCornea);
+`)
+          // The tear film only exists over the cornea, and it dulls where the
+          // lid margin presses on the globe.
+          .replace('#include <lights_physical_fragment>', /* glsl */ `
+#include <lights_physical_fragment>
+  material.clearcoat = mix(0.55, 1.0, eyOnCornea) * (1.0 - max(eyShU, eyShD) * 0.7);
+  material.clearcoatRoughness = mix(0.10, 0.022, eyOnCornea);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeGlobe';
@@ -580,25 +633,33 @@ varying vec3 vLP; varying vec3 vLN; varying vec3 vWN;
 void main(){
   vec3 N = normalize(vLN);
   vec3 V = normalize(uCamL - vLP);
-  float ndv = saturate(dot(N, V));
+  float ndv = feSat(dot(N, V));
   float F = ${F0_TEAR.toFixed(4)} + (1.0 - ${F0_TEAR.toFixed(4)}) * pow(1.0 - ndv, 5.0);
 
   // Tight primary sun lobe — this is the catchlight.
   vec3 H = normalize(V + uSunL);
-  float ndh = saturate(dot(N, H));
-  float ndl = saturate(dot(N, uSunL));
+  float ndh = feSat(dot(N, H));
+  float ndl = feSat(dot(N, uSunL));
   float a = 0.026;                       // tear film is very smooth
   float a2 = a * a;
   float dn = ndh * ndh * (a2 - 1.0) + 1.0;
   float D = a2 / (3.14159265 * dn * dn);
   vec3 spec = uSunCol * uSunInt * D * F * ndl * 0.02;
 
-  // Broad sky/bounce term so the eye is never a dead black bead when the sun
-  // is behind the animal — the twilight sky is the dominant reflector here.
-  vec3 Rw = reflect(-normalize(vWN * 0.0 + V), N);      // local is fine: dim + broad
-  float up = saturate(vWN.y * 0.5 + 0.5);
-  vec3 env = mix(uBounceCol, uSkyCol, up) * 1.35;
-  spec += env * F * 1.6;
+  // A narrow sky catchlight. The globe's clearcoat lobe already does the
+  // physically-correct env reflection, so this is deliberately small: it only
+  // guarantees a discrete, bloomable point of light. §1 puts the key BEHIND
+  // the animal, so on most frames the sun lobe above contributes nothing and
+  // this — the twilight sky and the snow bounce off a wet cornea — is the
+  // entire catchlight. Aimed up and slightly camera-ward, where the brightest
+  // part of a polar twilight sky actually is.
+  vec3 skyDir = normalize(vec3(V.x * 0.35, abs(V.y) * 0.25 + 0.85, V.z * 0.35));
+  vec3 Hs = normalize(V + skyDir);
+  float ndhs = feSat(dot(N, Hs));
+  float as2 = 0.052 * 0.052;
+  float dns = ndhs * ndhs * (as2 - 1.0) + 1.0;
+  vec3 skyLit = mix(uBounceCol, uSkyCol, 0.7);
+  spec += skyLit * (as2 / (3.14159265 * dns * dns)) * F * 0.055;
 
   // A second, wider lobe keeps the highlight alive after the bloom downsample
   // and stops it disappearing entirely at portrait framing.
@@ -637,30 +698,30 @@ void main(){
         'attribute float aU; attribute float aS; attribute float aLid;\n' +
         'varying float vU; varying float vS; varying float vLid; varying vec3 vLP;\n' +
         'uniform float uBandUp, uBandDn, uWiden;\n' + APERTURE_GLSL + GLOBE_GLSL +
-        sh.vertexShader.replace('#include <begin_vertex>', /* glsl */ `
-  vU = aU; vS = aS; vLid = aLid;
-  float shp = pow(max(1.0 - aU * aU, 0.0), 0.45);
-  float yIn  = aLid > 0.0 ? lidUpY(aU) : lidDnY(aU);
-  float yOut = (aLid > 0.0 ? apUpY(aU) + uBandUp * shp
-                           : apDnY(aU) - uBandDn * shp);
-  float ax = aU * uApW * (1.0 + uWiden * aS);
-  float ay = mix(yIn, yOut, aS);
-  vec3 dir = normalize(vec3(ax, ay, 1.0));
-
-  // Ride over whatever the globe actually is at this direction (the corneal
-  // dome stands proud of the scleral sphere, and a blinking lid sweeps right
-  // across it), plus a lid thickness that swells into a fold and then tucks
-  // back under the skin so its outer edge is never visible.
-  float rho = uR * length(dir.xy);
-  float surf = max(uR, globeZ(rho) * 0.30 + uR * 0.86);
-  float proud = mix(0.00058, 0.00006, smoothstep(0.55, 1.0, aS))
-              + 0.00150 * 4.0 * aS * (1.0 - aS);
-  vec3 transformed = dir * (surf + proud * (uR / 0.0116));
-  vLP = transformed;
-`)
+        sh.vertexShader
+          // beginnormal_vertex runs first, so the direction is solved there
+          // once and both hooks use the same vector — an approximated normal
+          // that disagrees with the position is what makes a shell read as
+          // faceted plastic.
           .replace('#include <beginnormal_vertex>', /* glsl */ `
-  vec3 objectNormal = normalize(vec3(aU * uApW, mix(aLid > 0.0 ? lidUpY(aU) : lidDnY(aU),
-      (aLid > 0.0 ? apUpY(aU) + uBandUp : apDnY(aU) - uBandDn), aS), 1.0));
+  float feShp = pow(max(1.0 - aU * aU, 0.0), 0.45);
+  float feYIn  = aLid > 0.0 ? feLidUpY(aU) : feLidDnY(aU);
+  float feYOut = (aLid > 0.0 ? feApUpY(aU) + uBandUp * feShp
+                             : feApDnY(aU) - uBandDn * feShp);
+  vec3 feDir = normalize(vec3(aU * uApW * (1.0 + uWiden * aS),
+                              mix(feYIn, feYOut, aS), 1.0));
+  vec3 objectNormal = feDir;
+`)
+          .replace('#include <begin_vertex>', /* glsl */ `
+  vU = aU; vS = aS; vLid = aLid;
+  // Sit on the real globe surface — the corneal dome stands proud of the
+  // scleral sphere and a closing lid sweeps straight across it — plus a lid
+  // thickness that swells into a fold and then tucks back under the skin, so
+  // the outer edge of the band is never visible against the coat.
+  float feProud = uR * (mix(0.050, 0.005, smoothstep(0.55, 1.0, aS))
+                      + 0.129 * 4.0 * aS * (1.0 - aS));
+  vec3 transformed = feDir * (feGlobeR(feDir) + feProud);
+  vLP = transformed;
 `);
 
       sh.fragmentShader =
@@ -671,26 +732,26 @@ uniform float uR;
 ` + sh.fragmentShader
           .replace('#include <map_fragment>', /* glsl */ `
   // s = 0 is the free edge of the lid. The dark rim §4b demands lives here.
-  float margin = 1.0 - smoothstep(0.015, 0.105, vS);
-  float skin   = smoothstep(0.06, 0.30, vS);
-  float furry  = smoothstep(0.26, 0.62, vS);
+  float feMargin = 1.0 - smoothstep(0.015, 0.105, vS);
+  float feSkin   = smoothstep(0.06, 0.30, vS);
+  float feFurry  = smoothstep(0.26, 0.62, vS);
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
-  float hair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
-  vec3 fur = uLidFur * mix(0.80, 1.06, hair);
+  float feHair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
+  vec3 feFur = uLidFur * mix(0.80, 1.06, feHair);
 
-  vec3 col = mix(uMarginCol, uLidSkin, skin);
-  col = mix(col, fur, furry);
+  vec3 feCol = mix(uMarginCol, uLidSkin, feSkin);
+  feCol = mix(feCol, feFur, feFurry);
   // Keep the extreme margin genuinely dark — this is the line that makes the
   // eye read from across the frame.
-  col = mix(col, uMarginCol, margin * 0.94);
-  diffuseColor.rgb = col;
+  feCol = mix(feCol, uMarginCol, feMargin * 0.94);
+  diffuseColor.rgb = feCol;
 `)
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
   // Wet meniscus: the tear strip where lid meets globe is the glossiest thing
   // on the face. It dries out quickly into ordinary skin and then into fur.
-  float wet = 1.0 - smoothstep(0.005, 0.085, vS);
-  float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.25, 0.7, vS)), 0.09, wet);
+  float feWet = 1.0 - smoothstep(0.005, 0.085, vS);
+  float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.25, 0.7, vS)), 0.09, feWet);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeLid';

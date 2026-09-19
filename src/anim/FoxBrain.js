@@ -784,6 +784,13 @@ export class FoxBrain {
     fox.blinkR = this.life.blinkR;
     fox.gazeYaw = this.look.gazeYaw;
     fox.gazePitch = this.look.gazePitch;
+    // World-space point of interest. src/fox/Eyes.js drives the eyeballs from
+    // gazeYaw/gazePitch by default and treats its own setLook() as an
+    // override, so this is published for anyone who wants the richer signal
+    // (cinematics, breath aim) rather than pushed at it every frame — pushing
+    // would permanently latch the override and kill its fallback path.
+    if (!fox.lookTarget) fox.lookTarget = this.look.target.clone();
+    else fox.lookTarget.copy(this.look.target);
     fox.yawn = this.life.yawn;
     // For the fur agent: how hard the coat is being thrown about.
     fox.agitation = this.sec.agitation;
