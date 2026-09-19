@@ -48,6 +48,7 @@ Two tooling tasks, both fully specified with an objective pass/fail:
 |---|---|---:|---:|---|
 | A — contact sheet | Haiku | 43,624 | 69 s | pass, self-verified visually |
 | B — consolidated CI gate | Sonnet | 143,594 | 13 min | pass, verified in both directions |
+| C — fix a gated defect | Sonnet | 251,453 | 40 min | check passes, **product damaged** (see §5a) |
 | baseline content round | Opus | 506k–787k | 5–30 min | — |
 
 Haiku did A for **5.5–8.6%** of a typical Opus content round. Sonnet did the
@@ -102,10 +103,49 @@ shells becomes a stack of discs until fur measured it.
 
 The question decomposes into three, with different answers:
 
-### (a) Marginal defect cost — plausibly ~1%
-Once a gate defines "done", a defect becomes a closed-form task. This is what
-experiment C tests directly: a real open defect, a cheap model, a failing
-numeric test as the entire brief.
+### (a) Marginal defect cost — plausibly ~1%, **with a serious caveat**
+Once a gate defines "done", a defect becomes a closed-form task. Experiment C
+tested this directly and returned the most important result of the three.
+
+**Experiment C — Sonnet, 251,453 tokens, 75 tool uses, 40 min.** Brief: one
+failing numeric check (`no hard horizon step`, 47 levels), the gate as the sole
+definition of done. Explicit instruction: *"Do not change the test. Moving the
+threshold is not a fix."*
+
+It did not move the threshold. It did something more instructive: it traced the
+failure correctly — proving with a clean ablation chain that the offending pixel
+was **not** a horizon seam at all but a single snow sparkle glint clipping to
+white — and then satisfied the check by **cutting the art bible's crystal-glint
+intensity from 240 to 70**. A 71% reduction of a mandated feature (§6: "discrete,
+view-dependent specular glints") to move a number.
+
+It was entirely transparent about this, and its diagnosis was right. The fault is
+**the gate's, and therefore mine**: a single-column sampler cannot distinguish a
+horizon seam from a bright specular point. Both are a large one-row jump.
+
+Rewriting the check to require **horizontal coherence** — a real seam steps at the
+same y across most of the frame; a glint is an isolated 2–4 px point — the truth
+emerges:
+
+```
+largest horizontally coherent jump:  17 levels  (14/40 columns agree)
+loudest isolated point:              56 levels  (the sparkle)
+```
+
+**The defect never existed.** The sparkle reduction has been reverted.
+
+**So the caveat on this whole approach is:** a cheap model given a bad gate will
+satisfy it by damaging the product, efficiently and in good faith. Gates transfer
+the burden of correctness from the reviewer to the instrument — they do not
+remove it.
+
+Honest instrument defect rate on this very document's tooling: **3 of 13 checks in
+`spec.mjs` were wrong on first authoring** — the silhouette check passed by
+measuring the sky's gradient rather than the fur edge; the horizon check produced
+the false positive above; the scrim check asserted on a single darkest pixel and
+flaked between runs with no code change. All three were caught, two of them by
+agents rather than by me. That is a 23% first-pass defect rate on instruments
+written by the person who knew exactly what they were supposed to measure.
 
 ### (b) Rebuild cost — realistically 15–25%, not 1%
 With `ART_DIRECTION.md` (corrected), `REVIEW.md`, the four harnesses and the
@@ -135,8 +175,12 @@ Ranked by measured evidence, not intuition:
 4. **Every fix ships with a guard.** The fur reach guard costs one round and
    would have prevented three. Its constants are injected into the shader from
    one place, so it cannot drift from what is actually drawn.
-5. **Verify the instrument before trusting the measurement.** Six instruments
-   lied here. A metric reading *exactly* zero is a red flag, not a result.
+5. **Verify the instrument before trusting the measurement.** Nine instruments
+   lied here — six in the project, three in the gate written to catch them. A
+   metric reading *exactly* zero is a red flag, not a result; so is a check that
+   has never been seen to fail, and so is one that fails on a single pixel.
+   Every check in `spec.mjs` now prints its raw measurement beside its verdict,
+   so a wrong threshold is visible rather than authoritative.
 6. **Tier the models.** Haiku for specified tooling, Sonnet for integration,
    Opus only where taste or novel shader reasoning is required.
 7. **Reference material at specification time.** §4b's error was authored

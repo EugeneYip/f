@@ -138,18 +138,47 @@ const results = await page.evaluate(async () => {
   // 4. FRAME FLOOR AND CLIPPING — a grade whose shadow tint peaked at true
   //    black put an absolute floor of B=56 under every pixel including the
   //    night sky. §3 forbids both crushing and veiling.
+  // Measure the floor with post OFF as the reference, so the check asks
+  // "does the grade put a floor under the frame?" rather than asserting an
+  // absolute darkness that depends entirely on composition. An invented
+  // absolute threshold is how a gate gets satisfied by damaging the product.
+  const floorOf = () => {
+    const g2 = grab();
+    const dd = c2.getImageData(0, 0, g2.w, g2.h).data;
+    const h2 = new Uint32Array(256);
+    let nn = 0;
+    for (let i = 0; i < dd.length; i += 4) {
+      h2[Math.round((dd[i] + dd[i + 1] + dd[i + 2]) / 3)]++; nn++;
+    }
+    let a2 = 0;
+    for (let v = 0; v < 256; v++) { a2 += h2[v]; if (a2 >= nn * 0.001) return v; }
+    return 255;
+  };
+  renderPose('hero', false);
+  out.floorRaw = floorOf();
+
   renderPose('hero', true);
   {
     const g = grab();
     const d = c2.getImageData(0, 0, g.w, g.h).data;
-    let minL = 255, clipped = 0, n = 0, sum = 0, sum2 = 0;
+    // The first version asserted on the single darkest pixel, which made this
+    // check flake between pass and fail with NO code change -- one pixel is
+    // noise, and it happened to land on the fox's fur. A low percentile of the
+    // luminance histogram answers the same question (does the frame reach
+    // near-black, or has the grade put a floor under everything?) without
+    // being hostage to a single sample.
+    const hist = new Uint32Array(256);
+    let clipped = 0, n = 0, sum = 0, sum2 = 0, minL = 255;
     for (let i = 0; i < d.length; i += 4) {
       const L = (d[i] + d[i + 1] + d[i + 2]) / 3;
+      hist[Math.round(L)]++;
       if (L < minL) minL = L;
       if (L >= 252) clipped++;
       sum += L; sum2 += L * L; n++;
     }
-    out.frame = { minL, clipFrac: clipped / n, mean: sum / n,
+    let acc = 0, p01 = 0;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * 0.001) { p01 = v; break; } }
+    out.frame = { minL, p01, clipFrac: clipped / n, mean: sum / n,
                   sd: Math.sqrt(sum2 / n - (sum / n) ** 2) };
   }
 
@@ -159,16 +188,38 @@ const results = await page.evaluate(async () => {
   renderPose('wide', true);
   {
     const g = grab();
-    const x = Math.round(g.w * 0.3);
-    const col = c2.getImageData(x, 0, 1, g.h).data;
-    let worst = 0, worstY = -1;
-    for (let y = 1; y < g.h; y++) {
-      const a = (col[(y - 1) * 4] + col[(y - 1) * 4 + 1] + col[(y - 1) * 4 + 2]) / 3;
-      const b = (col[y * 4] + col[y * 4 + 1] + col[y * 4 + 2]) / 3;
-      const d2 = Math.abs(b - a);
-      if (d2 > worst) { worst = d2; worstY = y; }
+    // A single column CANNOT tell a horizon seam from a snow sparkle: both are
+    // a large one-row jump. The first version of this check did exactly that,
+    // and an agent handed the failing number duly "fixed" it by cutting the
+    // art bible's crystal-glint intensity by 71% -- optimising the metric
+    // instead of the intent. The distinguishing property is HORIZONTAL
+    // COHERENCE: a card butted against the sky steps at the same y across most
+    // of the frame, while a glint is an isolated 2-4 px point.
+    const COLS = 40, BAND = 3, AGREE = 0.35;
+    const jumps = [];
+    for (let i = 0; i < COLS; i++) {
+      const x = Math.round((i + 0.5) * g.w / COLS);
+      const col = c2.getImageData(x, 0, 1, g.h).data;
+      let worst = 0, worstY = -1;
+      for (let y = 1; y < g.h; y++) {
+        const a = (col[(y - 1) * 4] + col[(y - 1) * 4 + 1] + col[(y - 1) * 4 + 2]) / 3;
+        const b = (col[y * 4] + col[y * 4 + 1] + col[y * 4 + 2]) / 3;
+        const d2 = Math.abs(b - a);
+        if (d2 > worst) { worst = d2; worstY = y; }
+      }
+      if (worstY > 0) jumps.push({ y: worstY, mag: worst });
     }
-    out.horizonStep = { worst, y: worstY, height: g.h };
+    let best = { mag: 0, y: -1, agreeing: 0 };
+    for (const c of jumps) {
+      const near = jumps.filter((o) => Math.abs(o.y - c.y) <= BAND);
+      if (near.length / COLS < AGREE) continue;          // isolated -> a glint
+      const coherentMag = Math.min(...near.map((o) => o.mag));
+      if (coherentMag > best.mag) best = { mag: coherentMag, y: c.y, agreeing: near.length };
+    }
+    out.horizonStep = {
+      worst: best.mag, y: best.y, agreeing: best.agreeing, cols: COLS, height: g.h,
+      loudestIsolated: Math.max(...jumps.map((j) => j.mag)),
+    };
   }
 
   // 6. SILHOUETTE BREAK-UP — §2.1 and rubric A: a hard mesh edge against the
@@ -243,7 +294,11 @@ record('lit coat is not warm', cl && cl.r - cl.b < 10, `${hex(cl)} — R-B must 
 
 // Frame: no scrim, no crush, no blowout.
 const f = results.frame;
-record('no scrim (frame reaches near-black)', f && f.minL < 30, `darkest pixel ${f?.minL}`);
+const floorLift = (f && results.floorRaw != null) ? f.p01 - results.floorRaw : null;
+record('post does not put a floor under the frame', floorLift != null && floorLift <= 12,
+  `0.1st-percentile luminance ${results.floorRaw} without post -> ${f?.p01} with post ` +
+  `(lift ${floorLift}); single darkest pixel ${f?.minL?.toFixed(1)} is not asserted on, ` +
+  'it is one sample and it flaked between runs');
 record('highlights not clipped', f && f.clipFrac < 0.01,
   `${((f?.clipFrac ?? 0) * 100).toFixed(2)}% of pixels at/above 252`);
 record('frame has contrast', f && f.sd > 35, `sd ${f?.sd.toFixed(1)}`);
@@ -251,7 +306,9 @@ record('frame has contrast', f && f.sd > 35, `sd ${f?.sd.toFixed(1)}`);
 // Horizon: no hard step.
 const hs = results.horizonStep;
 record('no hard horizon step', hs && hs.worst < 45,
-  `largest single-row jump ${hs?.worst.toFixed(0)} levels at y=${hs?.y}/${hs?.height}`);
+  `largest HORIZONTALLY COHERENT jump ${hs?.worst.toFixed(0)} levels at y=${hs?.y} ` +
+  `(${hs?.agreeing}/${hs?.cols} columns agree); loudest isolated point ` +
+  `${hs?.loudestIsolated?.toFixed(0)} — isolated points are sparkle, not seams`);
 
 // Silhouette: fur must break the outline, not step.
 const sr = results.silhouetteRamp;
