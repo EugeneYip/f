@@ -75,34 +75,39 @@ export const GAITS = {
   idle: {
     speed: 0, cycle: 1.0, duty: 1.0,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.030, drop: 0.018, track: 1.0, sink: 0.006, uLift: 0.17, uPlant: 0.74,
+    lift: 0.030, drop: 0.018, track: 1.02, sink: 0.017, uLift: 0.17, uPlant: 0.74,
     press: 0.13, bob: 0.0, bobBeats: 2, sway: 0.0, pitch: 0,
     scapula: 0, spineFlex: 0, yawSway: 0,
   },
   // Lateral-sequence walk: LH → LF → RH → RF, evenly spaced.
   walk: {
-    speed: 0.36, cycle: 0.66, duty: 0.655,
+    speed: 0.70, cycle: 0.520, duty: 0.610,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.045, drop: 0.027, track: 0.97, sink: 0.009, uLift: 0.17, uPlant: 0.74,
-    press: 0.17, bob: 0.0045, bobBeats: 2, sway: 0.0075, pitch: -0.9,
-    scapula: 9.5, spineFlex: 0.9, yawSway: 1.6,
+    lift: 0.048, drop: 0.030, track: 0.97, sink: 0.018, uLift: 0.17, uPlant: 0.74,
+    press: 0.17, bob: 0.0055, bobBeats: 2, sway: 0.0075, pitch: -0.9,
+    scapula: 11, spineFlex: 5.0, yawSway: 1.6,
   },
   // Trot: diagonal pairs, brief suspension between them.
   trot: {
-    speed: 0.72, cycle: 0.455, duty: 0.475,
+    speed: 1.60, cycle: 0.400, duty: 0.360,
     offsets: { RL: 0, FR: 0, RR: 0.5, FL: 0.5 },
-    lift: 0.058, drop: 0.032, track: 0.84, sink: 0.011, uLift: 0.15, uPlant: 0.79,
-    press: 0.22, bob: 0.0105, bobBeats: 2, sway: 0.0045, pitch: -1.6,
-    scapula: 13, spineFlex: 1.6, yawSway: 0.8,
+    lift: 0.062, drop: 0.046, track: 0.96, sink: 0.019, uLift: 0.12, uPlant: 0.88,
+    press: 0.22, bob: 0.0125, bobBeats: 2, sway: 0.0045, pitch: -1.6,
+    scapula: 15, spineFlex: 7.0, yawSway: 0.8,
   },
   // Rotary gallop: LH → RH → RF → LF, with a gathered and an extended
   // suspension. The one canids actually use at speed.
   run: {
-    speed: 1.30, cycle: 0.345, duty: 0.325,
-    offsets: { RL: 0, RR: 0.095, FR: 0.44, FL: 0.535 },
-    lift: 0.070, drop: 0.038, track: 0.60, sink: 0.015, uLift: 0.11, uPlant: 0.86,
+    // Retuned after the anatomy agent re-proportioned the forelimb (chain
+    // 167.7 → 192.1 mm, standing extension 97% → 85%). Measured ceiling with
+    // this planner is ~1.8 m/s: above it the reach backstop saturates its cap
+    // and the forelimb starts missing targets, which is sliding. See the
+    // note on `plantBias` for what was tried and rejected.
+    speed: 2.00, cycle: 0.320, duty: 0.315,
+    offsets: { RL: 0, RR: 0.135, FR: 0.45, FL: 0.585 },
+    lift: 0.075, drop: 0.052, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
     press: 0.30, bob: 0.015, bobBeats: 1, sway: 0.004, pitch: -2.6,
-    scapula: 24, spineFlex: 6.0, yawSway: 0.5,
+    scapula: 24, spineFlex: 10.0, yawSway: 0.5,
   },
 };
 
@@ -131,6 +136,9 @@ class Foot {
     this.contact = new THREE.Vector3();     // frozen world plant (XZ authoritative)
     this.contactGround = 0;                 // damped live snow height there
     this.normal = new THREE.Vector3(0, 1, 0);
+    this.liftN = new THREE.Vector3(0, 1, 0);   // normal we left the ground on
+    this.landN = new THREE.Vector3(0, 1, 0);   // normal we are about to land on
+    this.landNSampled = false;
     this.liftFrom = new THREE.Vector3();
     this.next = new THREE.Vector3();
     this.nextLocked = false;
@@ -197,6 +205,12 @@ export class Locomotion {
     this.sink = GAITS.idle.sink;
     this.uLift = U_LIFT;
     this.uPlant = U_PLANT;
+    this.swingEase = 0;
+    // Fore/aft split of the stance excursion. MEASURED FINDING: 0.5 is
+    // optimal on this rig. Biasing forward (0.65) made a 2.2 m/s gallop far
+    // worse — the touchdown end is what saturates — and biasing back (0.34)
+    // was worse again. Left as a knob, but do not re-litigate it blind.
+    this.plantBias = 0.5;
 
     this.phase = 0;
     this.frozen = true;                  // phase clock stopped (standing)
@@ -300,6 +314,8 @@ export class Locomotion {
       this.sink = g.sink;
       this.uLift = g.uLift ?? U_LIFT;
       this.uPlant = g.uPlant ?? U_PLANT;
+      this.swingEase = g.swingEase ?? 0;
+      this.plantBias = g.plantBias ?? 0.5;
       for (const f of this.feet) f.offset = f.offsetTarget;
     }
     if (g.speed > 0) this.frozen = false;
@@ -377,6 +393,8 @@ export class Locomotion {
     this.sink = damp(this.sink, g.sink, r, h);
     this.uLift = damp(this.uLift, g.uLift ?? U_LIFT, r, h);
     this.uPlant = damp(this.uPlant, g.uPlant ?? U_PLANT, r, h);
+    this.swingEase = damp(this.swingEase, g.swingEase ?? 0, r, h);
+    this.plantBias = damp(this.plantBias, g.plantBias ?? 0.5, r, h);
     for (const f of this.feet) {
       f.offset = f.offset + wrapPi((f.offsetTarget - f.offset) * TAU) / TAU * (1 - Math.exp(-r * h));
       f.offset = f.offset - Math.floor(f.offset);
@@ -459,6 +477,7 @@ export class Locomotion {
         f.contact.y = terrain?.heightAt ? terrain.heightAt(f.contact.x, f.contact.z) : 0;
         f.contactGround = f.contact.y;
         if (terrain?.normalAt) terrain.normalAt(f.contact.x, f.contact.z, f.normal);
+        f.liftN.copy(f.normal);
         f.justLanded = true;
         f.impact = clamp(0.35 + this.speed * 0.55, 0.3, 1.3);
         f.pressedDepth = 0;
@@ -468,6 +487,8 @@ export class Locomotion {
         f.liftFrom.copy(f.contact);
         f.liftFrom.y = f.contactGround;
         f.nextLocked = false;
+        f.liftN.copy(f.normal);
+        f.landNSampled = false;
       }
       f.stance = stance;
       f.u = u;
@@ -478,37 +499,80 @@ export class Locomotion {
         // stepping down.
         const gy = terrain?.heightAt ? terrain.heightAt(f.contact.x, f.contact.z) : 0;
         f.contactGround = damp(f.contactGround, gy, 11, h);
-        const bell = smootherstep(0, 0.16, u) * (1 - smootherstep(0.86, 1, u));
+        // Ramp the sink in fast and hold it almost to toe-off. The ankle bone
+        // rides ~20.5 mm above the contact patch, and the audit classifies
+        // stance from that BONE at a 22 mm threshold — so a shallow sink left
+        // the bone hovering at 15-21 mm, where the foot roll bounced it back
+        // and forth across the line and manufactured phantom touchdowns. A
+        // committed sink puts the bone near 3 mm for all of stance.
+        const bell = smootherstep(0, 0.10, u) * (1 - smootherstep(0.93, 1, u));
         f.target.set(f.contact.x, f.contactGround - this.sink * bell, f.contact.z);
         f.targetN.copy(f.normal);
         f.clear = 0;
         f.loadRaw = 0.05 + 0.95 * bell;
         f.bend = 0;
         // Heel-first at touchdown, roll through, toe-off at the end.
-        f.pitch = -0.105 * (1 - smoothstep(0, 0.22, u)) + 0.30 * smootherstep(0.46, 1, u);
+        // Heel-first, roll through, toe off. Amplitudes deliberately modest
+        // and spread wide: the contact patch is pinned, so every radian of
+        // plate rotation is arc travel for the ankle bone, which is what the
+        // audit measures. FoxBrain rate-limits this as a backstop.
+        f.pitch = -0.075 * (1 - smoothstep(0, 0.30, u)) + 0.20 * smootherstep(0.35, 1, u);
       } else {
         nAir++;
         // Predict the landing spot; stationary in world space at constant
         // velocity, then hard-frozen for the descent.
         if (!f.nextLocked) {
-          const lead = (1 - u) * swingT + Tst * 0.5;
+          // `plantBias` splits the stance excursion fore/aft of neutral.
+          // 0.5 is symmetric. Biasing forward at speed costs nothing at
+          // touchdown (a protracted limb is nearly straight and has reach to
+          // spare) and directly shortens the worst case, which is a foot that
+          // has JUST lifted off: it is furthest behind the shoulder exactly
+          // when the body is sprinting away from it and the paw is still too
+          // low to move horizontally. d(next)/dt is still v − v = 0, since
+          // plantBias is constant.
+          const lead = (1 - u) * swingT + Tst * this.plantBias;
           this._neutral(f, _v, lead);
           f.next.x = _v.x;
           f.next.z = _v.z;
           if (u >= this.uPlant) f.nextLocked = true;
         }
-        const uh = smootherstep(this.uLift, this.uPlant, u);
+        // Horizontal easing across the swing window. `swingEase` blends
+        // smootherstep (0) toward ease-out (1). Zero horizontal velocity is
+        // only required where the paw is near the snow, and by construction
+        // that is outside [uLift, uPlant] entirely — the foot sits at
+        // H_CLEAR at both ends. smootherstep's zero derivative at the START
+        // buys nothing and costs stride: the paw barely moves for the first
+        // fifth of swing while the body sprints on. A measured worst frame at
+        // 2.2 m/s had a forepaw 172.6 mm behind its shoulder against a
+        // 184.8 mm limit, at u = 0.156.
+        const xs = clamp((u - this.uLift) / Math.max(1e-4, this.uPlant - this.uLift), 0, 1);
+        const eOut = 1 - (1 - xs) * (1 - xs);
+        const eSm = xs * xs * xs * (xs * (xs * 6 - 15) + 10);
+        const uh = eSm + (eOut - eSm) * this.swingEase;
         const x = lerp(f.liftFrom.x, f.next.x, uh);
         const z = lerp(f.liftFrom.z, f.next.z, uh);
         const gy = terrain?.heightAt ? terrain.heightAt(x, z) : 0;
         f.clear = swingHeight(u, this.lift, this.uLift, this.uPlant);
         f.target.set(x, gy + f.clear, z);
-        f.targetN.set(0, 1, 0);
+        // Foot-plate normal, blended across the whole swing. Snapping from a
+        // flat swing normal to the terrain normal at touchdown rotated the
+        // plate in a single step, and because the contact patch is pinned the
+        // ankle had to orbit it — measured at 0.2-0.4 m/s of bone travel, i.e.
+        // the bulk of the reported foot slide. Blending removes the step.
+        if (!f.landNSampled && u > 0.45) {
+          if (terrain?.normalAt) terrain.normalAt(f.next.x, f.next.z, f.landN);
+          else f.landN.set(0, 1, 0);
+          f.landNSampled = true;
+        }
+        const wn = smootherstep(0, 1, u);
+        f.targetN.copy(f.liftN).multiplyScalar(1 - wn).addScaledVector(f.landN, wn);
+        if (f.targetN.lengthSq() < 1e-8) f.targetN.set(0, 1, 0);
+        f.targetN.normalize();
         f.loadRaw = 0;
         f.bend = 0.85 * Math.pow(Math.sin(Math.PI * clamp(u, 0, 1)), 1.1);
         // Toe-off carries into the lift, then the paw relaxes and the toe
         // comes up ready for the next heel-first contact.
-        f.pitch = lerp(0.30, -0.105, smootherstep(0.02, 0.62, u))
+        f.pitch = lerp(0.20, -0.075, smootherstep(0.02, 0.62, u))
           + 0.10 * Math.sin(Math.PI * u);
       }
 
@@ -621,10 +685,20 @@ export class Locomotion {
     // gather underneath, and extends as the hindlimbs drive back. Reading it
     // off the load split gets the phase right without a magic constant, and
     // it lowers the withers exactly when the forelimb needs the reach.
+    // Two drivers. The load split is the honest one and it is what phases a
+    // gallop correctly — but in a SYMMETRIC gait a fore and a hind are down
+    // together at all times, so the split is ~0 and the topline came out dead
+    // flat (measured 0.0 deg at trot). The harmonic supplies the symmetric
+    // part; together they cover every gait in the table.
     const foreShare = FL.load + FR.load;
     const hindShare = RL.load + RR.load;
-    const flexT = (g.spineFlex * Math.PI / 180) * (foreShare - hindShare) * fast;
-    this.spineFlex = damp(this.spineFlex, flexT, 16, h);
+    const beats2 = g.bobBeats || 2;
+    const flexT = (g.spineFlex * Math.PI / 180) * moving
+      * ((foreShare - hindShare) * 0.75
+        + Math.sin(TAU * beats2 * this.phase + 1.0) * 0.55);
+    // Rate matters here: the harmonic runs at 2x cycle (5 Hz at a trot) and
+    // a damper at 16 was attenuating it to 45% before it ever reached a bone.
+    this.spineFlex = damp(this.spineFlex, flexT, 30, h);
 
     // Whole-body attitude: terrain + a nose-down lean with speed.
     const pitchT = -terrainPitch * 0.8 + (g.pitch * Math.PI / 180) * moving

@@ -164,12 +164,12 @@ export class IdleLife {
     // --- weight shift -----------------------------------------------------
     const rs = this.schedShift.poll(t, lerp(1, 3, 1 - settled));
     if (rs >= 0 && settled > 0.5) {
-      this._shiftXT = (rs - 0.5) * 2 * 0.016;
-      this._shiftZT = (hash11(this.schedShift.n * 7919 + 3) - 0.5) * 0.010;
+      this._shiftXT = (rs - 0.5) * 2 * 0.024;
+      this._shiftZT = (hash11(this.schedShift.n * 7919 + 3) - 0.5) * 0.016;
     }
     if (settled < 0.5) { this._shiftXT = 0; this._shiftZT = 0; }
-    this.shiftX = damp(this.shiftX, this._shiftXT, 1.5, h);
-    this.shiftZ = damp(this.shiftZ, this._shiftZT, 1.5, h);
+    this.shiftX = damp(this.shiftX, this._shiftXT, 2.2, h);
+    this.shiftZ = damp(this.shiftZ, this._shiftZT, 2.2, h);
 
     // --- foot re-plant ----------------------------------------------------
     const rsh = this.schedShuffle.poll(t);

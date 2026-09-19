@@ -156,7 +156,8 @@ const main = async () => {
       const st = { frames: out.length, paws: {}, hasPaws: pawKeys.length > 0 };
 
       for (const k of pawKeys) {
-        let maxSlide = 0, minClear = Infinity, maxClear = -Infinity, stanceFrames = 0;
+        let maxSlide = 0, maxAnchorSlide = 0;
+        let minClear = Infinity, maxClear = -Infinity, stanceFrames = 0;
         let divSum = 0, divN = 0;
         const stanceClear = [];
         for (let i = 1; i < out.length; i++) {
@@ -168,6 +169,7 @@ const main = async () => {
           maxClear = Math.max(maxClear, clearance);
 
           const tgt = out[i].targets?.[k];
+          const tgtPrev = out[i - 1].targets?.[k];
           if (tgt) { divSum += Math.hypot(b[0] - tgt[0], b[1] - tgt[1], b[2] - tgt[2]); divN++; }
 
           if (clearance < 0.022) {
@@ -175,11 +177,21 @@ const main = async () => {
             stanceClear.push(clearance);
             const dx = b[0] - a[0], dz = b[2] - a[2];
             maxSlide = Math.max(maxSlide, Math.hypot(dx, dz) / h);
+            // Also track the CONTACT POINT itself. The two answer different
+            // questions: the bone can orbit a correctly-pinned contact as the
+            // foot rolls through toe-off, which is desirable, while the
+            // contact point slipping is the actual visual defect. Reporting
+            // only one of them is how this metric misled everyone before.
+            if (tgt && tgtPrev) {
+              maxAnchorSlide = Math.max(maxAnchorSlide,
+                Math.hypot(tgt[0] - tgtPrev[0], tgt[2] - tgtPrev[2]) / h);
+            }
           }
         }
         stanceClear.sort((x, y) => x - y);
         st.paws[k] = {
           maxSlideMps: +maxSlide.toFixed(4),
+          anchorSlideMps: +maxAnchorSlide.toFixed(4),
           minClearance: +minClear.toFixed(4),
           maxClearance: +maxClear.toFixed(4),
           medianStanceClearance: stanceClear.length
@@ -202,7 +214,8 @@ const main = async () => {
       for (const [k, v] of Object.entries(st.paws)) {
         record(`[${state}] ${k} no foot slide`,
           v.maxSlideMps <= BUDGET.footSlideMaxMps,
-          `${v.maxSlideMps} m/s in stance (max ${BUDGET.footSlideMaxMps})`);
+          `ankle ${v.maxSlideMps} m/s, contact point ${v.anchorSlideMps} m/s ` +
+          `(max ${BUDGET.footSlideMaxMps})`);
 
         // The old check was `minClearance <= 0.055`, which passes if the paw
         // is EVER near the ground and therefore can never fail. What matters

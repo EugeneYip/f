@@ -98,19 +98,25 @@ export class SecondaryDynamics {
     // floats on vertical acceleration, and always breathes a little.
     const life = fbm1(t * 0.63, 3, 17);
     const life2 = fbm1(t * 0.41 + 31, 3, 53);
-    const sway = Math.sin(TAU * inp.gaitPhase * 1 + 0.6) * 0.055 * saturate(inp.speed / 0.5);
+    // Gait-driven tail sway. MEASURED: at 0.055 the nine joints articulated a
+    // combined 0.6 deg at the base and the tail read as a rigid rod that the
+    // pelvis happened to be carrying around. These are whole-tail radians.
+    const spd = saturate(inp.speed / 0.5);
+    const sway = Math.sin(TAU * inp.gaitPhase + 0.6) * 0.40 * spd;
+    const swayV = Math.sin(TAU * inp.gaitPhase * 2 + 1.9) * 0.22 * spd;
 
     // IMPORTANT: these are *whole-tail* angles, in radians, not per-joint.
     // Nine joints each rotating by X accumulate to 9X at the tip, and with a
     // transmit of 1.055 the steady-state sum is ~11.4X — a measured tail tip
     // sat 85 mm above its rest height on a drive of 0.085. So carriage is
     // divided across the chain and only the *dynamic* part is propagated.
-    const dynY = (clamp(inp.yawRate * 0.34, -0.62, 0.62)
-      - clamp(inp.accelX * 0.034, -0.40, 0.40)
-      + sway + life * 0.055 * (1 - saturate(inp.speed))) / TAIL_N;
-    const dynX = (clamp(-inp.accelY * 0.014, -0.26, 0.26)
-      + clamp(inp.accelZ * 0.023, -0.28, 0.28)
-      + life2 * 0.038 * (1 - saturate(inp.speed))
+    const dynY = (clamp(inp.yawRate * 0.55, -0.85, 0.85)
+      - clamp(inp.accelX * 0.050, -0.50, 0.50)
+      + sway + life * 0.130 * (1 - 0.6 * saturate(inp.speed))) / TAIL_N;
+    const dynX = (clamp(-inp.accelY * 0.022, -0.32, 0.32)
+      + clamp(inp.accelZ * 0.034, -0.36, 0.36)
+      + swayV
+      + life2 * 0.090 * (1 - 0.6 * saturate(inp.speed))
       + inp.shake * 0.62 * Math.sin(t * 46)) / TAIL_N;
 
     const stiff = inp.tailStiff ?? 1;

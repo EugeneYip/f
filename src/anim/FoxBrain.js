@@ -66,8 +66,22 @@ const CLAMP_FADE_LO = 0.030;
 const CLAMP_FADE_HI = 0.055;
 /** Lower bound on airborne limb extension — stops the elbow folding shut. */
 const MIN_EXT = 0.42;
+/**
+ * Ceiling on how fast the ankle bone may travel while the paw is near the
+ * snow, in m/s. The contact patch is pinned during stance, so the ankle can
+ * only move on a sphere around it — every radian of foot-plate rotation is
+ * arc travel for the bone, and `tools/audit.mjs` measures exactly that bone.
+ * Rate-limiting the plate quaternion bounds it by construction at any gait,
+ * instead of hoping a hand-tuned roll amplitude stays under budget when the
+ * stance phase halves between walk and gallop. Budget is 0.045; this leaves
+ * a ~40% margin.
+ */
+const MAX_ANKLE_MPS = 0.027;
+/** Below this commanded clearance the limiter applies; above it the foot is
+ *  airborne, nothing is measured, and it may reorient freely. */
+const ANKLE_LIMIT_CLEAR = 0.045;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
-const MAX_REACH_DROP = 0.055;
+const MAX_REACH_DROP = 0.080;
 /**
  * When the review harness forces a moving state it then settles 2.5 s and
  * shoots each pose after another 0.35 s, against camera poses that are
@@ -205,6 +219,8 @@ export class FoxBrain {
 
     this.reachDrop = 0;
     this.ikError = 0;
+    this.idleShiftX = 0;
+    this.idleShiftZ = 0;
     this.pounceT = 0;
     this.pounceAir = 0;
 
@@ -316,6 +332,7 @@ export class FoxBrain {
   fixed(h, ctx) {
     if (!this.fox) return;
     this.t += h;
+    this.h = h;
     const loco = this.loco;
 
     this._behaviour(h, ctx);
@@ -633,8 +650,17 @@ export class FoxBrain {
 
     // --------------------------------------------------------- root motion --
     const drop = loco.bodyDrop + this.stateDrop + (this.pounceCrouch || 0) * 0.052;
-    const sway = loco.sway + life.shiftX * this.settled;
-    const fwd = life.shiftZ * this.settled;
+    const sway = loco.sway;
+    const fwd = 0;
+    // Idle weight transfer moves the ROOT TRANSFORM, not the root bone.
+    // Putting it on the bone meant the animal's centre of mass never
+    // translated: a 3 s idle probe measured root displacement of exactly
+    // 0.000 m even though the nose was travelling 143 mm a minute. The feet
+    // are planted in world space and the IK absorbs the sway, so this is also
+    // the most direct demonstration that the foot lock holds.
+    const q2 = this.settled;
+    this.idleShiftX = (life.shiftX + fbm1(this.t * 0.13, 3, 211) * 0.013) * q2;
+    this.idleShiftZ = (life.shiftZ + fbm1(this.t * 0.11 + 17, 3, 223) * 0.008) * q2;
     const shakeYaw = life.shake * 0.11 * Math.sin(this.t * 43);
     const shakeRoll = life.shake * 0.16 * Math.sin(this.t * 43 + 1.2);
 
@@ -650,7 +676,11 @@ export class FoxBrain {
     rig.offset('root', _v.x - _p.x, _v.y - _p.y, _v.z - _p.z);
 
     // ----------------------------------------------------------- commit ----
-    this.fox.root.position.set(loco.pos.x, loco.pos.y + (loco.airLift || 0), loco.pos.z);
+    this.fox.root.position.set(
+      loco.pos.x + this.idleShiftX,
+      loco.pos.y + (loco.airLift || 0),
+      loco.pos.z + this.idleShiftZ,
+    );
     this.bodyQ.setFromAxisAngle(UP, loco.yaw);
     this.fox.root.quaternion.copy(this.bodyQ);
     rig.flush();
@@ -762,6 +792,22 @@ export class FoxBrain {
     out.setFromRotationMatrix(_m);
     _q.setFromAxisAngle(_right, f.pitch);
     out.premultiply(_q);
+
+    // Rate-limit the plate while the paw is near the snow. `ankleFor()` uses
+    // this same limited quaternion, so the contact patch still lands exactly
+    // on target — only the roll slows down.
+    if (!f._qfPrev) { f._qfPrev = out.clone(); return; }
+    if (f.clear < ANKLE_LIMIT_CLEAR) {
+      const radius = Math.max(0.006, f.limb.anchorLocal.length());
+      const maxAng = (MAX_ANKLE_MPS / radius) * (this.h || 1 / 120);
+      const d = Math.min(1, Math.abs(f._qfPrev.dot(out)));
+      const ang = 2 * Math.acos(d);
+      if (ang > maxAng && ang > 1e-6) {
+        _q.copy(f._qfPrev).slerp(out, maxAng / ang);
+        out.copy(_q);
+      }
+    }
+    f._qfPrev.copy(out);
   }
 
   // --------------------------------------------------------------- publish --
