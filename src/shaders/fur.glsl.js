@@ -422,8 +422,12 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // individual lit hairs rather than as a warm haze over the whole coat.
   // Gating it on the grazing angle instead was what tinted the lit side peach.
   float fwd   = cheap ? 0.0 : pow(clamp(-dot(V, L), 0.0, 1.0), uTransPow);
-  float thin  = mix(0.10, 1.0, t * t);
-  float graze = pow(1.0 - ndv, 2.0);
+  // Only the OUTERMOST coat can transmit: light that made it through exits
+  // from the outer surface, and a buried inner shell has the whole coat above
+  // it. A gentle ramp let ~7 shells each contribute a little and they summed
+  // into a flat wash over the body.
+  float thin  = pow(clamp(t, 0.0, 1.0), 3.5);
+  float graze = pow(1.0 - ndv, 5.0);
   float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
   // Reference photographs (bible 4b): an arctic fox has NO warm cast, in any
   // light, including direct low sun — shaded fur goes blue-grey, never pink.
@@ -432,8 +436,16 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // hard rather than carrying the sun's orange straight through.
   vec3 transLight = mix(vec3(luma(uSunColor)), uSunColor, uTransSat);
   col += transLight * uSunIntensity * uTransTint * albedo *
-         (uTrans * RECIPROCAL_PI * fwd * thin * (0.06 + 1.30 * graze)
+         (uTrans * RECIPROCAL_PI * fwd * thin * (1.45 * graze)
           * thinness * (0.30 + 0.95 * shell));
+  // NOTE on the constant-free grazing weight: thinness alone cannot tell a
+  // fringe hair over sky from an outer shell over dense coat — both have the
+  // same low PER-SHELL alpha. With a 0.06 interior floor, every one of the
+  // ~7 outer shells added transmission over the body and they accumulated:
+  // measured +15.9/255 luma over the eroded body interior against +17.7 at
+  // the fringe, i.e. a flat wash rather than a halo. The floor has to be
+  // exactly zero and the falloff steep, so only genuinely grazing fragments
+  // glow and the interior contributes nothing to integrate.
 
   // A cool sky rim keeps the shadow side alive on the silhouette.
   col += uSkyColor * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);

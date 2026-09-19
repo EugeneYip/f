@@ -74,9 +74,12 @@ async function startServer(args) {
     const server = await preview({ root: ROOT, preview: { port: 4173, host: '127.0.0.1' }, logLevel: 'warn' });
     return { url: 'http://127.0.0.1:4173/', close: () => server.close() };
   }
-  const server = await createServer({
+  // HMR and file watching are OFF. Several agents edit this tree at once, and
+// a save landing mid-run hot-reloads the page and destroys the execution
+// context -- which is indistinguishable from a renderer or driver death.
+const server = await createServer({
     root: ROOT, logLevel: 'warn',
-    server: { port: 5199, host: '127.0.0.1', strictPort: false },
+    server: { port: 5199, host: '127.0.0.1', strictPort: false, hmr: false, watch: null },
   });
   await server.listen();
   const addr = server.httpServer.address();

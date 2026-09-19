@@ -91,7 +91,9 @@ async function startServer() {
     const s = await preview({ root: ROOT, preview: { port: 4188, host: '127.0.0.1' }, logLevel: 'warn' });
     return { url: 'http://127.0.0.1:4188/', close: () => s.close() };
   }
-  const s = await createServer({ root: ROOT, logLevel: 'warn', server: { port: 5188, host: '127.0.0.1', strictPort: false } });
+  // HMR and file watching OFF: a concurrent save would otherwise reload the
+  // page mid-run and destroy the execution context.
+  const s = await createServer({ root: ROOT, logLevel: 'warn', server: { port: 5188, host: '127.0.0.1', strictPort: false, hmr: false, watch: null } });
   await s.listen();
   return { url: `http://127.0.0.1:${s.httpServer.address().port}/`, close: () => s.close() };
 }
