@@ -63,7 +63,9 @@ const U_PLANT = 0.74;
 
 /**
  * Gait table. `speed` and `cycle` together define the stride; `duty` is the
- * stance fraction; `offsets` are the phase of each limb's touchdown.
+ * stance fraction; `offsets` are the cycle phase at which each limb touches
+ * down (verified by measurement, not by inspection — see the sign note in
+ * the per-foot loop).
  * Limb keys: FL/FR front left/right, RL/RR rear (hind) left/right.
  */
 export const GAITS = {
@@ -410,7 +412,12 @@ export class Locomotion {
     let nAir = 0;
 
     for (const f of this.feet) {
-      let ph = this.phase + f.offset;
+      // MINUS, not plus. `offsets` in the table above are touchdown phases,
+      // and a foot whose own phase is `global + o` touches down at
+      // `global = 1 − o` — i.e. adding runs the sequence backwards. With the
+      // sign inverted the walk measured LH → RF → RH → LF, a diagonal-sequence
+      // walk (primate), where a canid uses the lateral sequence LH → LF → RH → RF.
+      let ph = this.phase - f.offset;
       ph -= Math.floor(ph);
       f.phase = ph;
 
