@@ -35,7 +35,7 @@ export class FurSystem {
 
   constructor() {
     this.enabled = true;
-    this.autoStochastic = false;
+    this.autoStochastic = true;
     this.stochasticAmount = 0.55;
     this.lod = { near: 1.5, far: 3.2, cull: 7.0, minShells: 4 };
     this.stats = {};
@@ -141,10 +141,10 @@ export class FurSystem {
     const wanted = ctx.quality.get('furFins')
       ? (CARD_COUNT[ctx.quality.tier] ?? CARD_COUNT.high)
       : 0;
-    if (wanted <= 0) return;
+    if (wanted <= 0) { this._refreshStats(); return; }
 
     const built = buildFurCards(this.fox.geometry, this.occlusion, wanted, 0xfa17c0de);
-    if (!built) return;
+    if (!built) { this._refreshStats(); return; }
 
     this.cardStats = built;
     this.cardMesh = new THREE.SkinnedMesh(built.geometry, this.cardMaterial);
@@ -155,6 +155,16 @@ export class FurSystem {
     this.fox.root.add(this.cardMesh);
     this.cardMesh.bind(this.fox.skeleton, this.fox.skinnedMesh.bindMatrix);
     this._cardIndexCount = built.triangles * 3;
+    this._refreshStats();
+  }
+
+  /** Keep the published stats honest after a tier change, not just at init. */
+  _refreshStats() {
+    const tris = this.fox?.geometry?.getIndex()?.count ?? 0;
+    this.stats.shells = this.shellCount;
+    this.stats.shellTris = (tris / 3) * (this.shellCount ?? 0);
+    this.stats.cards = this.cardStats?.cards ?? 0;
+    this.stats.cardTris = this.cardStats?.triangles ?? 0;
   }
 
   applyQuality(ctx) {
@@ -168,6 +178,7 @@ export class FurSystem {
     const thin = clamp(18 / this.shellCount, 0.6, 3.2);
     this.uniforms.uStrandRoot.value = FUR_DEFAULTS.strandRoot * lerp(1, 1.10, clamp(thin - 1, 0, 1));
     this.uniforms.uFill.value = clamp(FUR_DEFAULTS.fill, 0, 1);
+    this._refreshStats();
   }
 
   onQuality(e, ctx) {
@@ -233,21 +244,18 @@ export class FurSystem {
     }
 
     // --------------------------------------------------- stochastic alpha -
-    // OFF by default, deliberately.
-    //
-    // Dithered cut-out only pays off once a TAA resolve is actually running,
-    // and "is TAA running" turned out to be unsafe to infer: a postfx system
-    // can exist, declare renderFrame, and still not be driving the frame —
-    // App drops it and falls back to a direct render the first time it
-    // throws, which is exactly what happened here. Auto-enabling off a signal
-    // that can silently go stale is how you get a mystery artifact later, so
-    // this stays opt-in: set `ctx.fur.autoStochastic = true` (or write
-    // uStochastic directly) once TAA is known good, and re-review the coat.
-    // The blended path below it is the one that has actually been reviewed.
+    // Dithered cut-out is only correct when something is actually resolving
+    // it; unresolved, it is just speckle. Inferring that from "a postfx system
+    // exists and declares renderFrame" is wrong in at least three ways — the
+    // chain can be bypassed, renderFrame can have thrown and been dropped by
+    // App while the system object lives on, or the chain can be perfectly
+    // healthy with the `taa` gate simply off for the tier (which is what
+    // speckled the coat at `low`). `ctx.postfx.taaActive` is the authoritative
+    // answer to the question actually being asked, so key off that and nothing
+    // else. It degrades safely: no postfx, no TAA, no dither.
     if (this.autoStochastic) {
-      const driver = ctx.app?._renderer;           // the system actually drawing
-      const taaLive = !!ctx.quality.get('taa') && !!driver && !driver._failed;
-      this.uniforms.uStochastic.value = taaLive ? this.stochasticAmount : 0;
+      this.uniforms.uStochastic.value =
+        ctx.postfx?.taaActive === true ? this.stochasticAmount : 0;
     } else {
       this.uniforms.uStochastic.value = 0;
     }

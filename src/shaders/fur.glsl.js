@@ -560,8 +560,13 @@ ${isShell ? /* glsl */ `
   // the depth by up to half a shell spacing, from an OBJECT-space hash so it
   // is perfectly stable in motion, dissolves those steps into the hair noise
   // and lets the undercoat stay opaque at every tier.
-  float tJ = clamp(t + (hash13(vRoot * 57.31) - 0.5) * uShellJitter / max(uShellCount, 1.0),
-                   0.0, 1.0);
+  // Quantised to roughly a strand width before hashing: a per-fragment hash
+  // gives per-PIXEL grain, which reads as a crunchy speckled rim (very visible
+  // at the low tier, where six shells leave the fringe entirely to this). Sharing one
+  // jitter value across a hair-sized cell breaks the shell steps into
+  // hair-shaped clumps instead, which is what the dither is for.
+  float tJ = clamp(t + (hash13(floor(vRoot * 680.0)) - 0.5)
+                       * uShellJitter / max(uShellCount, 1.0), 0.0, 1.0);
 
   float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, 6.0);
 

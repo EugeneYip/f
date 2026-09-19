@@ -111,6 +111,15 @@ Then **look at the PNGs with the Read tool.** Do not declare success on a green
 exit code alone — a black frame also exits 0. Read `shots/<you>/report.json` for
 draw calls, triangle counts and per-tier frame times.
 
+## Scratch files: namespace them
+
+The scratchpad directory is **shared between all agents**. One agent's probe
+script overwrote another's output at the same path, and they spent two cycles
+reading someone else's results believing they were their own. Prefix every
+scratch file and every `--out` directory with your own name:
+`shots/<you>/…`, `/tmp/<you>-probe.mjs`. Never write to a generic path like
+`probe.mjs` or `shots/tmp`.
+
 ## Measuring performance honestly
 
 Several agents run headless Chromium against the same GPU at once. When that
