@@ -212,6 +212,14 @@ const main = async () => {
           consoleErrors.push(`renderFrame from [${info.renderFrameClaimed.join(', ')}] ` +
             'threw and was disabled — this frame is an UNPOST-PROCESSED fallback');
         }
+        // Guard the invariant the critic caught: identical settings must
+        // produce identical buffer sizes, or review images are not comparable.
+        const bufKey = `${info.buffer?.width}x${info.buffer?.height}`;
+        if (report.bufferSize && report.bufferSize !== bufKey) {
+          consoleErrors.push(`buffer size changed mid-run: ${report.bufferSize} -> ${bufKey} ` +
+            '(adaptive resolution leaked into a review run)');
+        }
+        report.bufferSize = bufKey;
         report.poses[name] = { ok: true, ms: Date.now() - t0, ...info };
         console.log(`[shoot] ${name.padEnd(12)} ${info.drawCalls} calls, ${(info.triangles / 1000).toFixed(0)}k tris`);
       } catch (e) {

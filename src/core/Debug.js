@@ -149,12 +149,38 @@ export class Debug {
         }
         if (pose.focus) ctx.focusDistance = pose.focus;
         ctx.camera.updateMatrixWorld(true);
+        // A pose change is a hard cut. Drop temporal history so the shot
+        // converges from scratch rather than dragging the previous framing's
+        // accumulation across, which also makes repeat runs reproducible.
+        ctx.postfx?.reset?.();
         return true;
       },
 
       setState: (s) => ctx.systemsByName.get('foxBrain')?.forceState?.(s) ?? false,
       setQuality: (t) => { ctx.quality.setTier(t); return ctx.quality.tier; },
-      setAdaptive: (v) => { ctx.quality.adaptive = !!v; },
+      /**
+       * Disabling adaptive resolution must also RESET the scale, not merely
+       * freeze it. The app starts rendering at load, so by the time a harness
+       * calls this, tickAdaptive has already pushed renderScale somewhere
+       * between 0.6 and 1.0 depending on how loaded the machine happened to
+       * be. Freezing it there makes every review screenshot render at a
+       * machine-load-dependent resolution -- two runs with identical settings
+       * come back at different buffer sizes and are not comparable.
+       */
+      setAdaptive: (v) => {
+        ctx.quality.adaptive = !!v;
+        if (!v) {
+          ctx.quality.renderScale = 1;
+          ctx.app._applyRenderSize();
+        }
+        return ctx.bufferSize;
+      },
+
+      setRenderScale: (s) => {
+        ctx.quality.renderScale = Math.max(0.25, Math.min(1, s));
+        ctx.app._applyRenderSize();
+        return ctx.bufferSize;
+      },
       setWind: (speed, gust) => {
         if (speed != null) ctx.windSpeed = speed;
         if (gust != null) ctx.windGust = gust;
