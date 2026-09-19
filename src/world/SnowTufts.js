@@ -98,7 +98,8 @@ export class SnowTufts {
       if (up.y < 0.86) continue;
       iPos[n * 3] = x; iPos[n * 3 + 1] = h; iPos[n * 3 + 2] = z;
       iParam[n * 4 + 0] = r2() * Math.PI * 2;
-      iParam[n * 4 + 1] = 0.032 + r2() * r2() * 0.062;        // height, metres
+      // Real size variation, not one billboard repeated at every depth.
+      iParam[n * 4 + 1] = 0.026 + Math.pow(r2(), 1.7) * 0.115;  // height, metres
       iParam[n * 4 + 2] = r2() * 30;                          // sway phase
       iParam[n * 4 + 3] = 0.55 + r2() * 0.45;                 // stiffness
       n++;
@@ -191,7 +192,7 @@ void main(){
 
   vec3 p = position;
   p.y *= hs / 0.9;
-  p.xz *= 0.85 + 0.4 * hs * 8.0;
+  p.xz *= 0.55 + hs * 9.5;    // width tracks height, so clumps vary in bulk
 
   float c = cos(yaw), s = sin(yaw);
   p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);

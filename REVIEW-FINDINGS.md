@@ -19,6 +19,17 @@ that look like fur, face or anatomy problems are not.
 
 ## BLOCKERS — must fix before this can ship
 
+### 1. ~~The eye material fails to compile~~ — **WITHDRAWN, trace was stale**
+
+> **Orchestrator note.** The face agent challenged this rather than complying,
+> then proved it with a current capture: zero `eyeGlobeL` shader errors and
+> zero `useProgram: program not valid` calls. It had already consolidated
+> those declarations into a single `EYE_UNIFORMS` block prepended to all five
+> stages; the critic's trace came from an earlier snapshot. The separate
+> renderer deaths (blocker 2) were largely Vite HMR hot-reloading the page
+> mid-run as concurrent agents saved — now disabled in both harnesses.
+> Original finding retained below for the record.
+
 ### 1. [C / H] The eye material fails to compile. `owner: face`
 `shots/r2-walk/report.json` and `r2-trot/report.json` carry a hard shader error:
 

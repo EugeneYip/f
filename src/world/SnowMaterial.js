@@ -85,9 +85,11 @@ export class SnowMaterial {
         uDeepTint: { value: new THREE.Color(0.56, 0.72, 1.0) },
         uDetail: { value: null },
         uDetailScale: { value: new THREE.Vector4(0.055, 0.32, 1.55, 0.40) },
-        uSparkle: { value: new THREE.Vector3(70.0, 1.36, 120.0) },
+        uSparkle: { value: new THREE.Vector3(240.0, 1.36, 170.0) },
         uSheen: { value: new THREE.Vector3(0.74, 0.42, 0.38) },
         uSSS: { value: 1.7 },
+        uAerial: { value: new THREE.Vector3(0.016, 0.62, 0.62) },
+        uHaze: { value: new THREE.Color(0xaac4e0) },
         uSkirtDrop: { value: 60.0 },
         uDebugView: { value: 0 },
       },
@@ -206,6 +208,9 @@ export class SnowMaterial {
     u.uSunColor.value.copy(ctx.sunColor);
     u.uSkyColor.value.copy(ctx.skyColor);
     u.uBounce.value.copy(ctx.groundBounce);
+    // Track whatever haze the atmosphere agent is using, so the snow recedes
+    // into the same colour the sky does.
+    if (ctx.scene.fog?.color) u.uHaze.value.copy(ctx.scene.fog.color);
     // three clears the shadow map with whatever clear colour the app has set,
     // so track it and treat texels at that value as "nothing ever rendered".
     ctx.renderer.getClearColor(_clear);

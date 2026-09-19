@@ -77,7 +77,15 @@ void main() {
      A tinted lift that pins white guarantees a floor and makes the darkest
      part of the frame blue rather than dead, which is also what a twilight
      zenith looks like through an atmosphere. */
-  c = uBlackLift + c * (1.0 - uBlackLift);
+  /* Gate the lift on how ACHROMATIC the pixel is. The floor exists so neutral
+     shadows never crush to zero — but a saturated pixel already has a nonzero
+     channel and cannot crush, so lifting it only washes out its colour. A
+     flat additive lift was raising the amber iris's blue from 8 to 14, which
+     is most of the chroma the face agent measured as missing. */
+  float mx = fxMax3(c);
+  float chroma = (mx - fxMin3(c)) / max(mx, 1e-4);
+  vec3 lift = uBlackLift * (1.0 - clamp(chroma, 0.0, 1.0));
+  c = lift + c * (1.0 - lift);
 
   // --- display -------------------------------------------------------------
   c = fxLinearToSRGB(c);

@@ -118,7 +118,7 @@ export const FUR_DEFAULTS = {
 
   // cards
   cardWidth: 0.115,
-  cardLength: 0.92,
+  cardLength: 1.15,
   cardInner: 0.17,
   cardJitter: 1.05,
   cardOpacity: 1.0,

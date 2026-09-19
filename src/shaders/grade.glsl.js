@@ -51,9 +51,19 @@ vec3 agxContrast(vec3 x) {
 /* Blender's "look" stage, applied in the sigmoid's display-encoded domain.
    slope = gain, offset = lift, power = contrast, sat = saturation. */
 vec3 agxLook(vec3 c, float slope, float offset, float power, float sat) {
+  c = max(c * slope + offset, vec3(0.0));
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c = pow(max(c * slope + offset, vec3(0.0)), vec3(power));
-  return vec3(l) + sat * (c - vec3(l));
+  /* Apply the contrast power to LUMINANCE and carry chroma with it, rather
+     than powering each channel independently.
+     A per-channel power collapses the absolute channel spread of a dark
+     saturated feature while leaving a bright neutral one alone: at power 1.30
+     the amber iris measured (74,59,34) before the grade and (51,39,28) after
+     — 0.290^1.30 = 0.200, i.e. exactly 51/255 — with R-B falling 40 -> 23.
+     Scaling all three channels by the same luminance ratio preserves
+     chromaticity exactly, so contrast no longer costs the iris its colour. */
+  float lp = pow(max(l, 1e-5), power);
+  vec3 scaled = c * (lp / max(l, 1e-5));
+  return vec3(lp) + sat * (scaled - vec3(lp));
 }
 
 /**

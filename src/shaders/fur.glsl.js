@@ -199,6 +199,31 @@ export const FUR_NOISE = HASH + SIMPLEX3 + IGN + UTIL + /* glsl */ `
  * (clump, strand, micro) run on this; the jitter range lost by confining the
  * sites is bought back by warping the lookup with the coat-variation noise.
  */
+/**
+ * Fade a noise octave out as its screen-space footprint approaches a pixel.
+ *
+ * px is the bind-space size of one pixel, freq the octave's cells per metre,
+ * so px*freq is cells per pixel. Past ~1/3 cell per pixel the octave is being
+ * point-sampled below Nyquist and must be dissolved into its mean instead of
+ * kept, or it aliases and crawls. Bible 2.2 makes this a hard requirement at
+ * every framing used in shots/.
+ */
+float octaveFade(float px, float freq){
+  return 1.0 - smoothstep(0.13, 0.40, px * freq);
+}
+
+/** Smooth trilinear value noise. Used where a hashed lattice would show its
+ *  cell boundaries as hard axis-aligned blocks. */
+float vnoise3(vec3 p){
+  vec3 i = floor(p), f = p - i;
+  f = f * f * (3.0 - 2.0 * f);
+  float a = mix(hash13(i + vec3(0.0,0.0,0.0)), hash13(i + vec3(1.0,0.0,0.0)), f.x);
+  float b2 = mix(hash13(i + vec3(0.0,1.0,0.0)), hash13(i + vec3(1.0,1.0,0.0)), f.x);
+  float c = mix(hash13(i + vec3(0.0,0.0,1.0)), hash13(i + vec3(1.0,0.0,1.0)), f.x);
+  float d = mix(hash13(i + vec3(0.0,1.0,1.0)), hash13(i + vec3(1.0,1.0,1.0)), f.x);
+  return mix(mix(a, b2, f.y), mix(c, d, f.y), f.z);
+}
+
 float cell8(vec3 q, out vec3 site){
   vec3 ip = floor(q - 0.5);
   float best = 1e9;
@@ -232,10 +257,10 @@ export const FUR_FIELD = /* glsl */ `
  * of being point-sampled, which is what stops the coat crawling at distance.
  */
 vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
-             float freqScale, float shellFill, float pathK, out vec3 site)
+             float freqScale, float shellFill, float pathK, float detail, out vec3 site)
 {
   // Large-scale variation: real fur is not uniformly dense.
-  float coatVar = snoise(p * uCoatVarFreq);
+  float coatVar = snoise(p * uCoatVarFreq) * octaveFade(px, uCoatVarFreq);
 
   // ---- clumps ------------------------------------------------------------
   // The occlusion term needs only F1, so the 27-cell worley3 that used to
@@ -270,13 +295,13 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   float aa = max(px * fs * 1.6, 0.012);
   float a  = 1.0 - smoothstep(r - aa, r + aa, ds);
 
-  float sLod = 1.0 - smoothstep(0.16, 0.46, px * fs);
+  float sLod = octaveFade(px, fs) * detail;
   float mean = clamp(3.1416 * r * r * 1.15, 0.0, 1.0);
   a = mix(mean, a, sLod);
 
   // ---- micro strands: only where a pixel can resolve them -----------------
   float fm = uMicroFreq * freqScale;
-  float mLod = 1.0 - smoothstep(0.05, 0.17, px * fm);
+  float mLod = octaveFade(px, fm) * detail;
   if (mLod > 0.004){
     vec3  msite;
     float dm  = cell8(pPull * fm + vec3(11.3, 5.7, 2.9), msite);
@@ -297,9 +322,14 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // through the coat. This is the difference between fur and carpet, and it is
   // what breaks the shells' long parallel comb strokes into separate locks.
   float tuftR = mix(1.15, 0.34, t * t) * (0.72 + 0.56 * cRand);
-  float taa   = max(px * fc * 1.2, 0.015);
-  float tuft  = 1.0 - smoothstep(tuftR - taa, tuftR + taa, cd.x);
-  tuft = mix(1.0, tuft, smoothstep(0.0, 0.18, t) * uTuftAmt);
+  // Ragged the clump boundary. A clean Voronoi edge reads as a rounded
+  // polygon — the "reptile scale" pattern over the short face coat — because
+  // nothing at this scale breaks it up.
+  float edgeN = vnoise3(p * fc * 5.3) - 0.5;
+  float taa   = max(px * fc * 1.6, 0.045);
+  float tuft  = 1.0 - smoothstep(tuftR - taa, tuftR + taa, cd.x + edgeN * 0.16);
+  tuft = mix(1.0, tuft, smoothstep(0.0, 0.18, t) * uTuftAmt
+                        * octaveFade(px, fc) * detail);
 
   a = a * tuft * lenFade;                                  // guard hair, tufted
 
@@ -572,13 +602,28 @@ ${isShell ? /* glsl */ `
   // the depth by up to half a shell spacing, from an OBJECT-space hash so it
   // is perfectly stable in motion, dissolves those steps into the hair noise
   // and lets the undercoat stay opaque at every tier.
-  // Quantised to roughly a strand width before hashing: a per-fragment hash
-  // gives per-PIXEL grain, which reads as a crunchy speckled rim (very visible
-  // at the low tier, where six shells leave the fringe entirely to this). Sharing one
-  // jitter value across a hair-sized cell breaks the shell steps into
-  // hair-shaped clumps instead, which is what the dither is for.
-  float tJ = clamp(t + (hash13(floor(vRoot * 680.0)) - 0.5)
-                       * uShellJitter / max(uShellCount, 1.0), 0.0, 1.0);
+  // Shell-depth dither, at hair scale.
+  //
+  // A per-fragment hash gives per-PIXEL grain; a hash of floor(p) gives hard
+  // axis-aligned CUBES, which at macro range are ~40 px rectangles with
+  // stair-stepped edges (these were the "texel grid" plates blamed on the
+  // cards — they are shells). Smooth trilinear value noise has neither
+  // problem, and it fades out once its own cells approach a pixel.
+  float jf = 680.0;
+  float tJ = clamp(t + (vnoise3(vRoot * jf) - 0.5) * uShellJitter
+                       * octaveFade(px, jf) / max(uShellCount, 1.0), 0.0, 1.0);
+
+  // Detail fade along the SHELL axis.
+  //
+  // Every shell samples the same object-space hair field; only its screen
+  // position differs. When consecutive shells land within a pixel or two of
+  // each other — which is exactly what 18 shells over a 3 mm face coat do —
+  // they lay near-identical copies of one pattern at slightly different
+  // offsets, and that beats into moire chevrons. Collapsing the field toward
+  // its mean as the shell spacing approaches a pixel removes the interference
+  // without changing the coat's thickness or its look at normal framings.
+  float shellPx = (vP1.w / max(uShellCount, 1.0)) / px;
+  float detail  = smoothstep(0.9, 3.2, shellPx);
 
   float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, 6.0);
 
@@ -589,7 +634,7 @@ ${isShell ? /* glsl */ `
 
   vec3 site = vRoot;
   vec4 hair = vec4(1.0, 0.45, hash13(vRoot * 131.7), 1.0);
-  if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, site);
+  if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail, site);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -599,7 +644,7 @@ ${isShell ? /* glsl */ `
 
   // Per-strand cylinder normal. Without this every hair in a tuft shades
   // identically and the macro shot turns to mush.
-  float sLod = (1.0 - smoothstep(0.16, 0.5, px * uStrandFreq * vP1.y)) * (deep ? 0.0 : 1.0);
+  float sLod = octaveFade(px, uStrandFreq * vP1.y) * detail * (deep ? 0.0 : 1.0);
   if (uStrandRound > 0.001 && sLod > 0.01){
     vec3 B = cross(T, V);
     float bl = length(B);
@@ -713,7 +758,7 @@ void main(){
   // nothing to the outline. uCardLength is sized so the mean tip clears the
   // shells by ~25% and the longest by ~2x.
   float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * (1.10 + 0.85 * hash11(rnd * 37.1));
-  float rise = 0.72;
+  float rise = 0.95;
   vec3  offB = nb * (L * v * rise) + tb * (L * lay * v * (0.42 + 0.58 * v));
   vec3  hdir = normalize(nb * rise + tb * (lay * (0.42 + 1.16 * v)));
 

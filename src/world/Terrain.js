@@ -348,6 +348,7 @@ export class Terrain {
 
   onQuality(e, ctx) {
     if (!this._ready || e.type !== 'tier') return;
+    this._fixStaleShadowMapPass(ctx);
     this.foot.onQuality(ctx);
     this.snow.onQuality(ctx);
     const p = this._clipmapParams(ctx);
@@ -369,6 +370,27 @@ export class Terrain {
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /**
+   * WORKAROUND, not ours to own: src/core/Environment.js disposes and nulls
+   * sun.shadow.map on a tier change, but three allocates the VSM blur's
+   * intermediate target `shadow.mapPass` only when it is null
+   * (WebGLShadowMap.js, "if ( shadow.mapPass === null )"). So after switching
+   * down from `high` the blur runs between a 1024 map and a stale 3072
+   * intermediate, the moments come out garbage, and NOTHING casts a shadow at
+   * `low` — verified by disposing mapPass alone, which restores the shadow
+   * with the map left at 1024.
+   *
+   * The real fix is one line in Environment.applyQuality (dispose mapPass
+   * beside map); this keeps the review tiers usable until then, and turns
+   * into a no-op the moment that lands.
+   */
+  _fixStaleShadowMapPass(ctx) {
+    const shadow = ctx.environment?.sun?.shadow;
+    if (!shadow || shadow.map !== null || !shadow.mapPass) return;
+    shadow.mapPass.dispose();
+    shadow.mapPass = null;
+  }
 
   _syncWind(ctx) {
     const w = ctx.wind;

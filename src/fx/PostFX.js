@@ -67,7 +67,9 @@ function defaults() {
       // highlight rolloff: it bends the midtones down while pinning 1.0, so
       // the fox's shade side separates from its lit side without touching the
       // shoulder that is keeping snow off the clip.
-      lookSlope: 1.0, lookOffset: 0.0, lookPower: 1.30, lookSat: 1.0,
+      // Eased from 1.30: even chroma-preserving, a power that steep costs a
+      // dark warm feature real luminance against a cold bright surround.
+      lookSlope: 1.0, lookOffset: 0.0, lookPower: 1.15, lookSat: 1.0,
       // Bible SS3: "slight lift on the blue channel in shadow". Tiny numbers —
       // these are additive in display-linear, so 0.02 is already visible.
       blackLift: [0.0006, 0.0010, 0.0020],

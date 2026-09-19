@@ -363,6 +363,8 @@ uniform vec4 uDetailScale;   // world tile sizes: micro, grain, ripple, (aniso)
 uniform vec3 uSparkle;       // intensity, spread, threshold
 uniform vec3 uSheen;   // roughness fresh, roughness packed, specular scale         // roughness fresh, roughness packed
 uniform float uSSS;
+uniform vec3 uAerial;   // density, strength, hue-vs-grey
+uniform vec3 uHaze;
 // 0 off. 1 shadow mask, 2 ridge self-shadow, 3 clipmap level, 4 sparkle,
 // 5 detail normal, 6 compaction. Debug only; costs one uniform compare.
 uniform float uDebugView;
@@ -385,17 +387,21 @@ varying float vFw;
  * fox and a hard rectangle edge across the snow is worse than no shadow.
  */
 uniform float uShadowEmpty;
+vec4 gShadowDbg;   // c.xy, m.x, m.y — debug views 7/8
 
 float snShadowMask(){
+  gShadowDbg = vec4(0.0, 0.0, -1.0, -1.0);
 #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
   vec4 sc = vDirectionalShadowCoord[ 0 ];
   vec3 c = sc.xyz / sc.w;
+  gShadowDbg = vec4(c.xy, -2.0, c.z);
   c.z += directionalLightShadows[ 0 ].shadowBias;
   vec2 dd = abs(c.xy - 0.5);
   float edge = 1.0 - smoothstep(0.40, 0.495, max(dd.x, dd.y));
   if (edge <= 0.001 || c.z > 1.0 || c.z < 0.0) return 1.0;
   // The VSM target packs (mean depth, std deviation) as two halves per RGBA8.
   vec2 m = unpackRGBATo2Half(texture2D(directionalShadowMap[ 0 ], c.xy));
+  gShadowDbg = vec4(c.xy, m.x, c.z);
   if (m.x <= uShadowEmpty) return 1.0;
   // Slope-scaled bias: at a six degree sun the depth races across the map, and
   // the VSM blur smears it far enough to self-shadow without this.
@@ -445,6 +451,15 @@ vec3 sn_detail(vec2 uv, float scale){
  * the lattices by the pixel footprint keeps every visible glint 2-4 px wide, so
  * they twinkle instead of aliasing into white noise.
  */
+/**
+ * Discrete crystal glints.
+ *
+ * The returned values are deliberately far above the exposed range of
+ * everything else in frame (the lit coat sits around 1.0-1.3). A bloom pass
+ * needs an absolute threshold that catches glints and nothing else, so a
+ * facet that fires has to land in the tens, not at 1.2. On the direct path
+ * these clip to white anyway — which is exactly what a glint looks like.
+ */
 vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
   vec3 Hv = normalize(L + V);
   vec3 T = normalize(cross(N, vec3(1.0, 0.0, 0.0)));
@@ -470,7 +485,9 @@ vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
       vec2 fpt = r.xy * 0.5 + 0.25 - fp;
       float dd = dot(fpt, fpt);
       if (dd < 0.0625) {
-        float dot0 = 1.0 - smoothstep(0.018, 0.0625, dd);
+        // Tight core: the energy belongs in one or two pixels, not spread
+        // over five, or the peak never clears the bloom threshold.
+        float dot0 = 1.0 - smoothstep(0.008, 0.0625, dd);
         // Facet orientation is parameterised by ANGLE, not by a tangent
         // offset: with a 6 degree sun and a low camera the half-vector sits
         // ~60 degrees off the surface normal, and a tilt vector added to N can
@@ -606,12 +623,24 @@ void main(){
   col += uSkyColor * (uSkyInt * (0.035 + 0.55 * fres) * (0.35 + 0.65 * packed));
 
   // --- sparkle --------------------------------------------------------------
-  float sparkGate = saturate(0.25 + NdotL * 2.5) * shadowMask * horizon * (1.0 - comp * 0.85);
-  if (sparkGate > 0.01) {
+  // Glints are a near-field phenomenon: at the horizon a crystal facet
+  // subtends far less than a pixel, and keeping them at full strength out
+  // there makes the field read as a flat sheet of glitter.
+  float sparkDist = 1.0 / (1.0 + dist * 0.075);
+  float sparkGate = saturate(0.25 + NdotL * 2.5) * shadowMask * horizon
+                  * (1.0 - comp * 0.85) * sparkDist;
+  if (sparkGate > 0.004) {
     col += sn_sparkle(N, V, L, p, px, crystal * sparkGate * (0.6 + 0.6 * vFields.y));
   }
 
   // --- aerial perspective ---------------------------------------------------
+  // The scene fog alone leaves the horizon snow at the same value and
+  // saturation as the snow at your feet, which reads as a flat painted plane.
+  // Bleed contrast and saturation out with distance before the fog term.
+  float ap = (1.0 - exp(-dist * uAerial.x)) * uAerial.y;
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(col, mix(vec3(lum), uHaze * (0.30 + 0.70 * lum), uAerial.z), ap);
+
   // Sun-ward in-scatter keeps the field from going flat grey with distance.
   float fogT = 1.0 - exp(-dist * dist * 2.4e-5);
   col += uSunColor * (uSunInt * 0.028 * fogT * pow(saturate(dot(V, -L)) * 0.5 + 0.5, 4.0));
@@ -622,7 +651,9 @@ void main(){
     else if (uDebugView < 3.5) col = vec3(fract(log2(max(vFw, 1e-4)) * 0.5 + 0.5));
     else if (uDebugView < 4.5) col = sn_sparkle(N, V, L, p, px, crystal) * 0.25;
     else if (uDebugView < 5.5) col = vec3(dn * 2.0 + 0.5, 0.5);
-    else col = vec3(comp, ft.x, ft.y);
+    else if (uDebugView < 6.5) col = vec3(comp, ft.x, ft.y);
+    else if (uDebugView < 7.5) col = vec3(gShadowDbg.xy, 0.0);
+    else col = vec3(gShadowDbg.z, gShadowDbg.w, 0.0);
   }
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
