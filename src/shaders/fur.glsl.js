@@ -28,6 +28,26 @@ import { HASH, SIMPLEX3, IGN, UTIL } from './noise.glsl.js';
 
 export const REGION_COUNT = 27;
 
+/**
+ * Card shape constants — the SINGLE source of truth.
+ *
+ * Perpendicular reach past the skin is
+ *     uCardLength * lenMul * rise        (+ droop on the downward side)
+ * as a multiple of the local coat thickness, and `reachBand` is the range it
+ * must stay inside: below it the cards are buried inside the shells and the
+ * silhouette goes smooth; above it they separate into visible spikes. We have
+ * overshot this band in both directions, so these values are injected into the
+ * shader from here AND read by ctx.fur.reachReport(), which means the guard
+ * cannot drift away from what the shader actually does.
+ */
+export const CARD_SHAPE = {
+  lenMulMin: 0.92,
+  lenMulSpread: 0.18,   // lenMul = min + spread * r*r,  r uniform in [0,1)
+  rise: 0.95,           // fraction of card length spent along the normal
+  droopBoost: 0.40,     // gravity multiplier for cards (guard hair is stiff)
+  reachBand: [1.10, 1.25],
+};
+
 /* ------------------------------------------------------------------ uniforms */
 
 export const FUR_UNIFORMS = /* glsl */ `
@@ -102,6 +122,7 @@ uniform float uClumpAO;
 uniform float uAniso;
 uniform float uStrandRound;
 uniform float uStrandAniso;
+uniform float uMicroOn;
 uniform float uRim;
 
 // --- stochastic / TAA ------------------------------------------------------
@@ -318,7 +339,10 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
 
   // ---- micro strands: only where a pixel can resolve them -----------------
   float fm = uMicroFreq * freqScale;
-  float mLod = octaveFade(px, fm) * detail;
+  // The micro layer is the cheapest thing to give up on weak hardware: it
+  // only resolves at macro range and costs a full cell8 per fragment per
+  // shell. Gated off on the tier that has already given up anisotropy.
+  float mLod = octaveFade(px, fm) * detail * uMicroOn;
   if (mLod > 0.004){
     vec3  msite;
     float dm  = cell8(stretchAlong(pPull * fm, axis, uStrandAniso) + vec3(11.3, 5.7, 2.9), msite);
@@ -777,7 +801,7 @@ void main(){
   // nothing to the outline. uCardLength is sized so the mean tip clears the
   // shells by ~25% and the longest by ~2x.
   float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * (1.10 + 0.85 * hash11(rnd * 37.1));
-  float rise = 0.95;
+  float rise = ${CARD_SHAPE.rise};
   vec3  offB = nb * (L * v * rise) + tb * (L * lay * v * (0.42 + 0.58 * v));
   vec3  hdir = normalize(nb * rise + tb * (lay * (0.42 + 1.16 * v)));
 
@@ -794,7 +818,7 @@ void main(){
   vec3 wh = normalize(m3 * hO);
 
   vec3 rootW = (modelMatrix * vec4(rootO, 1.0)).xyz;
-  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), rnd, 0.85);
+  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), rnd, ${CARD_SHAPE.droopBoost});
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
 

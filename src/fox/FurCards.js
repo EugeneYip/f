@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import { rng } from '../util/math.js';
 import { REGION_TABLE } from './FurMaterial.js';
+import { CARD_SHAPE } from '../shaders/fur.glsl.js';
 
 /** Segments along a card. 3 is enough for the tuft to curve under gravity. */
 const SEGMENTS = 3;
@@ -126,9 +127,14 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
     const cReg = reg[dom];
 
     const cRand = rand();
-    // Tight spread: a wide one puts a 100 mm wisp halo on the tail, which
-    // dissolves the brush into strands instead of thickening it.
-    const lenMul = 0.76 + 0.50 * rand() * rand();
+    // Per-card length spread, deliberately narrow.
+    //
+    // Perpendicular reach past the skin is uCardLength * lenMul * rise, and
+    // the target band is 1.10-1.25x the local coat. A wide spread puts the
+    // MEAN in band while the top third sits far outside it and reads as
+    // separate spikes — that is what produced the dorsal crest. 1.20:1 keeps
+    // the whole distribution inside the band.
+    const lenMul = CARD_SHAPE.lenMulMin + CARD_SHAPE.lenMulSpread * rand() * rand();
 
     const base = cI * vPer;
     for (let s = 0; s <= SEGMENTS; s++) {

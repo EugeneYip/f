@@ -339,6 +339,21 @@ const main = async () => {
         `${(p.triangles / 1e6).toFixed(2)}M tris`, 'warn');
     }
 
+    // Fur silhouette-extent guard. Built by the fur agent after card reach
+    // oscillated three times (buried at 0.98x, dandelion, then a spiky crest).
+    // Its constants are injected into the shader from one place, so the guard
+    // cannot drift from what is actually drawn.
+    const reach = await page.evaluate(() => window.FoxDebug.ctx().fur?.reachReport?.() ?? null);
+    if (reach) {
+      report.furReach = reach;
+      record('fur card reach in band', reach.ok === true,
+        `band ${JSON.stringify(reach.band)} — min ${reach.min}, mean ${reach.mean}, ` +
+        `max ${reach.max}, worst with droop ${reach.worstDroop}`);
+    } else {
+      record('fur reach guard available', false,
+        'ctx.fur.reachReport() missing — silhouette extent is unguarded', 'warn');
+    }
+
     const rf = await page.evaluate(() => window.FoxDebug.stats());
     record('post-processing actually running', !rf.renderFrameDropped,
       `claimed by [${(rf.renderFrameClaimed || []).join(', ')}], active: ${rf.renderFrameActive}`);

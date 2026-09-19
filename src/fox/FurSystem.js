@@ -22,12 +22,17 @@ import {
   syncFurUniforms, FUR_DEFAULTS,
 } from './FurMaterial.js';
 import { buildFurCards } from './FurCards.js';
+import { CARD_SHAPE } from '../shaders/fur.glsl.js';
 
 /** Instance buffer is allocated for the largest tier so a tier change is free. */
 const MAX_SHELLS = 26;
 
-/** Cards per tier. `furFins` gates them off entirely at low. */
-const CARD_COUNT = { low: 0, medium: 7000, high: 13000, ultra: 19000 };
+/**
+ * Card budget lives in Quality.js as `furCards`, not here — one place for the
+ * number. `furFins` remains the on/off gate; when it is on, the count comes
+ * from the tier. The fallback only covers a tier that forgets to declare one.
+ */
+const CARD_COUNT_FALLBACK = 13000;
 
 export class FurSystem {
   name = 'fur';
@@ -139,7 +144,7 @@ export class FurSystem {
       this.cardStats = null;
     }
     const wanted = ctx.quality.get('furFins')
-      ? (CARD_COUNT[ctx.quality.tier] ?? CARD_COUNT.high)
+      ? (ctx.quality.get('furCards') ?? CARD_COUNT_FALLBACK)
       : 0;
     if (wanted <= 0) { this._refreshStats(); return; }
 
@@ -169,7 +174,12 @@ export class FurSystem {
 
   applyQuality(ctx) {
     this.shellCount = clamp(ctx.quality.get('furShells') ?? 18, 1, MAX_SHELLS);
-    this.uniforms.uAniso.value = ctx.quality.get('furAniso') ? 1 : 0;
+    const rich = !!ctx.quality.get('furAniso');
+    this.uniforms.uAniso.value = rich ? 1 : 0;
+    // Tiers that have given up anisotropic specular also give up the micro
+    // strand octave — it only resolves at macro range and costs a full
+    // cellular lookup per fragment per shell.
+    this.uniforms.uMicroOn.value = rich ? 1 : 0;
     this.uniforms.uShellCount.value = this.shellCount;
     this.shellGeometry.instanceCount = this.shellCount;
 
@@ -185,9 +195,10 @@ export class FurSystem {
     if (e.type === 'tier') {
       this.applyQuality(ctx);
       this._buildCards(ctx);
-    } else if (e.key === 'furShells' || e.key === 'furAniso' || e.key === 'furFins') {
+    } else if (e.key === 'furShells' || e.key === 'furAniso'
+               || e.key === 'furFins' || e.key === 'furCards') {
       this.applyQuality(ctx);
-      if (e.key === 'furFins') this._buildCards(ctx);
+      if (e.key === 'furFins' || e.key === 'furCards') this._buildCards(ctx);
     }
   }
 
@@ -259,6 +270,58 @@ export class FurSystem {
     } else {
       this.uniforms.uStochastic.value = 0;
     }
+  }
+
+  /**
+   * Regression guard for card reach — call it, do not eyeball it.
+   *
+   * We have overshot the silhouette fringe in both directions three times now:
+   * buried at 0.98x the coat (smooth outline, an automatic fail on a hard mesh
+   * edge), then 1.70x (dorsal crest of separate spikes), and a dandelion before
+   * that. Each time the error was invisible in a still until someone looked at
+   * the right pose, and each time it was a parameter arithmetic mistake that a
+   * number would have caught immediately.
+   *
+   * Perpendicular reach past the skin, as a multiple of LOCAL coat thickness,
+   * is uCardLength * lenMul * rise, plus gravity on the downward-facing side.
+   * It is region independent because the per-region length scale multiplies
+   * the coat and the card equally — so one band covers the whole animal.
+   *
+   * Returns { ok, band, min, mean, max, worstDroop, detail[] }. `ok` false
+   * means the coat will read as either spikes or a smooth edge.
+   */
+  reachReport() {
+    const u = this.uniforms;
+    if (!u) return { ok: false, reason: 'fur not initialised' };
+    const { lenMulMin: lo, lenMulSpread: sp, rise, droopBoost, reachBand } = CARD_SHAPE;
+    const cardLen = u.uCardLength.value;
+    const droop = u.uDroop.value;
+
+    // lenMul = lo + sp*r^2 with r uniform, so E[r^2] = 1/3.
+    const reach = (lm) => cardLen * lm * rise;
+    const min = reach(lo), mean = reach(lo + sp / 3), max = reach(lo + sp);
+
+    // Gravity acts in world space and adds to reach wherever the surface faces
+    // down — the belly and chest, which is where the "Afghan skirt" came from.
+    const detail = [];
+    let worstDroop = 0;
+    for (const [name, stiffness] of [['belly', 0.24], ['chest', 0.46],
+                                     ['flank', 0.62], ['back', 0.86]]) {
+      const soft = 1 - stiffness;
+      const extra = droop * (cardLen * (lo + sp / 3)) * (0.30 + soft) * droopBoost;
+      const total = mean + extra;
+      if (total > worstDroop) worstDroop = total;
+      detail.push({ region: name, meanReach: +mean.toFixed(3),
+                    droopExtra: +extra.toFixed(3), total: +total.toFixed(3) });
+    }
+
+    const ok = min >= reachBand[0] * 0.92 && max <= reachBand[1] * 1.02
+             && worstDroop <= reachBand[1] * 1.05;
+    return {
+      ok, band: reachBand,
+      min: +min.toFixed(3), mean: +mean.toFixed(3), max: +max.toFixed(3),
+      worstDroop: +worstDroop.toFixed(3), detail,
+    };
   }
 
   /** Live tuning: `ctx.fur.set('lay', 0.9)`. Accepts any uniform's short name. */
