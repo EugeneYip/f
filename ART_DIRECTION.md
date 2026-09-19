@@ -59,6 +59,67 @@ Work in metres, Y-up, fox faces **+Z**.
 - Eyes forward-set, amber-brown, with a dark rim. Pupil round.
 - Body silhouette in winter is **round** — nearly spherical torso, the coat hides the waist entirely.
 
+## 4b. Reference photographs — binding corrections
+
+Six reference photographs of real *Vulpes lagopus* were supplied by the client.
+Where this section disagrees with anything above, **this section wins**. These
+are the specific ways our render currently differs from the real animal.
+
+### Skull and face — our weakest area
+- The head is **proportionally larger and rounder** than we have it. The
+  cranium is a broad dome; the widest part of the head is at the cheeks, not
+  the skull.
+- The muzzle is **much shorter and blunter** — closer to cat-like than to any
+  fox stereotype. It tapers only slightly from the cheeks to the nose. If your
+  muzzle looks at all like a red fox's, it is wrong.
+- **Ears sit WIDE APART and LOW on the skull**, well out toward the sides —
+  not high and close together. They are small, thickly furred, and rounded
+  almost to a semicircle. Backs are faintly grey.
+- **The cheek ruff flares outward dramatically**, making the head read wider
+  than it is deep. This flare is a defining feature of the winter coat.
+- There is effectively **no visible neck**. The head merges into the ruff.
+
+### Eyes — currently a dark speck, must be built
+- Iris is **amber / golden-brown**, noticeably warm, with a darker outer ring.
+- Pupil round and black.
+- **Dark, almost black eyelid rims** surround the eye. This is what makes the
+  eye read at distance, and it is the single most important detail on the face.
+- Eyes are forward-set and comparatively large, with a wet corneal highlight.
+
+### Nose and whiskers
+- Nose: small, **black**, wet and specular, with defined nostril slits.
+- **Whiskers are long, white and prominent** — sweeping back from the muzzle
+  well past the cheek line, plus shorter brow whiskers above the eye. We have
+  none. On a white animal against snow they read as fine bright filaments and
+  they matter more than their cost suggests.
+
+### Body and tail
+- The **tail is thicker than ours and carried LOW**, close to the ground when
+  standing, curling around the flank when the animal is sitting or lying. It
+  is roughly 60% of head-body length. A running animal does carry it straight
+  out behind — so tail carriage is pose-dependent, not fixed.
+- Legs are **short**, and the **belly fur hangs low enough to obscure the top
+  of the leg**. Very little bare leg is visible on a standing animal.
+- Curled up, the animal is very nearly a **sphere**.
+
+### Colour — the pink cast is flatly wrong
+- The coat is **pure white to a faint ivory/cream**. There is **no warm cast
+  whatsoever**, even in direct low sun.
+- Shaded fur goes **blue-grey**, never pink, never warm.
+- Some individuals carry a faint grey-tan mottle along the back and flank.
+  Optional; the clean winter animal is uniformly white.
+- Against snow the animal is only slightly brighter than its background — the
+  separation comes from *shadow hue* and from the hairy silhouette, not from
+  luminance.
+
+### Fur behaviour
+- Face fur is genuinely **short** on the muzzle and forehead — a few
+  millimetres — so those areas reading nearly smooth is correct, not a defect.
+  The contrast against the long cheek and ruff fur is what sells the face.
+- Guard hairs are individually visible at the silhouette **everywhere**, at
+  every framing.
+- Tail fur radiates outward from the core and is the longest on the animal.
+
 ## 5. Fur specification
 
 - Technique: **shell (concentric-offset) fur** — 12–20 nested shells for `high`, alpha-cut by a

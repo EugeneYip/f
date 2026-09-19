@@ -236,7 +236,10 @@ export class Limb {
     const horiz = Math.sqrt(dx * dx + dz * dz);
     const vert = this._H.y - A.y;
     const d2 = maxReach * maxReach - horiz * horiz;
-    if (d2 <= 0) return Math.max(0, vert);
+    // Horizontally out of reach: no body height fixes this, and returning the
+    // full vertical would slam the animal flat trying. Report nothing and let
+    // the swing clamp (or the gait tuning) deal with it.
+    if (d2 <= 0) return 0;
     return Math.max(0, vert - Math.sqrt(d2));
   }
 

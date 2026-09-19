@@ -352,7 +352,7 @@ float kkLobe(vec3 T, vec3 N, vec3 H, float shift, float power){
  *   rnd  per-strand random — breaks the specular into individual hairs
  */
 vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
-              float tipWhite, vec3 tintMul, bool cheap)
+              float tipWhite, vec3 tintMul, bool cheap, float thinness)
 {
   vec3  L = uSunDir;
   vec3  H = normalize(L + V);
@@ -412,12 +412,21 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // Light that entered the far side of the coat and kept going. Peaks when the
   // camera looks into the sun, strongest in the thin outer coat and at grazing
   // angles — i.e. exactly along the rim.
+  //
+  // The weight that matters is THINNESS, not the grazing angle. A halo exists
+  // where the coat is sparse enough that sky is visible between the hairs;
+  // over the dense body there is an opaque animal behind the fur and nothing
+  // can shine through it. Driving this off (1 - alpha) puts the glow exactly
+  // on the fringe hairs and nowhere else — which is also why it reads as
+  // individual lit hairs rather than as a warm haze over the whole coat.
+  // Gating it on the grazing angle instead was what tinted the lit side peach.
   float fwd   = cheap ? 0.0 : pow(clamp(-dot(V, L), 0.0, 1.0), uTransPow);
   float thin  = mix(0.10, 1.0, t * t);
-  float graze = pow(1.0 - ndv, 2.3);
+  float graze = pow(1.0 - ndv, 2.0);
   float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
   col += uSunColor * uSunIntensity * uTransTint * albedo *
-         (uTrans * RECIPROCAL_PI * fwd * thin * (2.45 * graze) * (0.30 + 0.95 * shell));
+         (uTrans * RECIPROCAL_PI * fwd * thin * (0.06 + 1.30 * graze)
+          * thinness * (0.30 + 0.95 * shell));
 
   // A cool sky rim keeps the shadow side alive on the silhouette.
   col += uSkyColor * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
@@ -596,7 +605,8 @@ ${isShell ? /* glsl */ `
   #endif
 `}
 
-  vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint, ${isShell ? 'deep' : 'false'});
+  vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint,
+                      ${isShell ? 'deep' : 'false'}, ${isShell ? '1.0 - clamp(alpha, 0.0, 1.0)' : '0.0'});
 
 ${isShell ? /* glsl */ `
   // Stochastic cut-out. The threshold is hashed in OBJECT space, so it is
@@ -797,7 +807,8 @@ void main(){
 
   float ao = (1.0 - vP0.z * uAOBake) *
              mix(uAOInner + 0.3, 1.05, pow(clamp(v, 0.0, 1.0), uAOPow * 0.6));
-  vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0), false);
+  vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0),
+                      false, 1.0 - clamp(a, 0.0, 1.0) * 0.55);
 
   gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
   #include <tonemapping_fragment>

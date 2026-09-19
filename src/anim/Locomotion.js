@@ -46,7 +46,18 @@ import {
 
 /** Height at which horizontal swing motion is permitted (audit band is 22 mm). */
 const H_CLEAR = 0.034;
-/** Swing sub-phase boundaries: [0,U_LIFT] rise · [·,U_PLANT] travel · [·,1] descend. */
+/**
+ * Default swing sub-phase boundaries: [0,uLift] rise · [·,uPlant] travel ·
+ * [·,1] descend. Per-gait overrides live in the table below.
+ *
+ * These are a *reach* budget as much as a timing one. The furthest the paw
+ * ever gets from its shoulder is not at touchdown — it is at `uPlant`, where
+ * the foot has already arrived at its landing spot but the body still has
+ * `(1−uPlant)·T_swing` of travel left to catch up. That overshoot is
+ * `S·(1−uPlant)(1−duty)` on top of the `S·duty/2` the stance already costs,
+ * and on a 168 mm front limb it is what runs out of leg first. Narrowing the
+ * window at speed is what keeps the gallop inside the envelope.
+ */
 const U_LIFT = 0.17;
 const U_PLANT = 0.74;
 
@@ -59,7 +70,7 @@ export const GAITS = {
   idle: {
     speed: 0, cycle: 1.0, duty: 1.0,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.030, drop: 0.012, track: 1.0, sink: 0.006,
+    lift: 0.030, drop: 0.012, track: 1.0, sink: 0.006, uLift: 0.17, uPlant: 0.74,
     press: 0.13, bob: 0.0, bobBeats: 2, sway: 0.0, pitch: 0,
     scapula: 0, spineFlex: 0, yawSway: 0,
   },
@@ -67,7 +78,7 @@ export const GAITS = {
   walk: {
     speed: 0.36, cycle: 0.66, duty: 0.655,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.045, drop: 0.021, track: 0.97, sink: 0.009,
+    lift: 0.045, drop: 0.021, track: 0.97, sink: 0.009, uLift: 0.17, uPlant: 0.74,
     press: 0.17, bob: 0.0045, bobBeats: 2, sway: 0.0075, pitch: -0.9,
     scapula: 9.5, spineFlex: 0.9, yawSway: 1.6,
   },
@@ -75,18 +86,18 @@ export const GAITS = {
   trot: {
     speed: 0.72, cycle: 0.455, duty: 0.475,
     offsets: { RL: 0, FR: 0, RR: 0.5, FL: 0.5 },
-    lift: 0.058, drop: 0.026, track: 0.84, sink: 0.011,
+    lift: 0.058, drop: 0.026, track: 0.84, sink: 0.011, uLift: 0.15, uPlant: 0.79,
     press: 0.22, bob: 0.0105, bobBeats: 2, sway: 0.0045, pitch: -1.6,
     scapula: 13, spineFlex: 1.6, yawSway: 0.8,
   },
   // Rotary gallop: LH → RH → RF → LF, with a gathered and an extended
   // suspension. The one canids actually use at speed.
   run: {
-    speed: 1.42, cycle: 0.345, duty: 0.325,
+    speed: 1.30, cycle: 0.345, duty: 0.325,
     offsets: { RL: 0, RR: 0.095, FR: 0.44, FL: 0.535 },
-    lift: 0.080, drop: 0.033, track: 0.60, sink: 0.015,
+    lift: 0.080, drop: 0.033, track: 0.60, sink: 0.015, uLift: 0.11, uPlant: 0.86,
     press: 0.30, bob: 0.026, bobBeats: 1, sway: 0.004, pitch: -2.6,
-    scapula: 17, spineFlex: 8.5, yawSway: 0.5,
+    scapula: 24, spineFlex: 8.5, yawSway: 0.5,
   },
 };
 
@@ -128,6 +139,8 @@ class Foot {
     this.pressedAt = -99;
     this.justLanded = false;
     this.impact = 0;
+    /** Commanded clearance above the snow this step — gates the reach clamp. */
+    this.clear = 0;
 
     // One-off repositioning step while standing (-1 = not shuffling).
     this.shuffleT = -1;
@@ -142,18 +155,18 @@ class Foot {
 }
 
 /** Vertical swing profile, in metres above the snow. */
-function swingHeight(u, lift) {
-  if (u <= U_LIFT) {
-    const x = u / U_LIFT;
+function swingHeight(u, lift, uLift, uPlant) {
+  if (u <= uLift) {
+    const x = u / Math.max(1e-4, uLift);
     const s = 1 - x;
     return H_CLEAR * (1 - s * s * s);          // snap off the ground
   }
-  if (u >= U_PLANT) {
-    const x = (u - U_PLANT) / (1 - U_PLANT);
+  if (u >= uPlant) {
+    const x = (u - uPlant) / Math.max(1e-4, 1 - uPlant);
     const s = 1 - x;
     return H_CLEAR * s * s;                    // decelerating touchdown
   }
-  const x = (u - U_LIFT) / (U_PLANT - U_LIFT);
+  const x = (u - uLift) / Math.max(1e-4, uPlant - uLift);
   return H_CLEAR + (lift - H_CLEAR) * Math.pow(Math.sin(Math.PI * x), 0.75);
 }
 
@@ -177,6 +190,8 @@ export class Locomotion {
     this.drop = GAITS.idle.drop;
     this.track = 1.0;
     this.sink = GAITS.idle.sink;
+    this.uLift = U_LIFT;
+    this.uPlant = U_PLANT;
 
     this.phase = 0;
     this.frozen = true;                  // phase clock stopped (standing)
@@ -189,6 +204,13 @@ export class Locomotion {
     this.pos = new THREE.Vector3();      // world root position
     this.vel = new THREE.Vector3();
     this.groundY = 0;
+
+    // Ballistic overrides, written by FoxBrain's pounce. `airLift` is added to
+    // the root height by the caller; the lunge is an extra world velocity that
+    // bypasses the gait clock so the animal can travel with no feet down.
+    this.airLift = 0;
+    this.lungeX = 0;
+    this.lungeZ = 0;
 
     // Body descriptors consumed by FoxBrain.
     this.bodyDrop = GAITS.idle.drop;
@@ -271,6 +293,8 @@ export class Locomotion {
       this.drop = g.drop;
       this.track = g.track;
       this.sink = g.sink;
+      this.uLift = g.uLift ?? U_LIFT;
+      this.uPlant = g.uPlant ?? U_PLANT;
       for (const f of this.feet) f.offset = f.offsetTarget;
     }
     if (g.speed > 0) this.frozen = false;
@@ -341,6 +365,8 @@ export class Locomotion {
     this.drop = damp(this.drop, g.drop, r, h);
     this.track = damp(this.track, g.track, r, h);
     this.sink = damp(this.sink, g.sink, r, h);
+    this.uLift = damp(this.uLift, g.uLift ?? U_LIFT, r, h);
+    this.uPlant = damp(this.uPlant, g.uPlant ?? U_PLANT, r, h);
     for (const f of this.feet) {
       f.offset = f.offset + wrapPi((f.offsetTarget - f.offset) * TAU) / TAU * (1 - Math.exp(-r * h));
       f.offset = f.offset - Math.floor(f.offset);
@@ -354,8 +380,9 @@ export class Locomotion {
     this.yawRate = h > 0 ? wrapPi(this.yaw - prevYaw) / h : 0;
     this._syncVelocity();
 
-    this.pos.x += this.vel.x * h;
-    this.pos.z += this.vel.z * h;
+    this.pos.x += (this.vel.x + this.lungeX) * h;
+    this.pos.z += (this.vel.z + this.lungeZ * Math.cos(this.yaw)) * h;
+    this.pos.x += this.lungeZ * Math.sin(this.yaw) * h;
 
     // --- phase clock ------------------------------------------------------
     // Keep cycling while anything is still in the air even after the brain
@@ -439,6 +466,7 @@ export class Locomotion {
         const bell = smootherstep(0, 0.16, u) * (1 - smootherstep(0.86, 1, u));
         f.target.set(f.contact.x, f.contactGround - this.sink * bell, f.contact.z);
         f.targetN.copy(f.normal);
+        f.clear = 0;
         f.loadRaw = 0.05 + 0.95 * bell;
         f.bend = 0;
         // Heel-first at touchdown, roll through, toe-off at the end.
@@ -452,13 +480,14 @@ export class Locomotion {
           this._neutral(f, _v, lead);
           f.next.x = _v.x;
           f.next.z = _v.z;
-          if (u >= U_PLANT) f.nextLocked = true;
+          if (u >= this.uPlant) f.nextLocked = true;
         }
-        const uh = smootherstep(U_LIFT, U_PLANT, u);
+        const uh = smootherstep(this.uLift, this.uPlant, u);
         const x = lerp(f.liftFrom.x, f.next.x, uh);
         const z = lerp(f.liftFrom.z, f.next.z, uh);
         const gy = terrain?.heightAt ? terrain.heightAt(x, z) : 0;
-        f.target.set(x, gy + swingHeight(u, this.lift), z);
+        f.clear = swingHeight(u, this.lift, this.uLift, this.uPlant);
+        f.target.set(x, gy + f.clear, z);
         f.targetN.set(0, 1, 0);
         f.loadRaw = 0;
         f.bend = 0.85 * Math.pow(Math.sin(Math.PI * clamp(u, 0, 1)), 1.1);

@@ -43,6 +43,7 @@ uniform float uFar;
 uniform float uAlpha;          // weight of the current sample
 uniform float uClampGamma;
 uniform float uAntiGhost;      // 0 while the camera is static
+uniform float uUseCR;          // 0 when reprojection is the identity
 uniform float uReset;
 varying vec2 vUv;
 
@@ -86,7 +87,11 @@ void main() {
   float hz = texture2D(tHist, prevUv).a;
   valid *= 1.0 - smoothstep(0.02, 0.08, abs(hz - vz) / max(vz, 0.05));
 
-  vec3 histRGB = fxHistoryCR(tHist, prevUv, uRes, uTexel);
+  // Catmull-Rom is exact at zero offset, so when the camera has not moved a
+  // single bilinear tap gives a bit-identical result for a fifth of the cost.
+  vec3 histRGB = uUseCR > 0.5
+    ? fxHistoryCR(tHist, prevUv, uRes, uTexel)
+    : texture2D(tHist, prevUv).rgb;
   vec3 hist = clamp(fxRGB2YCoCg(fxCompress(fxSafe(histRGB))), lo, hi);
   histRGB = fxUncompress(fxYCoCg2RGB(hist));
 
@@ -164,6 +169,7 @@ export class TAA {
       uAlpha: { value: 1 },
       uClampGamma: { value: 1.25 },
       uAntiGhost: { value: 0 },
+      uUseCR: { value: 1 },
       uReset: { value: 1 },
     });
 
@@ -247,6 +253,7 @@ export class TAA {
     u.uAlpha.value = 1 / (this.n + 1);
     u.uClampGamma.value = p.cfg.clampGamma;
     u.uAntiGhost.value = p.static_ ? 0 : p.cfg.antiGhost;
+    u.uUseCR.value = p.static_ ? 0 : 1;
     u.uReset.value = reset ? 1 : 0;
 
     this.resolve.render(r, this.histA);

@@ -95,7 +95,7 @@ export const FUR_DEFAULTS = {
   ambientSat: 1.0,
   sunSat: 0.42,       // how much of the sun's chromaticity survives scattering
   wrap: 0.40,
-  trans: 4.60,        // divided by PI in the shader
+  trans: 5.20,        // divided by PI in the shader
   transPow: 3.4,
   aoInner: 0.66,
   aoPow: 0.90,
@@ -180,7 +180,7 @@ export function buildFurUniforms(ctx) {
     uShadowTint: { value: new THREE.Vector3(0.72, 0.845, 1.0) },
     uSpecTintA: { value: c(0xfff3e2) },
     uSpecTintB: { value: c(0xffe8cc) },
-    uTransTint: { value: c(0xffb072) },
+    uTransTint: { value: c(0xffdcc6) },
     uSpecShiftA: { value: d.specShiftA },
     uSpecShiftB: { value: d.specShiftB },
     uSpecPowA: { value: d.specPowA },

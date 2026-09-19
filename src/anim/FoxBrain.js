@@ -47,6 +47,16 @@ const FOOT_CONFORM = 0.72;
 /** Toes splay outward by this much (radians). */
 const FOOT_SPLAY = 0.045;
 /**
+ * Clearance window over which the airborne reach clamp fades in. Both ends
+ * sit well above the audit's 22 mm stance band on purpose: the clamp moves a
+ * foot horizontally, so it must be impossible for it to act on any frame that
+ * could be classified as contact.
+ */
+const CLAMP_FADE_LO = 0.046;
+const CLAMP_FADE_HI = 0.072;
+/** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
+const MAX_REACH_DROP = 0.055;
+/**
  * When the review harness forces a moving state it then settles 2.5 s and
  * shoots each pose after another 0.35 s, against camera poses that are
  * absolute world coordinates aimed at the origin. Launching the animal this
@@ -645,6 +655,26 @@ export class FoxBrain {
       f.limb.ankleFor(f.target, f._qf, f._A);
     }
 
+    // 1b. Airborne reach clamp. A saturated IK target does not just look
+    //     stiff — the solver leaves the paw short of it, and that shortfall
+    //     changes every frame, which is indistinguishable from sliding. So
+    //     pull an unreachable *swing* target in toward its shoulder; the limb
+    //     folds instead of locking straight. Gated on commanded clearance so
+    //     it can only ever act well above the audit's 22 mm stance band, and
+    //     never on a planted foot.
+    for (const f of feet) {
+      if (f.stance || f.clear < CLAMP_FADE_LO) continue;
+      const L = f.limb;
+      L.hip(_v);
+      const dx = f._A.x - _v.x, dy = f._A.y - _v.y, dz = f._A.z - _v.z;
+      const D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const maxR = L.Ltot * REACH_MAX;
+      if (D <= maxR || D < 1e-6) continue;
+      const w = smoothstep(CLAMP_FADE_LO, CLAMP_FADE_HI, f.clear);
+      const k = lerp(1, maxR / D, w);
+      f._A.set(_v.x + dx * k, _v.y + dy * k, _v.z + dz * k);
+    }
+
     // 2. exact reach backstop — drop the body until every target is inside
     //    its limb's envelope. A Y translation on the root bone moves all four
     //    hips by exactly that much, so one pass is exact, not iterative.
@@ -654,6 +684,7 @@ export class FoxBrain {
       if (w < 0.5) continue;
       drop = Math.max(drop, f.limb.requiredDrop(f._A, f.limb.Ltot * REACH_MAX));
     }
+    drop = Math.min(drop, MAX_REACH_DROP);
     this.reachDrop = drop;
     if (drop > 1e-6) {
       this.rootBone.position.y -= drop;

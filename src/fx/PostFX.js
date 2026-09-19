@@ -39,10 +39,10 @@ import { makeGrade, makeDebugBlit } from './Grade.js';
    is overridable through ctx.postfx. The feature GATES all come from
    ctx.quality.get(): ao, bloom, dof, godRays, taa, smaa. */
 const TUNE = {
-  low:    { slices: 1, steps: 3, mips: 5, raySamples: 8,  dofTaps: 16, dofNearTaps: 12 },
-  medium: { slices: 2, steps: 3, mips: 6, raySamples: 10, dofTaps: 28, dofNearTaps: 18 },
-  high:   { slices: 2, steps: 5, mips: 7, raySamples: 12, dofTaps: 40, dofNearTaps: 24 },
-  ultra:  { slices: 3, steps: 6, mips: 7, raySamples: 14, dofTaps: 56, dofNearTaps: 32 },
+  low:    { slices: 1, steps: 3, mips: 5, raySamples: 8,  dofTaps: 14, dofNearTaps: 10 },
+  medium: { slices: 2, steps: 3, mips: 6, raySamples: 10, dofTaps: 24, dofNearTaps: 14 },
+  high:   { slices: 2, steps: 4, mips: 7, raySamples: 12, dofTaps: 32, dofNearTaps: 18 },
+  ultra:  { slices: 3, steps: 6, mips: 7, raySamples: 14, dofTaps: 48, dofNearTaps: 28 },
 };
 
 function defaults() {
