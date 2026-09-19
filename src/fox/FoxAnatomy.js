@@ -113,9 +113,9 @@ export const LANDMARKS = {
   tail_tip: [0, 0.0370, -0.3740],
 
   shoulderR: [0.0430, 0.2330, 0.0590],
-  upperArmR: [0.0475, 0.1830, 0.0760],
-  lowerArmR: [0.0490, 0.1180, 0.0555],
-  wristR: [0.0470, 0.0470, 0.0700],
+  upperArmR: [0.0478, 0.1841, 0.0843],
+  lowerArmR: [0.0492, 0.1328, 0.0338],
+  wristR: [0.0474, 0.0581, 0.0562],
   pawR: [0.0455, 0.0205, 0.0750],
   pawR_tip: [0.0452, 0.0110, 0.1120],
 
@@ -414,22 +414,22 @@ export function buildField() {
   // -------------------------------------------------------------- forelimb ---
   // Scapula reads as a flat, fore-aft elongated bulge lying on the ribs.
   f.addMirrored({
-    name: 'scapulaR', a: [0.0420, 0.2225, 0.0570], b: [0.0480, 0.1860, 0.0745],
-    ra: 0.0228, rb: 0.0252, squash: [0.62, 1.0, 1.34], k: 0.016, ...furOf(R.shoulder),
+    name: 'scapulaR', a: [0.0428, 0.2288, 0.0612], b: [0.0478, 0.1852, 0.0836],
+    ra: 0.0232, rb: 0.0256, squash: [0.64, 1.0, 1.26], k: 0.016, ...furOf(R.shoulder),
     flowDir: [0.10, -0.45, -0.90], flowRadial: 0.25, tint: TINT_FUR,
   });
   f.addMirrored({
-    name: 'humerusR', a: [0.0475, 0.1860, 0.0750], b: [0.0490, 0.1210, 0.0570],
+    name: 'humerusR', a: [0.0478, 0.1850, 0.0830], b: [0.0492, 0.1355, 0.0355],
     ra: 0.0252, rb: 0.0190, squash: [0.88, 1.0, 1.0], k: 0.013, ...furOf(R.legFrontUpper),
     flowDir: [0, -1, -0.10], flowRadial: 0.35, tint: TINT_FUR,
   });
   f.addMirrored({
-    name: 'radiusR', a: [0.0490, 0.1225, 0.0570], b: [0.0474, 0.0505, 0.0695],
+    name: 'radiusR', a: [0.0492, 0.1340, 0.0345], b: [0.0475, 0.0620, 0.0545],
     ra: 0.0198, rb: 0.0150, squash: [0.92, 1.0, 1.0], k: 0.010, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.05], flowRadial: 0.40, tint: TINT_FUR,
   });
   f.addMirrored({
-    name: 'carpusR', a: [0.0474, 0.0495, 0.0695], b: [0.0458, 0.0235, 0.0745],
+    name: 'carpusR', a: [0.0474, 0.0605, 0.0552], b: [0.0458, 0.0250, 0.0730],
     ra: 0.0152, rb: 0.0168, squash: [1.0, 1.0, 0.92], k: 0.009, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.12], flowRadial: 0.40, tint: TINT_FUR,
   });
