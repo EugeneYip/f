@@ -561,7 +561,11 @@ record('[unvalidated] fur covers camera-facing surfaces', idt && idt.meanHF >= 1
 for (const [pose, c] of Object.entries(results.nosePoses ?? {})) {
   record(`nose stays dark at ${pose}`, c && c.r < 95,
     `${hex(c)} vs spec (23,26,32) — sampled r=${c?.rad ?? '?'}px ` +
-    `in a ${c?.widthPx ?? '?'}px feature`, pose === 'portrait' ? 'error' : 'warn');
+    `in a ${c?.widthPx ?? '?'}px feature`,
+    // Was a warning at distance while we believed the coat was occluding it.
+    // The raw render is now measured EXACTLY on spec at hero (23,26,32) and
+    // the post chain is what breaks it, so this is a real regression gate.
+    'error');
 }
 
 // Aurora structure. Restraint achieved by fading it to nothing also passes a
