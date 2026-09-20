@@ -25,7 +25,7 @@
  */
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -33,9 +33,36 @@ const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };
 const OUT = flag('--json', 'shots/spec/spec.json');
 
+/**
+ * Fingerprint the source tree.
+ *
+ * Several agents edit this checkout concurrently. A save landing mid-run means
+ * the numbers at the end of a run describe different code from the numbers at
+ * the start -- and repeated runs are not comparable at all. That has now cost
+ * me, a critic and two agents real time, each of us reading a moving target as
+ * nondeterminism. Cheap to detect, so detect it.
+ */
+async function fingerprint(dir) {
+  let h = 0;
+  const walk = async (d) => {
+    for (const e of await readdir(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { await walk(full); continue; }
+      if (!/\.(js|glsl|mjs)$/.test(e.name)) continue;
+      const st = await stat(full);
+      const key = `${full}:${st.size}:${st.mtimeMs}`;
+      for (let i = 0; i < key.length; i++) h = (Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0);
+    }
+  };
+  await walk(dir);
+  return h.toString(16);
+}
+
 const checks = [];
 const record = (name, ok, detail, severity = 'error') =>
   checks.push({ name, ok: !!ok, detail, severity });
+
+const srcBefore = await fingerprint(path.join(ROOT, 'src'));
 
 const server = await createServer({
   root: ROOT, logLevel: 'error',
@@ -610,6 +637,13 @@ const sr = results.silhouetteRamp;
 record('[legacy, unreliable] whole-frame silhouette ramp', sr && sr.median >= 3,
   sr ? `median transition ${sr.median}px over ${sr.n} columns (min ${sr.min}, max ${sr.max})`
      : 'could not locate the animal against the sky');
+
+const srcAfter = await fingerprint(path.join(ROOT, 'src'));
+if (srcAfter !== srcBefore) {
+  record('source tree stable during the run', false,
+    `src/ changed while measuring (${srcBefore} -> ${srcAfter}). Another agent is ` +
+    'editing; these numbers describe two different builds and are not comparable.');
+}
 
 await mkdir(path.resolve(ROOT, path.dirname(OUT)), { recursive: true });
 await writeFile(path.resolve(ROOT, OUT), JSON.stringify({ checks, results }, null, 2));
