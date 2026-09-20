@@ -42,8 +42,11 @@ import { clamp, saturate, lerp, rng, gauss, TAU, spring } from '../util/math.js'
 // order a real mystacial pad is arranged in and the order length varies along.
 const MYS_ROWS = 5;
 const MYS_COLS = 5;
-const MYS_BACK = [0.0030, 0.0175];   // distance caudal of the nose anchor
-const MYS_AZ = [0.62, -0.52];        // azimuth about the muzzle axis, dorsal +
+const MYS_BACK = [0.0028, 0.0140];   // distance caudal of the nose anchor
+// Dorsal limit pulled well down: at +0.62 rad the top row climbed off the
+// muzzle pad and onto the brow, which is REVIEW-2 blocker 7's "whiskers grow
+// from the forehead". A mystacial pad sits on the side of the muzzle.
+const MYS_AZ = [0.30, -0.56];        // azimuth about the muzzle axis, dorsal +
 // §4b wants them "well past the cheek line", which on this skull is ~40 mm —
 // not the 82 mm that rendered as a starburst reaching past the whole head.
 const MYS_LEN = [0.021, 0.054];      // rostro-ventral shortest, caudo-dorsal longest
@@ -143,6 +146,47 @@ export class Whiskers {
     const strands = [];
     const tmp = new THREE.Vector3();
 
+    // --- eyeball exclusion volumes, in field space ----------------------
+    const eyeBalls = [];
+    for (const k of ['L', 'R']) {
+      const c = fox.eyes?.[k]?.centre;
+      if (c) eyeBalls.push(new THREE.Vector3().fromArray(c));
+    }
+    const eyeR = (ctx.eyes?.eyes?.[0]?.R ?? 0.0110) + 0.0022;   // globe + lashes
+    // Optical axes, so we can also keep the eye's LINE OF SIGHT clear.
+    const eyeAxis = [];
+    for (const k of ['L', 'R']) {
+      const lk = fox.eyes?.[k]?.look;
+      if (lk) eyeAxis.push(new THREE.Vector3().fromArray(lk).normalize());
+    }
+    const SIGHT_R = eyeR * 1.15;      // aperture cone radius
+    const SIGHT_D = 0.038;            // how far in front of the eye to keep clear
+    const probe = new THREE.Vector3();
+    const rel = new THREE.Vector3();
+    const eyeGuard = (root, dir, curve, len) => {
+      if (!eyeBalls.length) return false;
+      for (let i = 0; i <= 12; i++) {
+        const t = i / 12;
+        probe.copy(root).addScaledVector(dir, len * t).addScaledVector(curve, t * t);
+        for (let e = 0; e < eyeBalls.length; e++) {
+          // (a) never enter the globe itself
+          if (probe.distanceTo(eyeBalls[e]) < eyeR) return true;
+          // (b) never cross the eye's line of sight close in. Clearing the
+          // globe in 3D is not sufficient: at `macro_eye` the camera looks
+          // straight down the optical axis from 0.13 m, so a strand that
+          // misses the eyeball by a few millimetres still projects straight
+          // across the iris. This is the one the critic could see.
+          const ax = eyeAxis[e];
+          if (!ax) continue;
+          rel.subVectors(probe, eyeBalls[e]);
+          const along = rel.dot(ax);
+          if (along > 0 && along < SIGHT_D &&
+              rel.addScaledVector(ax, -along).length() < SIGHT_R) return true;
+        }
+      }
+      return false;
+    };
+
     /** Drop a follicle: seed outside the skin, march in, keep the hit. */
     const place = (seed, outDir, len, spread, kind, jitter, droop = 1) => {
       if (!f?.raycast) return;
@@ -183,13 +227,25 @@ export class Whiskers {
       // which is both correct and stops them sagging across the eye.
       const cv = back.clone().multiplyScalar(0.46 + 0.28 * rand())
         .addScaledVector(U, -(0.24 + 0.26 * rand()) * droop);
-      const cvMag = cv.length() * len;
-      const curve = cv.transformDirection(rotToBone).multiplyScalar(cvMag);
+      const curveField = cv.clone().normalize().multiplyScalar(cv.length() * len);
+
+      // --- never let a whisker cross the cornea -------------------------
+      // Sample the finished arc and drop it if it enters either eyeball.
+      // Aiming the rows correctly is not enough on its own: the muzzle and the
+      // eye both move with the skull, and a row that clears the globe today
+      // will not after the next rework. This is a hard geometric guarantee,
+      // and it costs a couple of the 66 strands.
+      //
+      // Tested in FIELD space, where root/dir/curve all still live — the push
+      // below converts them to bone space, and mixing the two frames here
+      // would test a strand that does not exist.
+      if (eyeGuard(root, dir, curveField, len)) return;
 
       strands.push({
         root: root.clone().applyMatrix4(inv),
-        dir: dir.transformDirection(rotToBone).normalize(),
-        curve,
+        dir: dir.clone().transformDirection(rotToBone).normalize(),
+        curve: curveField.clone().transformDirection(rotToBone)
+          .multiplyScalar(curveField.length()),
         len,
         kind,
         phase: rand() * TAU,
@@ -251,11 +307,11 @@ export class Whiskers {
           .addScaledVector(U, 0.0055)
           .addScaledVector(F, lerp(0.010, 0.000, fi))
           .addScaledVector(R, sgn * lerp(-0.001, 0.006, fi));
-        const out = U.clone().multiplyScalar(0.86)
-          .addScaledVector(R, sgn * 0.46)
-          .addScaledVector(F, 0.20);
+        const out = U.clone().multiplyScalar(0.94)
+          .addScaledVector(R, sgn * 0.40)
+          .addScaledVector(F, 0.10);
         place(seed, out, lerp(BROW_LEN[0], BROW_LEN[1], 1 - fi) * (0.85 + 0.3 * rand()),
-          0.30, 'brow', { x: sgn * gauss(rand, 0, 0.05), y: gauss(rand, 0.22, 0.05) }, -0.55);
+          0.34, 'brow', { x: sgn * gauss(rand, 0, 0.05), y: gauss(rand, 0.34, 0.05) }, -0.85);
       }
     }
     return strands;

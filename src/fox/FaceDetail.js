@@ -39,7 +39,8 @@ const NOSTRIL_DEPTH = 0.0036;
 const PHILTRUM_DEPTH = 0.0016;
 
 const LIP_LEN = 0.052;      // how far back along the jaw the mouth line runs
-const LIP_HALF = 0.00085;   // half-height of the margin strip
+const LIP_HALF = 0.00120;   // half-height of the seam's lips
+const LIP_DEPTH = 0.00075;  // how far the seam itself is recessed
 
 /**
  * Shared GLSL. Prefixed `fd` for the same reason Eyes.js prefixes `fe`: these
@@ -473,7 +474,7 @@ export class FaceDetail {
     const fox = ctx.fox;
     const anchor = fox.anchors.mouth;
     const f = fox.field;
-    if (!anchor) return;
+    if (!anchor || !f?.raycast) return;
 
     const bone = anchor.parent;
     const bones = fox.skeleton?.bones;
@@ -481,56 +482,78 @@ export class FaceDetail {
     if (bi < 0 || !fox.skeleton.boneInverses?.[bi]) return;
     const inv = fox.skeleton.boneInverses[bi];
     const bind = new THREE.Matrix4().copy(inv).invert();
-    const rotToBone = new THREE.Matrix4().extractRotation(inv);
-
     const start = anchor.position.clone().applyMatrix4(bind);   // field space
-    const N = 26;
+
+    const N = 30;
     const pos = [], idx = [];
     const tmp = new THREE.Vector3();
+    const nrm = [0, 0, 0];
     let wrote = 0;
 
     for (let side = 0; side < 2; side++) {
       const sx = side === 0 ? -1 : 1;
-      const ring = [];
+
+      // --- walk the mouth line and snap it onto the skin ------------------
+      const pts = [];
       for (let i = 0; i <= N; i++) {
         const t = i / N;
-        // Sweep back and slightly out along the jaw, dropping a little.
         const x = start.x + sx * LIP_LEN * 0.42 * Math.sin(t * 1.35);
         const y = start.y - LIP_LEN * 0.10 * t * t;
         const z = start.z - LIP_LEN * t;
-        // Pull onto the skin: march inward from outside the muzzle.
-        const dir = [sx * 0.55, -0.35, 0.0];
-        const dl = Math.hypot(dir[0], dir[1], dir[2]);
-        const d = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
+        const dl = Math.hypot(sx * 0.55, -0.35);
+        const d = [sx * 0.55 / dl, -0.35 / dl, 0];
         const ox = x + d[0] * 0.05, oy = y + d[1] * 0.05, oz = z + d[2] * 0.05;
-        const hit = f?.raycast ? f.raycast(ox, oy, oz, -d[0], -d[1], -d[2], 0.10) : -1;
-        let px = x, py = y, pz = z;
-        if (hit > 0) {
-          px = ox - d[0] * hit; py = oy - d[1] * hit; pz = oz - d[2] * hit;
-          // Sit a hair proud so we are never inside the skin.
-          px -= d[0] * 0.0004; py -= d[1] * 0.0004; pz -= d[2] * 0.0004;
-        }
-        ring.push([px, py, pz]);
+        const hit = f.raycast(ox, oy, oz, -d[0], -d[1], -d[2], 0.10);
+        pts.push(hit > 0
+          ? new THREE.Vector3(ox - d[0] * hit, oy - d[1] * hit, oz - d[2] * hit)
+          : new THREE.Vector3(x, y, z));
       }
+
+      // --- build a GROOVE, not a stroke ----------------------------------
+      // Three rows: both lips sit ON the skin and the seam between them is
+      // pushed IN. A flat dark ribbon laid on the surface reads as a pen
+      // stroke however dark it is (REVIEW-2 blocker 6) because it has no
+      // curvature of its own and so never catches a highlight or an occlusion
+      // edge. A real recess does both, and it is what makes the mouth read as
+      // a seam between lip and cheek instead of a drawn line.
       const base = wrote;
       for (let i = 0; i <= N; i++) {
-        const p = ring[i];
-        // Taper the strip away toward the commissure. A constant-width black
-        // ribbon ending on a square cut reads as a drawn-on hook, not as a
-        // lip margin; §4b only asks for "subtle darker skin at the lip".
         const t = i / N;
-        const ss = clamp((t - 0.45) / 0.55, 0, 1);
-        const hh = LIP_HALF * (1 - 0.78 * ss * ss * (3 - 2 * ss));
-        for (const s of [-1, 1]) {
-          tmp.set(p[0], p[1] + s * hh, p[2]).applyMatrix4(inv);
-          pos.push(tmp.x, tmp.y, tmp.z);
-          wrote++;
-        }
+        const p = pts[i];
+        // Tangent along the seam, surface normal from the SDF, and the
+        // in-surface perpendicular: the exact frame a groove needs.
+        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(N, i + 1)];
+        const tan = new THREE.Vector3().subVectors(b, a);
+        if (tan.lengthSq() < 1e-12) tan.set(0, 0, -1);
+        tan.normalize();
+        f.normal(p.x, p.y, p.z, 3e-4, nrm);
+        const nv = new THREE.Vector3().fromArray(nrm);
+        if (nv.lengthSq() < 1e-10) nv.set(0, 1, 0);
+        nv.normalize();
+        const bin = new THREE.Vector3().crossVectors(tan, nv).normalize();
+
+        // Taper to NOTHING at the commissure. The old strip stopped at 22% of
+        // its width, which is what read as a "pen-cap" stopping mid-cheek.
+        const fade = Math.sin(Math.PI * Math.min(1, Math.max(0, t * 1.04))) ** 0.75;
+        const hh = LIP_HALF * (0.35 + 0.65 * fade);
+        const dep = LIP_DEPTH * fade;
+
+        tmp.copy(p).addScaledVector(bin, hh).addScaledVector(nv, 0.0002).applyMatrix4(inv);
+        pos.push(tmp.x, tmp.y, tmp.z);
+        tmp.copy(p).addScaledVector(nv, -dep).applyMatrix4(inv);
+        pos.push(tmp.x, tmp.y, tmp.z);
+        tmp.copy(p).addScaledVector(bin, -hh).addScaledVector(nv, 0.0002).applyMatrix4(inv);
+        pos.push(tmp.x, tmp.y, tmp.z);
+        wrote += 3;
       }
       for (let i = 0; i < N; i++) {
-        const a = base + i * 2, b = a + 1, c = a + 2, e = a + 3;
-        if (side === 0) idx.push(a, b, c, b, e, c);
-        else idx.push(a, c, b, b, c, e);
+        const a = base + i * 3;
+        const b = a + 3;
+        for (let k = 0; k < 2; k++) {
+          const p0 = a + k, p1 = a + k + 1, p2 = b + k, p3 = b + k + 1;
+          if (side === 0) idx.push(p0, p2, p1, p1, p2, p3);
+          else idx.push(p0, p1, p2, p1, p3, p2);
+        }
       }
     }
     if (!pos.length) return;
@@ -542,19 +565,18 @@ export class FaceDetail {
 
     const m = new THREE.MeshPhysicalMaterial({
       name: 'foxLipLine',
-      color: 0x1d181a,
-      roughness: 0.48,
+      color: 0x241d1f,
+      roughness: 0.40,
       metalness: 0.0,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.20,
+      // §4b: "subtle darker skin at the lip margin" — damp, not wet.
+      clearcoat: 0.55,
+      clearcoatRoughness: 0.28,
       side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
     });
     const mesh = new THREE.Mesh(g, m);
     mesh.name = 'foxLipLine';
     mesh.castShadow = false;
+    mesh.receiveShadow = true;
     bone.add(mesh);
     this.parts.push(mesh);
     this.lips = mesh;
@@ -570,7 +592,7 @@ export class FaceDetail {
     const fox = ctx.fox;
     const f = fox.field;
     if (!f?.raycast) return;
-    const PROUD = 0.00035;      // how far the shell floats off the inner skin
+    const PROUD = 0.00020;      // how far the shell floats off the inner skin
 
     for (const side of ['L', 'R']) {
       const b1 = fox.bone?.(`ear${side}01`);
@@ -684,9 +706,15 @@ export class FaceDetail {
       color: 0xffffff,
       roughness: 0.78,
       metalness: 0.0,
-      side: THREE.DoubleSide,
+      // An OPAQUE shell draws its own silhouette, and at a grazing angle that
+      // edge reads as a hard plate laid over the ear — which is exactly what
+      // the far ear was doing. As a soft overlay whose alpha falls to zero at
+      // its boundary it cannot draw an edge at any angle, and it composites
+      // over whatever the fur agent puts on the pinna instead of replacing it.
+      side: THREE.FrontSide,
+      transparent: true,
+      depthWrite: false,
       envMapIntensity: 0.8,
-      transmission: 0.0,
     });
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.u);
@@ -699,22 +727,31 @@ export class FaceDetail {
         FD_UNIFORMS + HASH + SIMPLEX3 + UTIL + FD_COMMON +
         sh.fragmentShader
           .replace('#include <map_fragment>', /* glsl */ `
-  float fdRr = length(vEarUv);
+  // vEarUv.x runs across the pinna (-1..1), vEarUv.y from base (-1) to tip.
+  // The bowl is deepest at the BASE and opens toward the tip, so the shading
+  // runs along the ear. Keying it to length(uv) instead treated the pinna as
+  // a disc and put an elliptical dark blob in the middle of a long triangle,
+  // which is the "dark wedge" the far ear was showing.
+  float fdDeep = 1.0 - smoothstep(-0.55, 0.55, vEarUv.y);
+  float fdEdge = 1.0 - smoothstep(0.55, 0.96, abs(vEarUv.x));
+
   // Fine hair running up out of the concha. The pinna interior is furred, not
   // bare skin, so the hair is what should dominate the read.
   float fdHair = snoise(vec3(vEarUv.x * 40.0, vEarUv.y * 9.0, 2.0)) * 0.5 + 0.5;
   float fdHair2 = snoise(vec3(vEarUv.x * 96.0, vEarUv.y * 21.0, 7.0)) * 0.5 + 0.5;
-  // Faint warmth only in the bottom of the bowl; white fur everywhere else.
-  vec3 fdCol = mix(uEarSkin, uEarRim, smoothstep(0.10, 0.62, fdRr));
+
+  vec3 fdCol = mix(uEarRim, uEarSkin, fdDeep * 0.55);
   fdCol *= mix(0.88, 1.08, fdHair * 0.65 + fdHair2 * 0.35);
-  // Depth without saturation. The bowl of the ear is in shade, and rubric C
-  // is explicit that white fur in shade goes BLUE, not merely darker — so the
-  // interior reads as a real furred cup rather than a flat cutout, while the
+  // Depth without saturation: rubric C is explicit that white fur in shade
+  // goes BLUE, not merely darker, so the bowl reads as a furred cup while the
   // only warm value on the animal stays confined to transmitted light.
-  float fdDeep = 1.0 - smoothstep(0.0, 0.80, fdRr);
-  fdCol = mix(fdCol, fdCol * vec3(0.70, 0.79, 0.96), fdDeep * 0.88);
-  fdCol *= mix(0.50, 1.0, smoothstep(0.0, 0.82, fdRr));
+  fdCol = mix(fdCol, fdCol * vec3(0.70, 0.79, 0.96), fdDeep * 0.85);
+  fdCol *= mix(1.0, 0.62, fdDeep);
   diffuseColor.rgb = fdCol;
+  // Fade to nothing at the rim and at the tip so the shell never draws a
+  // boundary of its own.
+  diffuseColor.a = fdEdge * (0.35 + 0.65 * fdDeep) *
+    smoothstep(1.0, 0.72, vEarUv.y) * smoothstep(-1.0, -0.78, vEarUv.y);
 `)
           .replace('#include <lights_fragment_end>', /* glsl */ `
 #include <lights_fragment_end>
@@ -722,7 +759,7 @@ export class FaceDetail {
   // through its edge. Strongest where the sheet is thinnest (the rim) and
   // where we are looking toward the sun.
   float fdBack = fdSat(dot(-vEarWN, normalize(uSunL)));
-  float fdThin = smoothstep(0.30, 1.0, length(vEarUv));
+  float fdThin = smoothstep(0.30, 1.0, abs(vEarUv.x));
   // Transmitted light is the one place a warm tint is physically right: it
   // has passed through tissue. Keep it dim so it only shows when genuinely
   // backlit, and never tints the ear in ambient.
