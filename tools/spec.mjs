@@ -101,10 +101,21 @@ const results = await page.evaluate(async () => {
     return { x: (v.x * 0.5 + 0.5) * cv.width, y: (-v.y * 0.5 + 0.5) * cv.height };
   }
 
-  function renderPose(pose, post = true) {
+  /**
+   * @param settle seconds of simulation before rendering. MUST be 0 for the
+   *   second arm of an A/B: settling advances the sim, so the two arms end up
+   *   0.3 s apart in animation and you are comparing different scenes. My nose
+   *   A/B was confounded exactly this way -- it reported a 102 -> 61 "erosion"
+   *   where a same-state comparison shows 104 -> 0 occlusion.
+   * @param frames TAA accumulation. 18 is enough for large features; a small
+   *   dark feature against a bright surround is still converging at 18 and
+   *   settles by ~36 (hero nose: 133 at 18 frames, 43 at 36).
+   */
+  function renderPose(pose, post = true, settle = 0.3, frames = 36) {
     if (ctx.postfx) ctx.postfx.enabled = post;
-    D.setPose(pose); D.settle(0.3);
-    for (let i = 0; i < 18; i++) D.render();
+    D.setPose(pose);
+    if (settle > 0) D.settle(settle);
+    for (let i = 0; i < frames; i++) D.render();
     return grab();
   }
 
@@ -275,13 +286,14 @@ const results = await page.evaluate(async () => {
     if (!root) return null;
     const was = root.visible;
 
+    // Settle ONCE, then render both arms from the identical sim state.
     root.visible = false;
-    renderPose(pose, post);
+    renderPose(pose, post, 0.3);
     const g = grab();
     const bg = c2.getImageData(0, 0, g.w, g.h).data;
 
     root.visible = true;
-    renderPose(pose, post);
+    renderPose(pose, post, 0);          // no settle: same frame, fox added
     grab();
     const fg = c2.getImageData(0, 0, g.w, g.h).data;
     root.visible = was;
