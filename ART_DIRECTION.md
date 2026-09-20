@@ -317,3 +317,62 @@ So: a front-on description, as precise as I can make it from the reference.
 If a front-on render shows a distinct skull width and a separate, wider fur
 width — i.e. you can see where the bone stops and the coat starts — it is
 wrong. On the real animal those read as **one continuous mass**.
+
+## 4f. The bulk is in the wrong place — it belongs in the COAT, not the BODY
+
+Three rounds of head work have chased "chunky" as a *shape* problem. Measuring
+the rig says it is a *distribution* problem, and it explains the body, the
+head, the visible skin and the hard silhouette all at once.
+
+Measured, current rig, mid-torso:
+
+| | ours | real winter fox |
+|---|---|---|
+| body radius (skin, no fur) | **80 mm** | ~60 mm |
+| coat depth, flank | 48 mm | 50–70 mm |
+| coat as share of silhouette radius | **37 %** | **~48 %** |
+| forehead coat | **3.8 mm** | 15–25 mm |
+| skull coat | **7.5 mm** | 20–30 mm |
+| jaw / chin coat | **4.8 mm** | 10–15 mm |
+
+We built a fat animal and put a thin coat on it. The real animal is a slight
+animal — the torso of a large domestic cat — inside an enormous coat. Every
+symptom follows from getting that backwards:
+
+- **"Bulky, not bouncy."** Solid geometry reads as *mass*: heavy, inert,
+  weight-bearing. Deep fur reads as *volume*: light, compressible, and it
+  moves a beat behind the body. Same silhouette, opposite feeling. You cannot
+  get bounce out of a shape whose bulk is bone.
+- **Visible skin, visible interior.** A 3.8 mm coat on the forehead is a
+  shaved head. There is nothing there to hide the skin surface, so the skin
+  renders, and its mesh silhouette is a hard edge with nothing to break it.
+- **The chunky chin, jaw and brow.** Those regions carry 4–5 mm of coat over
+  a skin surface that was then *sculpted* to look furry. A bare surface
+  sculpted into a fur shape is a chunky surface. The fix is not a softer
+  sculpt — it is to make the skin there *slighter* and let 10–15 mm of actual
+  coat carry the volume.
+- **Why §4e's test keeps failing.** "You can see where the bone stops and the
+  coat starts" is inevitable when the coat is 5 % of the head's radius. The
+  test was right; the coat was never deep enough for anything to pass it.
+
+### The standard
+
+1. **Coat carries 45–50 % of the silhouette radius on the trunk**, and never
+   less than 30 % anywhere except the muzzle, nose, paw pads and lower legs.
+2. **The muzzle stays short-coated (3–5 mm) and the nose bare.** This is not
+   an exception to the rule, it is the point of it: the contrast between a
+   deep skull coat and a short muzzle coat is what makes the face read as
+   *pointy*. Deepening the muzzle would give back the bear.
+3. **No bare skin is visible anywhere on the animal** at any framing, except
+   the rhinarium, the eyes and the paw pads. If a render shows a smooth
+   surface with a geometric silhouette, that is a failure regardless of what
+   any other metric says.
+4. **Slimming the body must not shrink the animal.** Total silhouette stays
+   where it is; radius moves from geometry into coat. If the fox gets visibly
+   smaller, the change was done wrong.
+
+### The test
+Render `frontal`, `chin` and `profile`. Trace the outer contour. If any
+continuous run of it longer than ~2 % of the contour is a smooth curve with a
+hard edge rather than a broken, hairy one, it fails. The silhouette of a
+winter arctic fox is hair, everywhere, without exception.

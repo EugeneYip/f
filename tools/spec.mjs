@@ -118,6 +118,14 @@ const results = await page.evaluate(async () => {
     return { r: R / n, g: G / n, b: B / n, n, clipFrac: clipped / n, minL };
   }
 
+  /** World position of a rig anchor, or null. */
+  function worldOf(name) {
+    const a = ctx.fox?.anchors?.[name];
+    if (!a) return null;
+    a.updateWorldMatrix(true, false);
+    return new THREE.Vector3().setFromMatrixPosition(a.matrixWorld);
+  }
+
   /** Project a rig anchor to backbuffer pixels. */
   function project(name) {
     const a = ctx.fox?.anchors?.[name];
@@ -416,38 +424,68 @@ const results = await page.evaluate(async () => {
       // framing), so the "brow" reference probe sat 0.64 eye-radii from centre
       // -- inside the eye. Every number that check produced was eyelid
       // contrast, not fur.
-      let R = 0;
-      for (let rr = 6; rr < Math.min(g.w, g.h) / 2; rr += 2) {
-        let bright = 0, taken = 0;
-        for (let a = 0; a < 12; a++) {
-          const th = a * Math.PI / 6;
-          const x = Math.round(eye.x + Math.cos(th) * rr), y = Math.round(eye.y + Math.sin(th) * rr);
-          if (x < 1 || y < 1 || x >= g.w - 1 || y >= g.h - 1) continue;
-          taken++;
-          if (L(x, y) > 150) bright++;
-        }
-        if (taken >= 8 && bright >= taken * 0.75) { R = rr; break; }
-      }
-      out.eyeRadiusPx = R;
-      // Guard: an implausible radius means the eye is clipped or off-frame,
-      // and every downstream number would be junk. Say so rather than measure.
-      if (R < 20 || R > Math.min(g.w, g.h) * 0.45) { out.furScale = null; out.eyeRadiusBad = R; }
+      // Place the probes with PROJECTED GEOMETRY, not a luminance threshold.
+      //
+      // Two estimators have now failed here. A 75%-bright ring quorum marched
+      // past the eye and reported 272 px, putting the brow probe off the top
+      // of the frame. Replacing the quorum with a median then returned 0 on
+      // two runs in three -- and tracing what the march actually saw explained
+      // both at once: the median ring luminance is FLAT at 143-150 from 6 px
+      // to 166 px, because the eye ANCHOR is the eyeball's centre while the
+      // visible eye sits ~110 px away on the cornea. Every ring was sampling
+      // pale coat. With the 150 threshold inside the noise, "finding the
+      // radius" was a coin flip, and which side it landed on decided whether
+      // the gate ran at all.
+      //
+      // The camera knows the pixel scale exactly, so ask it. Probe offsets and
+      // box sizes are then authored in MILLIMETRES of fox, which is what they
+      // always meant: 14 mm from the eye is on the muzzle and the forehead of
+      // a real animal, clear of a globe that Eyes.js clamps to <= 20 mm
+      // diameter, at every framing and every head angle.
+      const eyeW = worldOf('eyeR');
+      const camW = ctx.camera.getWorldPosition(new THREE.Vector3());
+      const dist = eyeW ? camW.distanceTo(eyeW) : 0;
+      const pxPerM = dist > 1e-4
+        ? g.h / (2 * dist * Math.tan(ctx.camera.fov * Math.PI / 360))
+        : 0;
+      out.eyeProbe = { x: Math.round(eye.x), y: Math.round(eye.y), w: g.w, h: g.h,
+                       distM: +dist.toFixed(4), pxPerM: Math.round(pxPerM) };
+      if (!(pxPerM > 0)) { out.furScale = null; out.eyeRadiusBad = 'no pixel scale'; }
       else {
-      // Both probes at 2.0x the MEASURED radius, which clears the lid margin.
+      const OFFSET_M = 0.014, BOX_HALF_M = 0.003;
+      out.eyeRadiusPx = Math.round(0.010 * pxPerM);   // reported for context only
       const dirTo = (p) => {
         const dx = p.x - eye.x, dy = p.y - eye.y, m = Math.hypot(dx, dy) || 1;
         return { x: dx / m, y: dy / m };
       };
       const muzzleDir = nose ? dirTo(nose) : { x: -1, y: 0.3 };
-      const probes = {
-        muzzle: { x: eye.x + muzzleDir.x * R * 2.0, y: eye.y + muzzleDir.y * R * 2.0 },
-        brow: { x: eye.x, y: eye.y - R * 2.0 },
-      };
-      const box = Math.max(10, Math.round(R * 0.30));
+      // The brow reference runs from the eye toward the ear tip: that is the
+      // forehead, along the skull, whichever way the head is turned. Screen-up
+      // is only the same thing when the head happens to be level.
+      const browDir = ear ? dirTo(ear) : { x: 0, y: -1 };
+      const box = Math.min(60, Math.max(8, Math.round(BOX_HALF_M * pxPerM)));
+      const m = box + 9;                                // scaleDetail skips < 8
+      const off = OFFSET_M * pxPerM;
+      const place = (dir) => ({
+        x: Math.min(g.w - 1 - m, Math.max(m, Math.round(eye.x + dir.x * off))),
+        y: Math.min(g.h - 1 - m, Math.max(m, Math.round(eye.y + dir.y * off))),
+      });
+      const probes = { muzzle: place(muzzleDir), brow: place(browDir) };
       out.furScale = {};
       for (const [name, pt] of Object.entries(probes)) {
-        out.furScale[name] = scaleDetail(Math.round(pt.x), Math.round(pt.y), box);
+        const d = scaleDetail(pt.x, pt.y, box);
+        // A probe is only meaningful if it landed on lit coat. If it sits on
+        // the eye, in a socket shadow or off the animal entirely, the fine/
+        // coarse ratio is measuring something that is not fur -- which is the
+        // exact failure that made this check report eyelid contrast for three
+        // rounds. Record enough to tell which happened.
+        out.furScale[name] = d && {
+          ...d, x: pt.x, y: pt.y, box, meanL: boxAvg(pt.x, pt.y, box),
+          onCoat: boxAvg(pt.x, pt.y, box) > 90,
+        };
       }
+      out.furScale.frame = { w: g.w, h: g.h, eyeX: Math.round(eye.x), eyeY: Math.round(eye.y),
+                             pxPerM: Math.round(pxPerM), offsetPx: Math.round(off), box };
       }
     }
   }
@@ -791,10 +829,21 @@ if (!fs || !fs.brow || !fs.muzzle) {
   // A null probe used to make both record() calls disappear, so the report
   // came back with 22 checks instead of 24 and nobody noticed the gate had
   // silently removed itself. An unmeasurable probe is a failure, not a pass.
+  const fr = fs?.frame;
   record('fur macro probe is measurable', false,
     results.eyeRadiusBad != null
       ? `implausible eye radius ${results.eyeRadiusBad}px — eye clipped or off-frame`
-      : `probe returned no samples (eyeRadiusPx=${results.eyeRadiusPx ?? '?'})`);
+      : `probe returned no samples (eyeRadiusPx=${results.eyeRadiusPx ?? '?'}` +
+        (fr ? `, eye at ${fr.eyeX},${fr.eyeY} in ${fr.w}x${fr.h}` : '') +
+        `, muzzle=${fs?.muzzle ? 'ok' : 'null'}, brow=${fs?.brow ? 'ok' : 'null'})`);
+} else if (!fs.muzzle.onCoat || !fs.brow.onCoat) {
+  // A probe that landed on the eye, in a socket shadow, or off the animal
+  // measures something that is not fur and will happily report a number.
+  // That is precisely how this check spent three rounds grading eyelids.
+  record('fur macro probes landed on coat', false,
+    `muzzle mean luminance ${fs.muzzle.meanL.toFixed(0)} at ${fs.muzzle.x},${fs.muzzle.y}; ` +
+    `brow ${fs.brow.meanL.toFixed(0)} at ${fs.brow.x},${fs.brow.y} (want > 90 — ` +
+    `below that the probe is not on lit coat)`);
 } else {
   const ref = fs.brow.fine;
   const floor = ref * 0.35;
