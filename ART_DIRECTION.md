@@ -237,3 +237,43 @@ than no secondary motion at all.
   with the head, they do not only trail with the tail.
 - Prefer slightly stiff over slightly loose. Stiff reads as an alert animal;
   loose reads as a broken rig.
+
+## 4d. The head is chunky — soft continuous curves, not faceted planes
+
+**Client feedback, binding.** The head still does not read as a realistic
+*cute* arctic fox. Named areas: **chin, jawbone, brow bone** — and the note was
+explicitly "such as but not limited to", so treat these as symptoms of one
+underlying problem rather than three isolated fixes.
+
+Visible in `shots/head2/portrait.png`:
+
+- **A heavy angular slab below and behind the eye**, running down to the jaw.
+  In every reference photograph the cheek is a smooth rounded mass that flows
+  continuously into the ruff. Ours has a distinct planar face with an edge.
+- **A pronounced brow shelf above the eye.** Real arctic foxes have a gently
+  domed forehead; the supraorbital ridge is subtle and rounded, never a ledge.
+- **A blunt, heavy chin block.** The real chin is small and neat and tucks up
+  under the muzzle.
+- **The stop** (muzzle-to-forehead transition) is too abrupt and angular.
+
+### The underlying cause, and therefore the fix
+This reads as **primitive boundaries showing through the SDF union**. Where two
+smooth-min'd primitives meet with too small a blend radius, the join becomes a
+visible ridge or a flat facet — which is exactly what a "slab", a "shelf" and a
+"block" are.
+
+So the fix is not to shrink the chin, the jaw and the brow individually. It is
+to **increase the blend radii through the skull** so the head becomes one
+continuous surface. Judge it by silhouette *and* by shading: a chunky form
+shows as a luminance discontinuity across a curved surface even when the
+outline looks fine.
+
+### The standard
+A real arctic fox head is a sequence of **soft, continuous, convex curves**.
+There is no flat plane anywhere on it. "Cute" here is not a stylisation — it is
+what the anatomy actually looks like: rounded cranium, full cheeks, short
+tapering muzzle, no visible bone structure through the coat.
+
+**Do not trade the §4c fox wedge for this.** The muzzle must still taper to a
+defined point and the ears must still be tapering triangles. Smooth the
+*surface*, keep the *proportions*.
