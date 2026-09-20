@@ -149,7 +149,7 @@ function defaults() {
       threshold: 0.45, maskFalloff: 1.5, sunDisc: 0.25, shaftDensity: 0.045,
       blurGain: 4.0,
     },
-    taa: { clampGamma: 1.25, antiGhost: 1.0, feedbackFrames: 12 },
+    taa: { clampGamma: 1.25, clampLoosen: 1.5, antiGhost: 1.0, feedbackFrames: 12 },
     debug: 'off',   // off | ao | bloom | rays | coc | hdr | depth
   };
 }
@@ -212,6 +212,17 @@ export class PostFX {
          live but TAA is gated off, and an unresolved dither reads as a
          speckled coat. */
       get taaActive() { return self.ok && self.api?.enabled !== false && !!self.taa; },
+      /* The index of the TAA sample currently being accumulated, and its
+         sub-pixel offset in pixels.
+         Any system using a SCREEN-LOCKED stochastic/dithered alpha must
+         decorrelate it against this. A dither that is identical on every
+         accumulated sample carries no new coverage information, so the
+         resolve cannot integrate it — it just converges onto the underlying
+         mesh edge, which is why sub-pixel fur stops breaking the silhouette.
+         The AO pass in this chain offsets its own dither by this index for
+         exactly the same reason. */
+      get taaSampleIndex() { return self.taa ? self.taa.index : 0; },
+      get taaJitter() { return self.taa ? self.taa.currentJitter() : [0, 0]; },
       get near() { return self.ctx?.camera?.near ?? 0.05; },
       get far() { return self.ctx?.camera?.far ?? 900; },
       grade: c.grade,
@@ -768,6 +779,7 @@ export class PostFX {
       tier: this.ctx?.quality?.tier,
       gates: this.gates,
       taaActive: this.ok && this.api?.enabled !== false && !!this.taa,
+      taaSampleIndex: this.taa ? this.taa.index : 0,
       bloomMips: this.bloom?.mips.length ?? 0,
       taaSamples: this.taa ? this.taa.n + 1 : 0,
       focus: this._afDistance,

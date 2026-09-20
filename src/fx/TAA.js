@@ -42,6 +42,8 @@ uniform float uNear;
 uniform float uFar;
 uniform float uAlpha;          // weight of the current sample
 uniform float uClampGamma;
+uniform float uClamp;        // 0 disables clipping entirely
+uniform float uLoosen;       // widen the box where the neighbourhood is detailed
 uniform float uAntiGhost;      // 0 while the camera is static
 uniform float uUseCR;          // 0 when reprojection is the identity
 uniform float uReset;
@@ -83,8 +85,15 @@ void main() {
   // gradients — which is most of this frame — so ghosts die faster, but it
   // still contains the full edge range, so a converging average is never
   // clipped away.
-  vec3 lo = max(cmin, m1 - uClampGamma * sigma);
-  vec3 hi = min(cmax, m1 + uClampGamma * sigma);
+  /* Widen the box where the neighbourhood is ALREADY high-variance. A thin,
+     high-contrast hair against bright sky makes history and current disagree
+     in a high-frequency way, not a motion way — and an intersection of the
+     3x3 min/max with a gamma-sigma box rejects exactly that, which is how the
+     resolve was deleting the hairs the fur system draws. */
+  float detail = smoothstep(0.015, 0.12, sigma.x);
+  vec3 pad = sigma * (uLoosen * detail);
+  vec3 lo = max(cmin - pad, m1 - uClampGamma * (1.0 + uLoosen * detail) * sigma);
+  vec3 hi = min(cmax + pad, m1 + uClampGamma * (1.0 + uLoosen * detail) * sigma);
 
   // --- reprojection --------------------------------------------------------
   vec3 wp = fxWorldPos(vUv, d, uInvViewProjJ);
@@ -109,7 +118,13 @@ void main() {
     ? fxHistoryCR(tHist, prevUv, uRes, uTexel)
     : texture2D(tHist, prevUv).rgb;
 #endif
-  vec3 hist = clamp(fxRGB2YCoCg(fxCompress(fxSafe(histRGB))), lo, hi);
+  /* With a static camera and a static sim the ONLY difference between history
+     and current is the sub-pixel jitter — there is no motion, no disocclusion
+     and nothing to ghost, so clipping is provably unnecessary and actively
+     destroys the sub-pixel samples this resolve exists to integrate. The
+     convergence contract in the header demands those samples survive. */
+  vec3 histY = fxRGB2YCoCg(fxCompress(fxSafe(histRGB)));
+  vec3 hist = mix(histY, clamp(histY, lo, hi), uClamp);
   histRGB = fxUncompress(fxYCoCg2RGB(hist));
 
   float alpha = mix(1.0, uAlpha, valid);
@@ -185,6 +200,8 @@ export class TAA {
       uFar: { value: 900 },
       uAlpha: { value: 1 },
       uClampGamma: { value: 1.25 },
+      uClamp: { value: 1 },
+      uLoosen: { value: 1.5 },
       uAntiGhost: { value: 0 },
       uUseCR: { value: 1 },
       uReset: { value: 1 },
@@ -272,6 +289,8 @@ export class TAA {
     u.uFar.value = p.far;
     u.uAlpha.value = 1 / (this.n + 1);
     u.uClampGamma.value = p.cfg.clampGamma;
+    u.uClamp.value = p.static_ ? 0 : 1;
+    u.uLoosen.value = p.cfg.clampLoosen;
     u.uAntiGhost.value = p.static_ ? 0 : p.cfg.antiGhost;
     u.uUseCR.value = p.static_ ? 0 : 1;
     u.uReset.value = reset ? 1 : 0;
