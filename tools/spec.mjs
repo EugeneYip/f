@@ -138,6 +138,39 @@ const results = await page.evaluate(async () => {
    *   dark feature against a bright surround is still converging at 18 and
    *   settles by ~36 (hero nose: 133 at 18 frames, 43 at 36).
    */
+  /**
+   * Reset the simulation to an EXACT, known time.
+   *
+   * Every renderPose(..., settle) advances the sim, so a block N checks down
+   * the file ran at 2.5 + 0.3*N seconds -- and the later a check sat, the
+   * further it drifted. At macro framing 0.3 s moves the subject hundreds of
+   * pixels. Sweeping sim time 2.8 -> 5.5 on IDENTICAL fur swung one reference
+   * measurement from 0.56 to 13.34, a factor of 24, which is how I came to
+   * "validate" a threshold against three different numbers and believe all of
+   * them. Found by the fur agent.
+   */
+  const atTime = (t = 2.5) => {
+    ctx.time = 0; ctx.frame = 0; ctx.app._accum = 0;
+    D.settle(t);
+  };
+
+  /**
+   * Reset to a deterministic time AND make sure the eyes are open.
+   *
+   * Fixing the drift exposed the opposite failure: a fixed sim time can be
+   * deterministically WRONG. The fox blinks about 28 times a minute, and
+   * t = 2.5 s landed mid-blink -- so the "eye is warm" probe sampled an
+   * eyelid and read (165,179,195), i.e. blue-white skin, and failed for a
+   * reason that had nothing to do with the eye's colour. Advance in small
+   * steps until the lids are open before measuring anything ocular.
+   */
+  const atTimeEyesOpen = (t = 2.5) => {
+    atTime(t);
+    const closed = () => Math.max(ctx.fox?.blinkL ?? 0, ctx.fox?.blinkR ?? 0);
+    for (let i = 0; i < 120 && closed() > 0.08; i++) D.settle(1 / 30);
+    return { t: +ctx.time.toFixed(3), blink: +closed().toFixed(3) };
+  };
+
   function renderPose(pose, post = true, settle = 0.3, frames = 36) {
     if (ctx.postfx) ctx.postfx.enabled = post;
     D.setPose(pose);
@@ -150,6 +183,7 @@ const results = await page.evaluate(async () => {
 
   // 1. NOSE COLOUR — art bible #171a20 = (23,26,32). Cost a critic round, then
   //    a face-agent round to prove it was post, not the pad.
+  atTime();
   for (const post of [false, true]) {
     renderPose('portrait', post);
     const p = project('nose');
@@ -158,15 +192,38 @@ const results = await page.evaluate(async () => {
 
   // 2. EYE PRESENT AND WARM at macro range. macro_eye photographed an empty
   //    socket for many rounds without anyone noticing.
+  out.eyeProbeAt = atTimeEyesOpen();
   for (const post of [false, true]) {
-    renderPose('macro_eye', post);
+    renderPose('macro_eye', post, 0);
     const p = project('eyeR');
-    out[`eye_${post ? 'post' : 'raw'}`] = p ? sample(p.x, p.y, 40) : null;
+    // The anchor is the eyeball's CENTRE, but the visible iris sits on the
+    // cornea, proud of that centre toward the camera -- so at 0.13 m the
+    // projected anchor lands near the eye's edge, and a box centred there
+    // averaged iris, pupil and bright skin into (148,165,184): blue-white,
+    // failing a "is the iris warm" check for reasons unrelated to the iris.
+    // Locate the iris by its warmth instead, then sample tightly.
+    if (!p) { out[`eye_${post ? 'post' : 'raw'}`] = null; continue; }
+    let best = null;
+    for (let dy = -90; dy <= 90; dy += 6) {
+      for (let dx = -90; dx <= 90; dx += 6) {
+        const c = sample(p.x + dx, p.y + dy, 5);
+        if (!c) continue;
+        const warmth = c.r - c.b;
+        // Require it to be a midtone: the pupil is warm-neutral but black,
+        // and blown skin is bright.
+        if (c.r < 25 || c.r > 200) continue;
+        if (!best || warmth > best.warmth) best = { warmth, dx, dy };
+      }
+    }
+    out[`eye_${post ? 'post' : 'raw'}`] = best
+      ? { ...sample(p.x + best.dx, p.y + best.dy, 12), foundAt: [best.dx, best.dy] }
+      : sample(p.x, p.y, 12);
   }
 
   // 3. COAT NEUTRALITY — §4b: no warm cast, ever. The salmon cast survived
   //    several rounds because the whole-body mean hid it behind the cool
   //    shadow side, so sample the LIT flank specifically.
+  atTime();
   renderPose('profile', true);
   {
     const c = project('chest');
@@ -192,6 +249,7 @@ const results = await page.evaluate(async () => {
     for (let v = 0; v < 256; v++) { a2 += h2[v]; if (a2 >= nn * 0.001) return v; }
     return 255;
   };
+  atTime();
   renderPose('hero', false);
   out.floorRaw = floorOf();
 
@@ -223,6 +281,7 @@ const results = await page.evaluate(async () => {
   // 5. HORIZON CONTINUITY — the critic found two stacked hard horizontal
   //    steps where a horizon card butted against terrain and sky. Detectable
   //    as a large single-row luminance jump in a sky-to-ground column.
+  atTime();
   renderPose('wide', true);
   {
     const g = grab();
@@ -316,7 +375,8 @@ const results = await page.evaluate(async () => {
   //     OFF THE LID, because bare skin at the lid margin is correct and a box
   //     centred on the eye would legitimately read low. Also its suggestion.
   {
-    renderPose('macro_eye', false);
+  atTimeEyesOpen();
+    renderPose('macro_eye', false, 0);
     const g = grab();
     const img = c2.getImageData(0, 0, g.w, g.h).data;
     const L = (x, y) => {
@@ -351,24 +411,43 @@ const results = await page.evaluate(async () => {
 
     const eye = project('eyeR'), nose = project('nose'), ear = project('earTipR');
     if (eye) {
-      const R = 26;
-      const off = (a, b, t, perp = 0) => a && b
-        ? { x: a.x + (b.x - a.x) * t - (b.y - a.y) * perp,
-            y: a.y + (b.y - a.y) * t + (b.x - a.x) * perp }
-        : null;
-      const probes = {
-        // Toward the nose, nudged perpendicular so we clear the lid entirely.
-        muzzle: off(eye, nose, 0.45, 0.12),
-        // Above the eye, clear of the lid margin.
-        brow: { x: eye.x, y: eye.y - R * 2.6 },
-        // Reference: the long coat on the ruff side. earTipR does not project
-        // at this framing (it is outside the frustum at 0.13 m), so fall back
-        // to a screen-space offset toward the side where the ruff sits.
-        ruff: ear ? off(eye, ear, 0.55, 0) : { x: eye.x + R * 7.2, y: eye.y - R * 1.2 },
+      // MEASURE the eye's projected radius; do not assume it. A hardcoded 26 px
+      // under-estimated it by about 4x (it renders at 102-116 px at this
+      // framing), so the "brow" reference probe sat 0.64 eye-radii from centre
+      // -- inside the eye. Every number that check produced was eyelid
+      // contrast, not fur.
+      let R = 0;
+      for (let rr = 6; rr < Math.min(g.w, g.h) / 2; rr += 2) {
+        let bright = 0, taken = 0;
+        for (let a = 0; a < 12; a++) {
+          const th = a * Math.PI / 6;
+          const x = Math.round(eye.x + Math.cos(th) * rr), y = Math.round(eye.y + Math.sin(th) * rr);
+          if (x < 1 || y < 1 || x >= g.w - 1 || y >= g.h - 1) continue;
+          taken++;
+          if (L(x, y) > 150) bright++;
+        }
+        if (taken >= 8 && bright >= taken * 0.75) { R = rr; break; }
+      }
+      out.eyeRadiusPx = R;
+      // Guard: an implausible radius means the eye is clipped or off-frame,
+      // and every downstream number would be junk. Say so rather than measure.
+      if (R < 20 || R > Math.min(g.w, g.h) * 0.45) { out.furScale = null; out.eyeRadiusBad = R; }
+      else {
+      // Both probes at 2.0x the MEASURED radius, which clears the lid margin.
+      const dirTo = (p) => {
+        const dx = p.x - eye.x, dy = p.y - eye.y, m = Math.hypot(dx, dy) || 1;
+        return { x: dx / m, y: dy / m };
       };
+      const muzzleDir = nose ? dirTo(nose) : { x: -1, y: 0.3 };
+      const probes = {
+        muzzle: { x: eye.x + muzzleDir.x * R * 2.0, y: eye.y + muzzleDir.y * R * 2.0 },
+        brow: { x: eye.x, y: eye.y - R * 2.0 },
+      };
+      const box = Math.max(10, Math.round(R * 0.30));
       out.furScale = {};
       for (const [name, pt] of Object.entries(probes)) {
-        out.furScale[name] = pt ? scaleDetail(Math.round(pt.x), Math.round(pt.y), R) : null;
+        out.furScale[name] = scaleDetail(Math.round(pt.x), Math.round(pt.y), box);
+      }
       }
     }
   }
@@ -440,6 +519,7 @@ const results = await page.evaluate(async () => {
   //    inside the outline against the body core. Transmissive fur makes the
   //    rim brighter than the core; opaque fur makes them equal.
   {
+  atTime();
     const m = maskedFrame('silhouette', false);   // raw render: post must not flatter it
     if (m) {
       const { W, H, fg, mask } = m;
@@ -476,6 +556,7 @@ const results = await page.evaluate(async () => {
   //    with a hair fringe around its perimeter and nothing inside". Measure
   //    high-frequency variance INSIDE the mask, away from the edge.
   {
+  atTime();
     const m = maskedFrame('tail', false);
     if (m) {
       const { W, H, fg, mask } = m;
@@ -502,6 +583,7 @@ const results = await page.evaluate(async () => {
   // 9. NOSE IN EVERY POSE — spec previously sampled one framing. The nose
   //    measured correct at `portrait` and ~6.5x too bright and warm at `hero`,
   //    because fur layering over the muzzle occludes it at distance.
+  atTime();
   out.nosePoses = {};
   for (const pose of ['portrait', 'hero', 'silhouette', 'profile']) {
     renderPose(pose, true);
@@ -525,6 +607,7 @@ const results = await page.evaluate(async () => {
   // 10. PER-REGION SILHOUETTE — a whole-animal median let a good torso mask a
   //     bald head. Split the scan by height band instead.
   {
+  atTime();
     const m = maskedFrame('silhouette', true);
     if (m) {
       const { W, H, fg, bg: bgRef, mask } = m;
@@ -580,6 +663,7 @@ const results = await page.evaluate(async () => {
   //     measure the RATIO of horizontal to vertical gradient energy in the sky.
   //     Vertical filaments produce strong horizontal gradients.
   {
+  atTime();
     renderPose('aurora', false);
     const g = grab();
     const d = c2.getImageData(0, 0, g.w, Math.round(g.h * 0.45)).data;
@@ -702,8 +786,16 @@ record('[unvalidated] aurora has vertical filament structure', au && au.ratio >=
 // be better still, but earTipR does not project at 0.13 m and a screen-space
 // fallback landed off-canvas — an in-frame reference that works beats an
 // out-of-frame one that is more principled.
-const fs = results.furScale ?? {};
-if (fs.brow && fs.muzzle) {
+const fs = results.furScale;
+if (!fs || !fs.brow || !fs.muzzle) {
+  // A null probe used to make both record() calls disappear, so the report
+  // came back with 22 checks instead of 24 and nobody noticed the gate had
+  // silently removed itself. An unmeasurable probe is a failure, not a pass.
+  record('fur macro probe is measurable', false,
+    results.eyeRadiusBad != null
+      ? `implausible eye radius ${results.eyeRadiusBad}px — eye clipped or off-frame`
+      : `probe returned no samples (eyeRadiusPx=${results.eyeRadiusPx ?? '?'})`);
+} else {
   const ref = fs.brow.fine;
   const floor = ref * 0.35;
   record('fur reads as hair at macro: muzzle',
