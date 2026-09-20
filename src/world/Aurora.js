@@ -528,6 +528,7 @@ export class Aurora {
     u.uTime.value = t;
     u.uDrift.value = this._drift;
     u.uIntensity.value = this.intensity;
+    u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 2.2;
     // Folds travel along the arc and wrap over a long period.
     u.uFoldPos.value.set(
       ((t * 16.0 + 900) % 3400) - 1700,

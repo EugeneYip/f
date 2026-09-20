@@ -95,6 +95,7 @@ export class Sky {
     this.elevationDeg = REF_ELEV_DEG;
     this.azimuthDeg = -155;
     this.envMap = null;
+    this.diffuseWhite = 0.45;
     this._lutDirty = true;
     this._envDirty = true;
     this._lastSun = new THREE.Vector3();
@@ -171,6 +172,7 @@ export class Sky {
     this._buildEnvScene(ctx);
 
     this.applyPalette(ctx);
+    this._updateDiffuseWhite(ctx);
     this._renderLuts(ctx);
     this._lutDirty = false;
 
@@ -577,7 +579,23 @@ export class Sky {
 
   // -- per frame ------------------------------------------------------------
 
+  /**
+   * Radiance of a white Lambertian surface facing up under the current rig.
+   *
+   * Published so the emissive systems (breath, snow, aurora) can bound their
+   * HDR output as a MULTIPLE of it rather than against a hardcoded constant.
+   * A constant silently becomes wrong the moment anyone changes exposure or
+   * ctx.sunIntensity; this tracks it.
+   */
+  _updateDiffuseWhite(ctx) {
+    const L = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    const sunUp = Math.max(ctx.sunDirection.y, 0);
+    this.diffuseWhite = (ctx.sunIntensity * sunUp * L(ctx.sunColor)
+      + L(ctx.skyColor) + 0.5 * L(ctx.groundBounce)) / Math.PI;
+  }
+
   update(dt, ctx) {
+    this._updateDiffuseWhite(ctx);
     // ctx.sunDirty is consumed by Environment (order -100) before we run, so
     // we watch the vector itself. That also catches FoxDebug.setSun().
     if (!this._lastSun.equals(ctx.sunDirection)) {

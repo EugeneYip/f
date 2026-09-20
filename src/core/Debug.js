@@ -150,8 +150,28 @@ export class Debug {
 
       ready: this.ready,
 
-      /** Freeze the render loop; the harness drives frames by hand. */
-      pause: () => { ctx.app.stop(); this.deterministic = true; },
+      /**
+       * Freeze the render loop; the harness drives frames by hand.
+       *
+       * Also ZEROES ctx.time. Between page load and the harness calling
+       * pause(), a variable number of rAF frames run, so ctx.time after a
+       * settle(2.5) was landing anywhere in 2.6144 .. 2.681 depending on
+       * machine load. That ~70 ms spread does not move the fox's world pose
+       * (identical to 4 decimals) but it is enough to swing a WHISKER across
+       * a 12 px nose sample -- which produced a bimodal spec result, two
+       * discrete states with byte-identical values, that three of us spent
+       * rounds attributing to rendering. Found by the atmosphere agent with a
+       * six-run controlled test after disabling its own systems entirely.
+       *
+       * With this, settle(2.5) lands on exactly 2.5 every run.
+       */
+      pause: () => {
+        ctx.app.stop();
+        this.deterministic = true;
+        ctx.time = 0;
+        ctx.frame = 0;
+        ctx.app._accum = 0;
+      },
       resume: () => { this.deterministic = false; ctx.app.start(); },
 
       /** Advance the simulation deterministically (no rAF, no wall clock). */

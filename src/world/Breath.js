@@ -104,6 +104,8 @@ export class Breath {
       // wisp, never a feature. At 0.5 it was an opaque cotton ball; at 0.21
       // it still veiled the whole face in `portrait`.
       uDensity: { value: 0.05 },
+      // Multiple of ctx.sky.diffuseWhite, resolved each frame. A puff of
+      // condensation is dimmer than the snow it is drifting over.
       uMaxRadiance: { value: 0.60 },
       // Per-blob near fade. `portrait` frames the head from 0.55 m and
       // `macro_eye` from 0.13 m, where the camera is effectively INSIDE the
@@ -347,6 +349,7 @@ export class Breath {
     if (!any) return;
 
     const u = this.uniforms;
+    u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 1.2;
     u.uPuff.value = this._puffData;
     u.uPuffDir.value = this._puffDir;
     u.uWindDir.value.copy(ctx.wind).normalize();

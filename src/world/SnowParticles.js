@@ -40,16 +40,19 @@ export class SnowParticles {
       near: {
         share: 0.10, box: [8, 6, 8], size: 0.008, fall: 0.85,
         curlAmp: 0.40, curlFreq: 0.10, curlTime: 0.03, streak: 0.10, spin: 2.2,
-        // Bigger/closer than this and the post DoF turns them into bokeh
-        // discs that read as dirt on the lens, which the bible forbids
-        // outright. Held back to where the CoC can still resolve them.
-        near: [0.95, 2.6], opacity: 0.55, crystal: false, groundFade: 0.10, scatter: 1.0,
+        // Held back past the subject plane (every body framing sits at
+        // 1.8-2.3 m). Nearer than that, a single flake crossing the ~2 px
+        // nose pad swamps a 0.008-linear feature and trips the spec gate --
+        // and the DoF turns it into a bokeh disc that reads as dirt on the
+        // lens, which the bible forbids outright. Foreground flakes in
+        // close framings are not worth either cost.
+        near: [2.40, 5.00], opacity: 0.55, crystal: false, groundFade: 0.10, scatter: 1.0,
         sheet: 0.16, sheetK: 0.30,
       },
       mid: {
         share: 0.34, box: [26, 14, 26], size: 0.009, fall: 0.70,
         curlAmp: 1.70, curlFreq: 0.045, curlTime: 0.05, streak: 0.12, spin: 1.1,
-        near: [1.0, 2.9], opacity: 0.60, crystal: false, groundFade: 0.18, scatter: 0.95,
+        near: [2.40, 5.50], opacity: 0.60, crystal: false, groundFade: 0.18, scatter: 0.95,
         sheet: 0.075, sheetK: 0.72,
       },
       far: {
@@ -67,7 +70,7 @@ export class SnowParticles {
         // the sky, and heavily defocused it reads as a smudge on the
         // glass. Held well back; it still reads from 2 m out, which is
         // where every body-framing pose sits.
-        near: [1.7, 4.2], opacity: 0.55, crystal: false, groundFade: 0.0, scatter: 1.15,
+        near: [2.40, 5.00], opacity: 0.55, crystal: false, groundFade: 0.0, scatter: 1.15,
         ground: true, sheet: 0.09, sheetK: 0.62,
       },
     };
@@ -402,6 +405,9 @@ export class SnowParticles {
       } else {
         u.uCenter.value.set(cam.x, cam.y, cam.z);
       }
+      // Bound as a multiple of scene diffuse white, not a constant, so the
+      // ceiling tracks exposure and sun-intensity changes.
+      u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 4.5;
       u.uGust.value = gust;
       if (!l.def.ground) u.uOpacity.value = l.def.opacity * (0.50 + 0.65 * gust);
       u.uSunDir.value.copy(ctx.sunDirection);
