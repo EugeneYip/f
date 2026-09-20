@@ -155,7 +155,7 @@
   position: absolute;
   left: 0;
   bottom: 0;
-  padding: 58px calc(var(--pad-l) + 150px) var(--pad-b) var(--pad-l);
+  padding: 48px calc(var(--pad-l) + 150px) var(--pad-b) var(--pad-l);
   pointer-events: none;
   opacity: 0;
   /* `farthest-side` sizes the ellipse so it reaches full transparency exactly
@@ -163,10 +163,10 @@
    * box, so the box clipped a still-visible tone and left a dark rectangle
    * sitting on the snow. */
   background: radial-gradient(farthest-side at 0% 100%,
-      rgba(var(--deep), 0.92) 0%,
-      rgba(var(--deep), 0.74) 24%,
-      rgba(var(--deep), 0.40) 48%,
-      rgba(var(--deep), 0.14) 72%,
+      rgba(var(--deep), 0.94) 0%,
+      rgba(var(--deep), 0.86) 30%,
+      rgba(var(--deep), 0.58) 55%,
+      rgba(var(--deep), 0.22) 78%,
       rgba(var(--deep), 0) 100%);
   transition: opacity 1.6s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
@@ -181,6 +181,10 @@
   background: rgba(var(--ink), 0.5);
 }
 #ui #vx .vx-sp {
+  /* Two independent mechanisms: the scrim handles the general case, the shadow
+   * handles whatever bright detail lands directly under a glyph. Measured from
+   * rendered pixels over lit snow, the scrim alone gave 3.33:1 here. */
+  text-shadow: 0 1px 3px rgba(var(--deep), 0.9), 0 0 10px rgba(var(--deep), 0.7);
   font-size: 12.5px;
   font-weight: 300;
   letter-spacing: 0.26em;
@@ -189,6 +193,7 @@
 }
 #ui #vx .vx-sp em { font-style: italic; letter-spacing: 0.26em; }
 #ui #vx .vx-cap {
+  text-shadow: 0 1px 3px rgba(var(--deep), 0.9), 0 0 10px rgba(var(--deep), 0.7);
   margin-top: 6px;
   font-size: 11px;
   font-weight: 400;
@@ -230,16 +235,17 @@
   padding: var(--pad-t) var(--pad-r) 46px 84px;
   font: 400 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.04em;
-  color: rgba(var(--ink), 0.8);
+  color: rgba(var(--ink), 0.9);
   text-align: right;
+  text-shadow: 0 1px 3px rgba(var(--deep), 0.85);
   pointer-events: none;
   background: radial-gradient(farthest-side at 100% 0%,
-      rgba(var(--deep), 0.90) 0%,
-      rgba(var(--deep), 0.66) 34%,
-      rgba(var(--deep), 0.26) 62%,
+      rgba(var(--deep), 0.92) 0%,
+      rgba(var(--deep), 0.80) 36%,
+      rgba(var(--deep), 0.40) 66%,
       rgba(var(--deep), 0) 100%);
 }
-#ui #vx .vx-perf b { font-weight: 400; color: rgba(var(--ink), 0.62); text-transform: uppercase; letter-spacing: 0.12em; }
+#ui #vx .vx-perf b { font-weight: 400; color: rgba(var(--ink), 0.80); text-transform: uppercase; letter-spacing: 0.12em; }
 #ui #vx .vx-perf span { font-variant-numeric: tabular-nums; color: rgba(var(--ink), 0.95); }
 #ui #vx .vx-perf[hidden] { display: none; }
 

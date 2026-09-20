@@ -158,7 +158,12 @@ export class Cinematics {
     r.c.az = r.d.az; r.c.el = r.d.el; r.c.dist = r.d.dist;
     r.pan.copy(r.panD);
     r.fov = r.fovTarget;
-    r.bias = r.biasTarget = (this.bias ?? 0) * 2 * r.c.dist * Math.tan(r.fov * 0.5 * DEG);
+    // Frame height must come from the EFFECTIVE fov, not the authored one:
+    // on a narrow viewport the aspect fit widens the vertical field a long
+    // way (35 deg -> ~95 deg at 390x844), and using the authored number here
+    // while _compose() uses the effective one popped the framing on every cut.
+    const fovH = r.fovEffective ?? r.fov;
+    r.bias = r.biasTarget = (this.bias ?? 0) * 2 * r.c.dist * Math.tan(fovH * 0.5 * DEG);
     // Dip the overlay rather than whip-panning between framings. The UI owns
     // the only full-screen element I can legitimately fade.
     this._ui()?.flashCut?.(Cinematics.CUT);
