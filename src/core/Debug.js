@@ -59,6 +59,14 @@ export const POSES = {
 
   // Behind and above the head: ruff depth and ear interior.
   nape:        { anchor: 'head', dir: [-0.419, 0.449, -0.789], dist: 0.55, fov: 34 },
+
+  // Dead front-on, eye level. The user's own screenshots were taken here and
+  // here is where the ear interiors and the skin/fur silhouette edge show.
+  frontal:     { anchor: 'head', dir: [0.020, 0.100, 1.000], dist: 0.55, fov: 30 },
+
+  // Low and close, looking up under the chin. Reproduces the framing where
+  // the animal's INTERIOR became visible.
+  chin:        { anchor: 'head', dir: [0.060, -0.300, 0.952], dist: 0.20, fov: 24 },
 };
 
 /**

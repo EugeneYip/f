@@ -382,7 +382,16 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // The micro layer is the cheapest thing to give up on weak hardware: it
   // only resolves at macro range and costs a full cell8 per fragment per
   // shell. Gated off on the tier that has already given up anisotropy.
-  float mLod = octaveFade(px, fm) * detail * uMicroOn;
+  // The micro octave gets its own, more permissive band.
+  //
+  // The shared octaveFade cuts anything finer than ~2.5 px cells, which is
+  // right for the clump and strand layers but means NO octave can ever produce
+  // 1-2 px structure — so at 0.13 m the face had no resolvable strands by
+  // construction, whatever the coat depth. A real guard hair is 0.05-0.08 mm,
+  // which is ~2 px at that framing, so this octave is physically correct
+  // rather than added detail; it is inert at every other framing because its
+  // cells are far sub-pixel there, and TAA resolves it at macro.
+  float mLod = (1.0 - smoothstep(0.26, 0.58, px * fm)) * detail * uMicroOn;
   if (mLod > 0.004){
     vec3  msite;
     float dm  = cell8(stretchAlong(pPull * fm, axis, uStrandAniso) + vec3(11.3, 5.7, 2.9), msite);

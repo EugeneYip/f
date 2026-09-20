@@ -100,7 +100,7 @@ export const CARD_LEN_SCALE = {
 
 export const REGION_TABLE = [
   /* 0 nose          */ { a: [0.00, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
-  /* 1 muzzle        */ { a: [0.95, 0.92, 0.60, 0.10], b: [1.55, 1.60, 0.90, 0.85] },
+  /* 1 muzzle        */ { a: [0.98, 1.40, 0.60, 0.10], b: [1.55, 1.60, 0.90, 0.85] },
   /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 0.75] },
   /* 3 cheek         */ { a: [1.05, 1.34, 1.35, 0.50], b: [0.80, 1.00, 1.00, 1.70] },
   /* 4 forehead      */ { a: [1.00, 1.10, 0.90, 0.10], b: [1.40, 1.35, 0.90, 1.40] },
@@ -141,7 +141,7 @@ export const FUR_DEFAULTS = {
   // hair field (metres -> per-metre frequencies)
   clumpFreq: 136,     // ~7.4 mm tufts; coarser reads as dirt, not fur
   strandFreq: 1080,    // ~0.93 mm; fine enough to blur into a mass at body distance
-  microFreq: 3400,    // ~0.29 mm hairs, only resolved at macro range
+  microFreq: 7000,   // x region freqScale (1.3-1.6 on the face) lands ~2-3 px at macro
   clumpPull: 0.74,
   strandRoot: 0.58,
   strandTip: 0.15,
@@ -166,7 +166,8 @@ export const FUR_DEFAULTS = {
   clumpAO: 0.75,
   aoBake: 0.22,
   rim: 0.30,
-  strandRound: 0.60,
+  strandRound: 1.0,   // 1.0 = the true per-hair cylinder normal; above this the
+                       // mix() extrapolates past it and detail degrades again
   strandAniso: 6.0,   // strand cells are tubes along the hair, not balls
 
   specShiftA: -0.085,
@@ -222,7 +223,9 @@ export function buildFurUniforms(ctx) {
     // uEyeFade.x = base bare radius (m); .y = extra radius per metre of local coat
     uEyeFade: { value: new THREE.Vector2(0.0098, 0.85) },
     uNose: { value: new THREE.Vector3(0.001, 0.293, 0.274) },
-    uNoseFade: { value: new THREE.Vector2(0.0085, 0.0180) },
+    // the rhinarium is ~8-10 mm across, so ~4 mm of bare pad and full
+    // coat by 7 mm; 18 mm was clearing the entire muzzle
+    uNoseFade: { value: new THREE.Vector2(0.0040, 0.0070) },
     uShellCount: { value: 18 },
     uCoatScale: { value: d.coatScale },
     uLay: { value: d.lay },
