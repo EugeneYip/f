@@ -22,7 +22,7 @@
  */
 import * as THREE from 'three';
 import { smoothstep, saturate } from '../util/math.js';
-import { buildField, REGION as R, FUR, TORSO_REGIONS, EAR_NORMAL } from './FoxAnatomy.js';
+import { buildField, REGION as R, FUR, TORSO_REGIONS, EAR_NORMAL, EAR_SPAN } from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
   sampleGrid, surfaceNets, buildAdjacency, relax,
@@ -162,6 +162,16 @@ export async function buildFoxSurface(skeleton, {
         stiff = stiff + (FUR[R.earInner][1] - stiff) * w;
         if (w > 0.5) reg = R.earInner;
       }
+    }
+
+    // --- pinna coat shortens toward the tip --------------------------------
+    // A constant coat offset on a tapering cone collapses the taper: 1.95:1 of
+    // skin became 1.57:1 furred, which is what read as a paddle (REVIEW-2
+    // blocker 1). Real ear fur is long where the pinna meets the ruff and
+    // short at the rim, which preserves the wedge.
+    if (reg === R.earOuter || reg === R.earInner) {
+      const t = saturate((y - EAR_SPAN.baseY) / (EAR_SPAN.tipY - EAR_SPAN.baseY));
+      len *= 1.0 - 0.64 * t;
     }
 
     // --- throat ------------------------------------------------------------

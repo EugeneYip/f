@@ -174,6 +174,9 @@ export const EYE = {
 /** The ear pinna plane normal — the direction the concha faces (right ear). */
 export const EAR_NORMAL = [0.7000, 0.0850, 0.7090];
 
+/** World-space y of the pinna base and tip, for the ear coat taper. */
+export const EAR_SPAN = { baseY: LANDMARKS.earR01[1], tipY: LANDMARKS.earR_tip[1] };
+
 // ---------------------------------------------------------------------------
 // fur field presets per region: [length (m), stiffness 0..1]
 // ---------------------------------------------------------------------------
@@ -191,8 +194,8 @@ export const FUR = {
   [R.cheek]: [0.0320, 0.28],
   [R.forehead]: [0.0038, 0.82],
   [R.skull]: [0.0075, 0.74],
-  [R.earOuter]: [0.0090, 0.70],
-  [R.earInner]: [0.0082, 0.44],
+  [R.earOuter]: [0.0110, 0.70],
+  [R.earInner]: [0.0100, 0.44],
   [R.throat]: [0.0300, 0.28],
   [R.neck]: [0.0455, 0.58],
   [R.ruff]: [0.0580, 0.50],
@@ -216,7 +219,7 @@ export const FUR = {
 
 const TINT_FUR = 0xffffff;      // neutral: base albedo lives on the material
 const TINT_SKIN = 0x171a20;     // bible "skin / nose"
-const TINT_PAW = 0x6a6a70;      // pad leather peeking between the toes
+const TINT_PAW = 0xf0eeea;      // furred white; pad leather faces the ground
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -397,7 +400,7 @@ export function buildField() {
   const earA = L.earR01;
   const earB = L.earR_tip;
   f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0208), rb: sr(0.0108),
+    name: 'earR', a: earA, b: earB, ra: sr(0.0224), rb: sr(0.0083),
     frame: 'axis', normal: EAR_NORMAL, squash: [0.60, 1.02, 1.0],
     k: 0.015, ...furOf(R.earOuter),
     flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
@@ -441,10 +444,10 @@ export function buildField() {
   });
   f.addMirrored({
     name: 'carpusR', a: [0.0474, 0.0605, 0.0552], b: [0.0458, 0.0250, 0.0730],
-    ra: 0.0152, rb: 0.0168, squash: [1.0, 1.0, 0.92], k: 0.009, ...furOf(R.legFrontLower),
+    ra: 0.0156, rb: 0.0178, squash: [1.0, 1.0, 0.92], k: 0.009, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.12], flowRadial: 0.40, tint: TINT_FUR,
   });
-  addPaw(f, furOf, 0.0455, 0.0722, +1, R.pawFront, 0.0228, 0.0200);
+  addPaw(f, furOf, 0.0455, 0.0722, +1, R.pawFront, 0.0192, 0.0206);
 
   // -------------------------------------------------------------- hindlimb ---
   // Haunch mass first: it is the widest point of the animal from behind.
@@ -462,7 +465,7 @@ export function buildField() {
   // Long metatarsus — the "backwards knee" is the hock joint at its top.
   f.addMirrored({
     name: 'metatarsusR', a: [0.0461, 0.0900, -0.1755], b: [0.0452, 0.0255, -0.1315],
-    ra: 0.0140, rb: 0.0152, squash: [0.88, 1.0, 1.0], k: 0.009, ...furOf(R.hock),
+    ra: 0.0140, rb: 0.0164, squash: [0.88, 1.0, 1.0], k: 0.009, ...furOf(R.hock),
     flowDir: [0, -1, 0.35], flowRadial: 0.40, tint: TINT_FUR,
   });
   // Calcaneal tuber: the heel bone projects caudally as the Achilles lever and
@@ -474,7 +477,7 @@ export function buildField() {
     flowDir: [0, -0.55, -0.84], flowRadial: 0.45, tint: TINT_FUR,
   });
 
-  addPaw(f, furOf, 0.0450, -0.1300, +1, R.pawHind, 0.0212, 0.0184);
+  addPaw(f, furOf, 0.0450, -0.1300, +1, R.pawHind, 0.0180, 0.0190);
 
   // ------------------------------------------------------------------ tail ---
   const tailKeys = ['tail01', 'tail02', 'tail03', 'tail04', 'tail05',
