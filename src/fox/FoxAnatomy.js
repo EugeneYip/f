@@ -167,7 +167,7 @@ export const EYE = {
   seed: skullXf([0.0090, 0.3140, 0.1980]),
   look: [0.5800, 0.1500, 0.8000],
   ballRadius: 0.0098 * SKULL_SCALE,
-  socketDepth: 0.0034,     // depression carved into the skin
+  socketDepth: 0.0026,     // depression carved into the skin
   cornealProud: 0.0030,    // how far the cornea stands out of the socket
 };
 
@@ -340,31 +340,31 @@ export function buildField() {
   const H = skullXf;
   f.add({
     name: 'braincase', a: H([0, 0.3140, 0.1985]), ra: sr(0.0412),
-    squash: [0.780, 0.880, 0.96], k: 0.013, ...furOf(R.skull),
+    squash: [0.780, 0.880, 0.96], k: 0.017, ...furOf(R.skull),
     flowDir: [0, 0.16, -1], flowRadial: 0.22, tint: TINT_FUR,
   });
   f.add({
     name: 'occiput', a: H([0, 0.3040, 0.1790]), ra: sr(0.0378),
-    squash: [0.780, 0.880, 0.78], k: 0.014, ...furOf(R.skull),
+    squash: [0.780, 0.880, 0.78], k: 0.018, ...furOf(R.skull),
     flowDir: [0, 0.10, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Domed forehead with a gentle stop — arctic fox, not red fox.
   f.add({
     name: 'forehead', a: H([0, 0.3175, 0.2145]), ra: sr(0.0288),
-    squash: [0.88, 0.80, 0.94], k: 0.012, ...furOf(R.forehead),
+    squash: [0.90, 0.84, 0.94], k: 0.017, ...furOf(R.forehead),
     flowDir: [0, 0.22, -1], flowRadial: 0.20, tint: TINT_FUR,
   });
   f.addMirrored({
-    name: 'brow', a: H([0.0252, 0.3318, 0.2160]), ra: sr(0.0132),
-    squash: [0.94, 0.54, 1.00], k: 0.013, ...furOf(R.forehead),
+    name: 'brow', a: H([0.0252, 0.3318, 0.2160]), ra: sr(0.0118),
+    squash: [0.90, 0.74, 0.96], k: 0.016, ...furOf(R.forehead),
     flowDir: [0.15, 0.20, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Short and BLUNT: 2:1 taper read as a point once fur was on it, so the
   // muzzle now barely narrows and stops well short of the old nose position.
   f.add({
     name: 'muzzle', a: H([0, 0.3020, 0.2255]), b: H([0, 0.2952, 0.2380]),
-    ra: sr(0.0272), rb: sr(0.0175),
-    squash: [1.0, 0.90, 1.0], k: 0.014, ...furOf(R.muzzle),
+    ra: sr(0.0264), rb: sr(0.0170),
+    squash: [1.0, 0.92, 1.0], k: 0.018, ...furOf(R.muzzle),
     flowDir: [0, 0.05, -1], flowRadial: 0.34, tint: TINT_FUR,
   });
   f.add({
@@ -374,21 +374,21 @@ export function buildField() {
   });
   f.add({
     name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2895, 0.2385]),
-    ra: sr(0.0224), rb: sr(0.0140),
-    squash: [0.95, 0.80, 1.0], k: 0.010, ...furOf(R.jawLower),
+    ra: sr(0.0212), rb: sr(0.0126),
+    squash: [0.95, 0.86, 1.0], k: 0.016, ...furOf(R.jawLower),
     flowDir: [0, -0.30, -1], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Whisker pads — the paired swellings at the muzzle root. Small, but they
   // are most of what stops a canid muzzle reading as a plain cone.
   f.addMirrored({
     name: 'whiskerPadR', a: H([0.0160, 0.2950, 0.2258]), ra: sr(0.0132),
-    squash: [0.86, 0.80, 1.05], k: 0.011, ...furOf(R.muzzle),
+    squash: [0.88, 0.84, 1.05], k: 0.015, ...furOf(R.muzzle),
     flowDir: [0.18, -0.25, -0.95], flowRadial: 0.35, tint: TINT_FUR,
   });
   f.addMirrored({
     name: 'cheek', a: H([0.0228, 0.2990, 0.2120]), b: H([0.0246, 0.2958, 0.1940]),
-    ra: sr(0.0248), rb: sr(0.0246),
-    squash: [0.80, 0.88, 1.02], k: 0.017, ...furOf(R.cheek),
+    ra: sr(0.0238), rb: sr(0.0236),
+    squash: [0.87, 0.90, 1.02], k: 0.021, ...furOf(R.cheek),
     flowDir: [0.55, -0.25, -0.55], flowRadial: 0.90, tint: TINT_FUR,
   });
 
@@ -502,7 +502,7 @@ export function buildField() {
 
   // ------------------------------------------------- eye sockets (phase 2) ---
   const eyes = {};
-  const SOCKET_R = 0.0150, SOCKET_K = 0.0105;
+  const SOCKET_R = 0.0150, SOCKET_K = 0.0165;
   for (const side of ['R', 'L']) {
     const seed = side === 'R' ? EYE.seed : mirrorX(EYE.seed);
     const lk = side === 'R' ? EYE.look : mirrorX(EYE.look);
