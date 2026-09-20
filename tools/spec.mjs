@@ -299,6 +299,80 @@ const results = await page.evaluate(async () => {
       : null;
   }
 
+  // 12. FUR AT MACRO RANGE — the scale-ratio metric, designed by the fur agent
+  //     after it pointed out that my proposed per-region meanHF would NOT have
+  //     caught the defect we were chasing. That defect had two components with
+  //     OPPOSITE signs on meanHF — porcelain (no high-frequency energy) and
+  //     dither blotches (lots) — so a mean would have been dragged toward
+  //     passing by the very artefact under investigation.
+  //
+  //       fine   = mean |p - blur3(p)|          1-2 px structure  -> hairs
+  //       coarse = mean |blur3(p) - blur15(p)|  8-20 px structure -> blotches
+  //
+  //     Fur concentrates energy at the fine scale; porcelain has neither;
+  //     blotches have coarse without fine. One ratio separates all three.
+  //
+  //     Boxes are placed from projected rig anchors and deliberately OFFSET
+  //     OFF THE LID, because bare skin at the lid margin is correct and a box
+  //     centred on the eye would legitimately read low. Also its suggestion.
+  {
+    renderPose('macro_eye', false);
+    const g = grab();
+    const img = c2.getImageData(0, 0, g.w, g.h).data;
+    const L = (x, y) => {
+      const i = ((y | 0) * g.w + (x | 0)) * 4;
+      return (img[i] + img[i + 1] + img[i + 2]) / 3;
+    };
+    const boxAvg = (cx, cy, half) => {
+      let sum = 0, n = 0;
+      for (let y = cy - half; y <= cy + half; y++)
+        for (let x = cx - half; x <= cx + half; x++) {
+          if (x < 1 || y < 1 || x >= g.w - 1 || y >= g.h - 1) continue;
+          sum += L(x, y); n++;
+        }
+      return n ? sum / n : 0;
+    };
+    const scaleDetail = (cx, cy, R) => {
+      let fine = 0, coarse = 0, n = 0;
+      for (let y = cy - R; y <= cy + R; y += 2) {
+        for (let x = cx - R; x <= cx + R; x += 2) {
+          if (x < 8 || y < 8 || x >= g.w - 8 || y >= g.h - 8) continue;
+          const p = L(x, y);
+          const b3 = boxAvg(x, y, 1);
+          const b15 = boxAvg(x, y, 7);
+          fine += Math.abs(p - b3);
+          coarse += Math.abs(b3 - b15);
+          n++;
+        }
+      }
+      return n ? { fine: fine / n, coarse: coarse / n,
+                   ratio: (fine / n) / Math.max((fine / n) + (coarse / n), 1e-6), n } : null;
+    };
+
+    const eye = project('eyeR'), nose = project('nose'), ear = project('earTipR');
+    if (eye) {
+      const R = 26;
+      const off = (a, b, t, perp = 0) => a && b
+        ? { x: a.x + (b.x - a.x) * t - (b.y - a.y) * perp,
+            y: a.y + (b.y - a.y) * t + (b.x - a.x) * perp }
+        : null;
+      const probes = {
+        // Toward the nose, nudged perpendicular so we clear the lid entirely.
+        muzzle: off(eye, nose, 0.45, 0.12),
+        // Above the eye, clear of the lid margin.
+        brow: { x: eye.x, y: eye.y - R * 2.6 },
+        // Reference: the long coat on the ruff side. earTipR does not project
+        // at this framing (it is outside the frustum at 0.13 m), so fall back
+        // to a screen-space offset toward the side where the ruff sits.
+        ruff: ear ? off(eye, ear, 0.55, 0) : { x: eye.x + R * 7.2, y: eye.y - R * 1.2 },
+      };
+      out.furScale = {};
+      for (const [name, pt] of Object.entries(probes)) {
+        out.furScale[name] = pt ? scaleDetail(Math.round(pt.x), Math.round(pt.y), R) : null;
+      }
+    }
+  }
+
   // ----------------------------------------------------------------------
   // Checks added from REVIEW-2's "gate gaps" section. Each one encodes a
   // defect that a critic pass had to find by eye, at ~174k tokens a time.
@@ -620,6 +694,29 @@ record('[unvalidated] aurora has vertical filament structure', au && au.ratio >=
 
 // Per-region silhouette. The whole-animal median let a good torso mask a bald
 // head -- and the old scan locked onto the horizon in 20 of 50 columns.
+// Fur at macro range, calibrated WITHIN the frame against a region we agree
+// reads well (the ruff) rather than against a threshold I invented.
+// Calibrated WITHIN the frame rather than against a threshold I invented: the
+// BROW is the reference, because it demonstrably carries hair detail and sits
+// on the same head under the same light at the same scale. A ruff probe would
+// be better still, but earTipR does not project at 0.13 m and a screen-space
+// fallback landed off-canvas — an in-frame reference that works beats an
+// out-of-frame one that is more principled.
+const fs = results.furScale ?? {};
+if (fs.brow && fs.muzzle) {
+  const ref = fs.brow.fine;
+  const floor = ref * 0.35;
+  record('fur reads as hair at macro: muzzle',
+    fs.muzzle.fine >= floor && fs.muzzle.ratio >= 0.30,
+    `muzzle fine ${fs.muzzle.fine.toFixed(2)} against a floor of ${floor.toFixed(2)} ` +
+    `(35% of the brow's ${ref.toFixed(2)}); coarse ${fs.muzzle.coarse.toFixed(2)}, ` +
+    `fine-share ${fs.muzzle.ratio.toFixed(2)} (want >= 0.30 — a low share means ` +
+    'blotches rather than hair)');
+  record('macro reference region carries hair detail', ref >= 1.5,
+    `brow fine ${ref.toFixed(2)}, coarse ${fs.brow.coarse.toFixed(2)}, ` +
+    `fine-share ${fs.brow.ratio.toFixed(2)}`, 'warn');
+}
+
 const sbr = results.silhouetteByRegion ?? {};
 for (const [region, v] of Object.entries(sbr)) {
   record(`silhouette breaks up: ${region}`, v && v.median >= 3,
