@@ -56,9 +56,17 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
 
     // Region bias: the silhouette budget.
     const w0 = cardWeight(reg[i0]), w1 = cardWeight(reg[i1]), w2 = cardWeight(reg[i2]);
-    // Longer coat gets more cards; short coat (muzzle, paws) gets almost none.
+    // Longer coat gets more cards — but with a FLOOR.
+    //
+    // Without one this term starved exactly the regions that most need the
+    // silhouette broken: the ear outline was getting 1/33 of the cheek's card
+    // density and the skull 1/7, which is why the ruff, flank and tail broke
+    // up beautifully while the head stayed a hard mesh curve. Short coat does
+    // not mean "no cards" — it means SHORT cards, which is what a fine dense
+    // fringe following a tapering ear actually is. Card length already scales
+    // with coat thickness, so a floor here buys density without buying length.
     const l = (len[i0] + len[i1] + len[i2]) / 3;
-    const lw = Math.min(1, l / 0.030) ** 1.2;
+    const lw = 0.30 + 0.70 * (Math.min(1, l / 0.030) ** 1.2);
 
     total += area * ((w0 + w1 + w2) / 3) * lw;
     cdf[t] = total;

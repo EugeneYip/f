@@ -261,6 +261,190 @@ const results = await page.evaluate(async () => {
       : null;
   }
 
+  // ----------------------------------------------------------------------
+  // Checks added from REVIEW-2's "gate gaps" section. Each one encodes a
+  // defect that a critic pass had to find by eye, at ~174k tokens a time.
+  //
+  // They work from a MASK obtained by rendering the pose twice, with the fox
+  // hidden and shown, and differencing. That gives a true silhouette without
+  // relying on the animal being darker or lighter than its background --
+  // which at the backlit `silhouette` framing it is not.
+  // ----------------------------------------------------------------------
+  function maskedFrame(pose, post = true) {
+    const root = ctx.fox?.root;
+    if (!root) return null;
+    const was = root.visible;
+
+    root.visible = false;
+    renderPose(pose, post);
+    const g = grab();
+    const bg = c2.getImageData(0, 0, g.w, g.h).data;
+
+    root.visible = true;
+    renderPose(pose, post);
+    grab();
+    const fg = c2.getImageData(0, 0, g.w, g.h).data;
+    root.visible = was;
+
+    const W = g.w, H = g.h;
+    const mask = new Uint8Array(W * H);
+    for (let i = 0, px = 0; i < fg.length; i += 4, px++) {
+      const d = Math.abs(fg[i] - bg[i]) + Math.abs(fg[i + 1] - bg[i + 1]) + Math.abs(fg[i + 2] - bg[i + 2]);
+      mask[px] = d > 18 ? 1 : 0;
+    }
+    return { W, H, fg, bg, mask };
+  }
+
+  const lumAt = (fg, px) => (fg[px * 4] + fg[px * 4 + 1] + fg[px * 4 + 2]) / 3;
+
+  // 7. BACKLIT TRANSMISSION — §1's signature effect. Compare a thin band just
+  //    inside the outline against the body core. Transmissive fur makes the
+  //    rim brighter than the core; opaque fur makes them equal.
+  {
+    const m = maskedFrame('silhouette', false);   // raw render: post must not flatter it
+    if (m) {
+      const { W, H, fg, mask } = m;
+      // Erode by R px to separate rim from core.
+      const R = 6;
+      const core = new Uint8Array(W * H);
+      for (let y = R; y < H - R; y++) {
+        for (let x = R; x < W - R; x++) {
+          const i = y * W + x;
+          if (!mask[i]) continue;
+          let all = 1;
+          for (let dy = -R; dy <= R && all; dy += R) {
+            for (let dx = -R; dx <= R && all; dx += R) {
+              if (!mask[(y + dy) * W + (x + dx)]) all = 0;
+            }
+          }
+          core[i] = all;
+        }
+      }
+      let rimSum = 0, rimN = 0, coreSum = 0, coreN = 0;
+      for (let i = 0; i < W * H; i++) {
+        if (!mask[i]) continue;
+        if (core[i]) { coreSum += lumAt(fg, i); coreN++; }
+        else { rimSum += lumAt(fg, i); rimN++; }
+      }
+      out.transmission = rimN && coreN
+        ? { rim: rimSum / rimN, core: coreSum / coreN, ratio: (rimSum / rimN) / (coreSum / coreN),
+            rimPx: rimN, corePx: coreN }
+        : null;
+    }
+  }
+
+  // 8. FUR COVERS CAMERA-FACING SURFACES — the tail was "a flat white blade
+  //    with a hair fringe around its perimeter and nothing inside". Measure
+  //    high-frequency variance INSIDE the mask, away from the edge.
+  {
+    const m = maskedFrame('tail', false);
+    if (m) {
+      const { W, H, fg, mask } = m;
+      let sum = 0, n = 0;
+      for (let y = 10; y < H - 10; y += 2) {
+        for (let x = 10; x < W - 10; x += 2) {
+          const i = y * W + x;
+          // Require a solid 9x9 neighbourhood so we are well inside the body.
+          let inside = 1;
+          for (let dy = -8; dy <= 8 && inside; dy += 8)
+            for (let dx = -8; dx <= 8 && inside; dx += 8)
+              if (!mask[(y + dy) * W + (x + dx)]) inside = 0;
+          if (!inside) continue;
+          const c = lumAt(fg, i);
+          const local = (lumAt(fg, i - 1) + lumAt(fg, i + 1) +
+                         lumAt(fg, i - W) + lumAt(fg, i + W)) / 4;
+          sum += Math.abs(c - local); n++;
+        }
+      }
+      out.interiorDetail = n ? { meanHF: sum / n, samples: n } : null;
+    }
+  }
+
+  // 9. NOSE IN EVERY POSE — spec previously sampled one framing. The nose
+  //    measured correct at `portrait` and ~6.5x too bright and warm at `hero`,
+  //    because fur layering over the muzzle occludes it at distance.
+  out.nosePoses = {};
+  for (const pose of ['portrait', 'hero', 'silhouette', 'profile']) {
+    renderPose(pose, true);
+    const p = project('nose');
+    out.nosePoses[pose] = p ? sample(p.x, p.y, 5) : null;
+  }
+
+  // 10. PER-REGION SILHOUETTE — a whole-animal median let a good torso mask a
+  //     bald head. Split the scan by height band instead.
+  {
+    const m = maskedFrame('silhouette', true);
+    if (m) {
+      const { W, H, fg, bg: bgRef, mask } = m;
+      let top = H, bot = 0;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) if (mask[y * W + x]) { if (y < top) top = y; if (y > bot) bot = y; break; }
+      }
+      const bands = { head: [top, top + (bot - top) * 0.33], body: [top + (bot - top) * 0.33, bot] };
+      out.silhouetteByRegion = {};
+      for (const [name, [y0, y1]] of Object.entries(bands)) {
+        const widths = [];
+        for (let y = Math.round(y0) + 2; y < Math.round(y1) - 2; y += 3) {
+          // Walk in from the left until the mask starts; measure how many px
+          // the luminance takes to stabilise.
+          let x = 1;
+          while (x < W - 1 && !mask[y * W + x]) x++;
+          if (x >= W - 2) continue;
+          // Use the fox-vs-background DIFFERENCE magnitude as a soft coverage
+          // signal, not luminance. At `silhouette` the backlit animal is very
+          // close in luminance to the sky, so a luminance ramp rejected almost
+          // every row (the first version sampled 2 rows for the whole head).
+          // The diff magnitude is effectively alpha: it ramps gradually where
+          // fur breaks the outline and steps where bare mesh does.
+          let ramp = 0;
+          const covAt = (xx) => {
+            const i2 = (y * W + xx) * 4;
+            return Math.abs(fg[i2] - bgRef[i2]) + Math.abs(fg[i2 + 1] - bgRef[i2 + 1]) +
+                   Math.abs(fg[i2 + 2] - bgRef[i2 + 2]);
+          };
+          // Probe depth must adapt: an ear is a thin plate, so a fixed 16 px
+          // probe lands back outside it and the row gets rejected. Measure how
+          // far the mask actually runs, and probe just inside that.
+          let run = 0;
+          while (x + run < W - 2 && mask[y * W + x + run]) run++;
+          if (run < 4) continue;
+          const probe = Math.min(16, Math.max(3, Math.round(run * 0.6)));
+          const deep = covAt(Math.min(W - 2, x + probe));
+          if (deep < 40) continue;                    // not solidly inside the animal
+          for (let k = 0; k <= probe; k++) {
+            if (covAt(Math.min(W - 2, x + k)) > deep * 0.8) { ramp = k; break; }
+          }
+          if (ramp > 0) widths.push(ramp);
+        }
+        widths.sort((a, b) => a - b);
+        out.silhouetteByRegion[name] = widths.length
+          ? { median: widths[widths.length >> 1], n: widths.length } : null;
+      }
+    }
+  }
+
+  // 11. AURORA STRUCTURE — §7 asks for vertical filaments. Restraint achieved
+  //     by fading the aurora to nothing also passes a brightness test, so
+  //     measure the RATIO of horizontal to vertical gradient energy in the sky.
+  //     Vertical filaments produce strong horizontal gradients.
+  {
+    renderPose('aurora', false);
+    const g = grab();
+    const d = c2.getImageData(0, 0, g.w, Math.round(g.h * 0.45)).data;
+    const W = g.w, H = Math.round(g.h * 0.45);
+    let gx = 0, gy = 0, n = 0;
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        const c = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3;
+        const r = (d[(i + 1) * 4] + d[(i + 1) * 4 + 1] + d[(i + 1) * 4 + 2]) / 3;
+        const b2 = (d[(i + W) * 4] + d[(i + W) * 4 + 1] + d[(i + W) * 4 + 2]) / 3;
+        gx += Math.abs(r - c); gy += Math.abs(b2 - c); n++;
+      }
+    }
+    out.auroraStructure = n ? { gx: gx / n, gy: gy / n, ratio: (gx / n) / Math.max(gy / n, 1e-4) } : null;
+  }
+
   if (ctx.postfx) ctx.postfx.enabled = true;
   out.initErrors = D.errors();
   return out;
@@ -305,14 +489,69 @@ record('frame has contrast', f && f.sd > 35, `sd ${f?.sd.toFixed(1)}`);
 
 // Horizon: no hard step.
 const hs = results.horizonStep;
-record('no hard horizon step', hs && hs.worst < 45,
+record('no hard horizon step', hs && hs.agreeing >= 4 && hs.worst < 45,
   `largest HORIZONTALLY COHERENT jump ${hs?.worst.toFixed(0)} levels at y=${hs?.y} ` +
   `(${hs?.agreeing}/${hs?.cols} columns agree); loudest isolated point ` +
-  `${hs?.loudestIsolated?.toFixed(0)} — isolated points are sparkle, not seams`);
+  `${hs?.loudestIsolated?.toFixed(0)} — isolated points are sparkle, not seams` +
+  (hs && hs.agreeing < 4 ? ' [INCONCLUSIVE: no coherent edge found at all]' : ''));
 
-// Silhouette: fur must break the outline, not step.
+// --- checks added from REVIEW-2's "gate gaps" -----------------------------
+
+// Backlit transmission (§1's signature effect). Measured on the RAW render so
+// post cannot flatter it.
+const tr = results.transmission;
+record('backlit fur transmits (rim brighter than core)', tr && tr.ratio >= 1.12,
+  tr ? `rim ${tr.rim.toFixed(1)} / core ${tr.core.toFixed(1)} = ${tr.ratio.toFixed(3)} ` +
+       `(want >= 1.12; 1.0 means opaque fur)` : 'could not mask the animal');
+
+// Fur must cover camera-facing surfaces, not just the outline. The tail was
+// "a flat white blade with a hair fringe around its perimeter and nothing
+// inside" -- which an edge-only check cannot see.
+const idt = results.interiorDetail;
+// UNVALIDATED: this passes at 2.74 while a critic reading the same frame
+// called the tail "a flat white blade with nothing inside". Until the
+// disagreement is resolved, warn rather than gate -- an unvalidated check that
+// fails is noise, and one that passes is worse.
+record('[unvalidated] fur covers camera-facing surfaces', idt && idt.meanHF >= 1.2,
+  idt ? `mean high-frequency detail inside the tail mask ${idt.meanHF.toFixed(2)} levels ` +
+        `over ${idt.samples} samples (want >= 1.2)` : 'could not mask the tail', 'warn');
+
+// The nose measured correct at portrait and ~6.5x too bright at hero, because
+// fur layering over the muzzle occludes it at distance. One framing was not
+// enough.
+for (const [pose, c] of Object.entries(results.nosePoses ?? {})) {
+  record(`nose stays dark at ${pose}`, c && c.r < 95,
+    `${hex(c)} vs spec (23,26,32)`, pose === 'portrait' ? 'error' : 'warn');
+}
+
+// Aurora structure. Restraint achieved by fading it to nothing also passes a
+// brightness test, so measure whether the sky's gradient energy runs
+// vertically (filaments) or horizontally (a banded smear).
+const au = results.auroraStructure;
+// UNVALIDATED: passes at 1.048 while a critic called the aurora a
+// structureless horizontal smear. Warn only until the disagreement is settled.
+record('[unvalidated] aurora has vertical filament structure', au && au.ratio >= 0.85,
+  au ? `horizontal/vertical gradient energy ${au.ratio.toFixed(3)} ` +
+       `(gx ${au.gx.toFixed(2)}, gy ${au.gy.toFixed(2)}; < 0.85 means horizontal banding)`
+     : 'n/a', 'warn');
+
+// Per-region silhouette. The whole-animal median let a good torso mask a bald
+// head -- and the old scan locked onto the horizon in 20 of 50 columns.
+const sbr = results.silhouetteByRegion ?? {};
+for (const [region, v] of Object.entries(sbr)) {
+  record(`silhouette breaks up: ${region}`, v && v.median >= 3,
+    v ? `median ramp ${v.median}px over ${v.n} rows (want >= 3; 1-2px is a bare mesh edge)`
+      : 'no rows sampled');
+}
+
+// Retained for comparison only -- the fur agent demonstrated this one is
+// unreliable here (2/1/2 px across identical runs, 20/50 columns locking onto
+// the horizon rather than the animal, and no change when TAA is toggled
+// despite an obvious visual difference). Superseded by the per-region check
+// above, which masks the animal properly. Kept as a warning so the number
+// stays visible without gating on it.
 const sr = results.silhouetteRamp;
-record('silhouette breaks up (fur, not a mesh edge)', sr && sr.median >= 3,
+record('[legacy, unreliable] whole-frame silhouette ramp', sr && sr.median >= 3,
   sr ? `median transition ${sr.median}px over ${sr.n} columns (min ${sr.min}, max ${sr.max})`
      : 'could not locate the animal against the sky');
 

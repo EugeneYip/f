@@ -38,15 +38,48 @@ const c = (hex) => new THREE.Color(hex);
  * and belly per the bible, plus the dorsal line, which is on the outline in
  * every side-on framing.
  * ------------------------------------------------------------------------ */
+/**
+ * Card length relative to the local coat, per region (uRegionC.x).
+ *
+ * 1.0 everywhere the coat is thick enough that a coat-proportional fringe
+ * already spans several pixels. Short-coat regions need a multiplier or their
+ * outline cannot break up at all: the ear fringe was 4.7 mm against a 2.6 mm
+ * pixel at the silhouette framing. Absolute lengths stay small — 4.2 mm ear
+ * coat x 3.6 is still only a 15 mm fringe.
+ */
+/**
+ * Per-region interior opacity floor for cards (uRegionC.y), 0 = use the global.
+ *
+ * Needed for thin, flat parts. On the ear pinna and the skull the surface
+ * faces the camera over almost its whole extent, so the vEdge gate that keeps
+ * interior cards faint on the body suppresses the very fringe that has to
+ * break the outline.
+ */
+export const CARD_INNER_FLOOR = {
+  // Deliberately EMPTY for the head. Raising the floor there made cards 70%
+  // opaque face-on, so they laid a solid mat over the flat pinna and replaced
+  // the shells own soft granular edge with a crisp one — the ear got HARDER.
+  // The shells already break the ear outline on their own; cards must stay
+  // sparse and faint over a flat surface and only assert at its rim.
+  18: 0.34, 19: 0.38, 21: 0.34, 22: 0.38,      // legs and hock are cylinders
+};
+
+export const CARD_LEN_SCALE = {
+  0: 1.0, 1: 1.8, 2: 1.6, 3: 1.0, 4: 1.4, 5: 1.3, 6: 1.8, 7: 1.6,
+  8: 1.0, 9: 1.0, 10: 1.0, 11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0,
+  15: 1.0, 16: 1.0, 17: 1.0, 18: 1.4, 19: 1.5, 20: 1.8,
+  21: 1.4, 22: 1.4, 23: 1.8, 24: 1.0, 25: 1.0, 26: 1.0,
+};
+
 export const REGION_TABLE = [
   /* 0 nose          */ { a: [0.00, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
-  /* 1 muzzle        */ { a: [0.95, 0.92, 0.60, 0.10], b: [1.55, 1.40, 0.90, 0.55] },
+  /* 1 muzzle        */ { a: [0.95, 0.92, 0.60, 0.10], b: [1.55, 1.60, 0.90, 0.85] },
   /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 0.75] },
   /* 3 cheek         */ { a: [1.05, 1.34, 1.35, 0.50], b: [0.80, 1.00, 1.00, 1.70] },
-  /* 4 forehead      */ { a: [1.00, 0.95, 0.90, 0.10], b: [1.40, 1.20, 0.90, 1.05] },
-  /* 5 skull         */ { a: [1.00, 0.84, 0.95, 0.16], b: [1.20, 1.10, 1.00, 1.30] },
-  /* 6 earOuter      */ { a: [1.00, 0.72, 0.80, 0.26], b: [1.45, 1.55, 0.90, 0.55] },
-  /* 7 earInner      */ { a: [0.90, 0.74, 1.20, 0.55], b: [1.30, 1.40, 0.80, 0.60] },
+  /* 4 forehead      */ { a: [1.00, 1.10, 0.90, 0.10], b: [1.40, 1.35, 0.90, 1.40] },
+  /* 5 skull         */ { a: [1.00, 1.40, 0.95, 0.16], b: [1.20, 1.25, 1.00, 1.70] },
+  /* 6 earOuter      */ { a: [1.00, 1.00, 0.80, 0.26], b: [1.45, 1.70, 0.90, 1.60] },
+  /* 7 earInner      */ { a: [0.90, 1.00, 1.20, 0.55], b: [1.30, 1.55, 0.80, 1.40] },
   /* 8 throat        */ { a: [1.00, 1.10, 1.20, 0.45], b: [0.95, 1.10, 1.00, 0.85] },
   /* 9 neck          */ { a: [1.00, 1.08, 1.05, 0.35], b: [0.90, 1.00, 1.00, 0.90] },
   /* 10 ruff          */ { a: [1.05, 1.16, 1.15, 0.55], b: [0.72, 0.95, 1.00, 1.60] },
@@ -57,12 +90,12 @@ export const REGION_TABLE = [
   /* 15 belly         */ { a: [1.00, 1.12, 1.30, 0.42], b: [0.95, 1.05, 0.90, 0.80] },
   /* 16 croup         */ { a: [1.00, 1.04, 1.25, 0.28], b: [0.92, 1.00, 1.00, 1.10] },
   /* 17 haunch        */ { a: [1.00, 1.08, 1.05, 0.30], b: [0.92, 1.00, 1.00, 0.82] },
-  /* 18 legFrontUpper */ { a: [1.00, 1.10, 1.00, 0.24], b: [1.10, 1.25, 0.25, 0.65] },
-  /* 19 legFrontLower */ { a: [1.00, 1.15, 0.85, 0.24], b: [1.20, 1.45, 0.16, 0.55] },
-  /* 20 pawFront      */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 1.95, 0.14, 0.50] },
-  /* 21 legHindUpper  */ { a: [1.00, 1.10, 1.05, 0.28], b: [1.05, 1.20, 0.25, 0.65] },
-  /* 22 hock          */ { a: [1.00, 1.10, 0.95, 0.32], b: [1.15, 1.35, 0.16, 0.85] },
-  /* 23 pawHind       */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 1.95, 0.14, 0.50] },
+  /* 18 legFrontUpper */ { a: [1.00, 1.10, 1.00, 0.24], b: [1.10, 1.35, 0.25, 1.05] },
+  /* 19 legFrontLower */ { a: [1.00, 1.15, 0.85, 0.24], b: [1.20, 1.60, 0.16, 1.15] },
+  /* 20 pawFront      */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 0.80] },
+  /* 21 legHindUpper  */ { a: [1.00, 1.10, 1.05, 0.28], b: [1.05, 1.30, 0.25, 1.05] },
+  /* 22 hock          */ { a: [1.00, 1.10, 0.95, 0.32], b: [1.15, 1.50, 0.16, 1.30] },
+  /* 23 pawHind       */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 0.80] },
   /* 24 tailBase      */ { a: [1.04, 1.14, 0.45, 0.34], b: [0.85, 0.95, 1.00, 1.70] },
   /* 25 tailMid       */ { a: [1.06, 1.36, 0.30, 0.42], b: [0.78, 0.92, 1.00, 2.10] },
   /* 26 tailTip       */ { a: [1.04, 1.18, 0.34, 0.36], b: [0.82, 0.95, 1.00, 1.85] },
@@ -129,10 +162,12 @@ export function buildFurUniforms(ctx) {
   const d = FUR_DEFAULTS;
   const regionA = [];
   const regionB = [];
+  const regionC = [];
   for (let i = 0; i < REGION_COUNT; i++) {
     const r = REGION_TABLE[i] ?? { a: [1, 1, 1, 0.3], b: [1, 1, 1, 0.8] };
     regionA.push(new THREE.Vector4(...r.a));
     regionB.push(new THREE.Vector4(...r.b));
+    regionC.push(new THREE.Vector4(CARD_LEN_SCALE[i] ?? 1.0, CARD_INNER_FLOOR[i] ?? 0, 0, 0));
   }
 
   return {
@@ -212,6 +247,7 @@ export function buildFurUniforms(ctx) {
 
     uRegionA: { value: regionA },
     uRegionB: { value: regionB },
+    uRegionC: { value: regionC },
 
     uCardWidth: { value: d.cardWidth },
     uCardLength: { value: d.cardLength },

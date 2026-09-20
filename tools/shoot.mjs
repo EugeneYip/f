@@ -14,13 +14,69 @@
  */
 import { chromium } from 'playwright';
 import { createServer, preview, build } from 'vite';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
+const USAGE = `
+shoot.mjs — render named camera poses in headless Chromium
+
+  --poses a,b,c   poses to render (default: all)
+  --out DIR       output directory (default shots/latest) — CLEARED before use
+  --size WxH      viewport (default 1280x800)
+  --dsf N         device scale factor (default 1.5)
+  --settle S      seconds of simulation before the first shot (default 2.5)
+  --taa N         renders per pose for TAA convergence (default 18)
+  --state NAME    idle|walk|trot|run|sit ...
+  --quality NAME  low|medium|high|ultra
+  --sun E,A       sun elevation,azimuth in degrees
+  --wind S,G      wind speed,gust
+  --build         use the production bundle
+  --keep          do NOT clear --out first
+  --ui            keep the DOM overlay visible (hidden by default)
+  --url URL       shoot an already-running server
+`.trim();
+
+/**
+ * Clear an output directory — but only if it looks like one of ours.
+ *
+ * This tool used to `rm -rf` whatever `--out` pointed at, with `--out`
+ * defaulting to `shots`. A bare invocation therefore destroyed every shot
+ * directory in the project. Refuse to delete anything containing entries that
+ * are not our own output, and never delete the shots root itself.
+ */
+async function safeClean(dir) {
+  const rel = path.relative(ROOT, dir);
+  if (rel === 'shots' || rel === '' || rel.startsWith('..')) {
+    console.error(`[shoot] refusing to clear "${rel || dir}" — pass a subdirectory, ` +
+      'e.g. --out shots/mywork');
+    process.exit(2);
+  }
+  let entries;
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;                                   // does not exist yet: nothing to do
+  }
+  const foreign = entries.filter((e) => !/\.(png|json|jpg|webp)$/i.test(e));
+  if (foreign.length) {
+    console.error(`[shoot] refusing to clear ${rel}: it holds ${foreign.length} ` +
+      `entr${foreign.length === 1 ? 'y' : 'ies'} this tool did not write ` +
+      `(${foreign.slice(0, 4).join(', ')}${foreign.length > 4 ? ', …' : ''}). ` +
+      'Use --keep, or choose an empty directory.');
+    process.exit(2);
+  }
+  await rm(dir, { recursive: true, force: true });
+}
+
 function parseArgs(argv) {
-  const a = { out: 'shots', size: '1280x800', dsf: 1.5, settle: 2.5, taa: 18, timeout: 120000 };
+  // NOT 'shots'. This tool deletes its output directory before writing, so a
+  // default of 'shots' meant a bare `node tools/shoot.mjs` wiped every shot
+  // directory in the project. A critic lost ~190 of them that way, including
+  // the gate, spec and audit reports, and shots/ is gitignored so none of it
+  // was recoverable.
+  const a = { out: 'shots/latest', size: '1280x800', dsf: 1.5, settle: 2.5, taa: 18, timeout: 120000 };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i];
     const next = () => argv[++i];
@@ -39,6 +95,13 @@ function parseArgs(argv) {
     else if (k === '--timeout') a.timeout = parseInt(next(), 10);
     else if (k === '--url') a.url = next();
     else if (k === '--ui') a.ui = true;
+    else if (k === '--help' || k === '-h') { console.log(USAGE); process.exit(0); }
+    else {
+      // Silently ignoring an unknown flag is how `--help` ended up running the
+      // destructive default path.
+      console.error(`[shoot] unknown option: ${k}\n${USAGE}`);
+      process.exit(2);
+    }
   }
   const [w, h] = a.size.split('x').map(Number);
   a.width = w || 1280; a.height = h || 800;
@@ -104,7 +167,7 @@ async function shotWithRetry(page, file, attempts = 3) {
 const main = async () => {
   const args = parseArgs(process.argv);
   const outDir = path.resolve(ROOT, args.out);
-  if (!args.keep) await rm(outDir, { recursive: true, force: true });
+  if (!args.keep) await safeClean(outDir);
   await mkdir(outDir, { recursive: true });
 
   const server = await startServer(args);

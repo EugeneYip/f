@@ -134,6 +134,16 @@ uniform float uFrameSeed;
 // B: x clumpScale  y freqScale  z aoScale  w cardWeight
 uniform vec4 uRegionA[${REGION_COUNT}];
 uniform vec4 uRegionB[${REGION_COUNT}];
+// C: x cardLengthScale — card length relative to the LOCAL coat.
+//
+// Cards normally scale with coat thickness, but on the head that couples two
+// things that should be separate: 4b wants face fur a few millimetres deep,
+// while 2.1 wants the outline broken everywhere. At the silhouette framing one
+// pixel is ~2.6 mm, so a 4.7 mm ear fringe cannot ramp over more than two
+// pixels no matter how dense it is — it has to be longer in WORLD units while
+// the coat underneath stays short. Real ear rims and skull guard hairs are
+// exactly that: long hairs standing out of short underfur.
+uniform vec4 uRegionC[${REGION_COUNT}];
 `;
 
 export const FUR_VARYINGS = /* glsl */ `
@@ -771,7 +781,7 @@ attribute vec4  aCard;   // x v along card · y side -1/+1 · z rand · w length
 ${COATLEN_FN}
 ${DYNAMICS_FN}
 
-varying vec3  vCard;     // x across 0..1 · y along 0..1 · z rand
+varying vec4  vCard;     // x across 0..1 · y along 0..1 · z rand · w innerFloor
 varying float vEdge;     // silhouette weight
 
 void main(){
@@ -783,7 +793,8 @@ void main(){
   float side = aCard.y;
   float rnd  = aCard.z;
   float soft = 1.0 - furStiffness;
-  float L    = furCoatLength(position, ra.y) * uCardLength * aCard.w;
+  vec4  rc   = uRegionC[ri];
+  float L    = furCoatLength(position, ra.y) * rc.x * uCardLength * aCard.w;
 
   vec3  nb   = normalize(normal);
   vec3  tb   = furTangent;
@@ -827,7 +838,15 @@ void main(){
   float bl = length(B);
   B = bl > 1e-5 ? B / bl : normalize(cross(hairW, vec3(0.0, 1.0, 0.0)));
 
-  float w = uCardWidth * clamp(furLength * uCoatScale, 0.004, 0.06)
+  // Minimum hair WIDTH, in metres, not a fraction of the coat.
+  //
+  // Card width scaled purely with coat thickness left ear hairs 1.3 mm wide —
+  // 0.9 px at the silhouette framing. TAA's neighbourhood clamp erases
+  // sub-pixel high-contrast detail, so those hairs were being drawn and then
+  // thrown away downstream, which is why the flank (7.5 px hairs) broke up
+  // beautifully while the ears stayed a hard mesh curve. The floor keeps thin-
+  // coat regions above the clamp's reach; thick-coat regions never hit it.
+  float w = uCardWidth * clamp(furLength * uCoatScale, 0.014, 0.06)
           * (0.55 + 0.9 * rnd) * pow(max(1.0 - v, 0.0), 0.5);
   wp.xyz += B * (side * w);
 
@@ -838,7 +857,7 @@ void main(){
   vTan  = hairW;
   vP0   = vec4(v, rb.z, aFurAO, ra.x);
   vP1   = vec4(rb.x, rb.y, ra.w, L);
-  vCard = vec3(side * 0.5 + 0.5, v, rnd);
+  vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));
 
   vec4 mvPosition = viewMatrix * wp;
@@ -864,7 +883,7 @@ ${FUR_SHADE}
 uniform float uCardInner;
 uniform float uCardOpacity;
 
-varying vec3  vCard;
+varying vec4  vCard;
 varying float vEdge;
 
 void main(){
@@ -894,7 +913,15 @@ void main(){
   a = mix(clamp(rad * 0.70, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
 
   // Strongest exactly where the surface turns away — the silhouette.
-  float edge = mix(uCardInner, 1.0, pow(clamp(vEdge, 0.0, 1.0), 2.6));
+  // Interior opacity floor, per region.
+  //
+  // vEdge is 1 - |dot(surfaceNormal, view)|, so it is LOW wherever we are
+  // looking at a surface face-on — which on a flat plate like the ear pinna is
+  // almost everywhere, including the rim we need broken up. The global floor
+  // of 0.17 therefore hides the ear fringe at exactly the framing that scans
+  // it. Flat, thin parts get their own higher floor.
+  float innerFloor = max(uCardInner, vCard.w);
+  float edge = mix(innerFloor, 1.0, pow(clamp(vEdge, 0.0, 1.0), 2.6));
   a *= edge * uCardOpacity * vP0.w;
   if (a < 0.004) discard;
 
