@@ -64,6 +64,33 @@ export const CARD_INNER_FLOOR = {
   18: 0.34, 19: 0.38, 21: 0.34, 22: 0.38,      // legs and hock are cylinders
 };
 
+/**
+ * Per-region SHELL hair-length scale (uRegionC.z), 1.0 = full.
+ *
+ * Below 1 the shells feather out before the coat's nominal outer surface,
+ * handing the silhouette to the cards. Only useful where the coat is too
+ * shallow for the shells to ramp over more than a pixel or two — the head and
+ * the lower legs.
+ */
+export const SHELL_LEN_SCALE = {
+  1: 0.55, 2: 0.60, 4: 0.50, 5: 0.50, 6: 0.45, 7: 0.50,   // muzzle..ears
+  18: 0.75, 19: 0.70, 20: 0.60, 21: 0.75, 22: 0.70, 23: 0.60,
+};
+
+/**
+ * Per-region transmission boost (uRegionC.w), 1.0 = global strength.
+ *
+ * The head silhouette fails not because the edge is hard but because a backlit
+ * white fox is nearly isoluminant with a bright sky there — the failing rows
+ * measured a flat coverage profile around 43/765, so there is almost nothing
+ * to ramp. Raising transmission globally fixes that but drags the body core up
+ * with it and breaks the rim/core ratio, so the lift has to be local.
+ */
+export const TRANS_BOOST = {
+  1: 2.6, 2: 2.4, 4: 2.8, 5: 2.8, 6: 3.2, 7: 3.0,   // muzzle, jaw, forehead, skull, ears
+  18: 1.6, 19: 1.8, 21: 1.6, 22: 1.8,               // legs
+};
+
 export const CARD_LEN_SCALE = {
   0: 1.0, 1: 1.8, 2: 1.6, 3: 1.0, 4: 1.4, 5: 1.3, 6: 1.8, 7: 1.6,
   8: 1.0, 9: 1.0, 10: 1.0, 11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0,
@@ -129,7 +156,7 @@ export const FUR_DEFAULTS = {
   sunSat: 0.30,
   transSat: 0.16,     // scattered light keeps almost none of the sun's hue       // how much of the sun's chromaticity survives scattering
   wrap: 0.40,
-  trans: 15.0,        // divided by PI in the shader
+  trans: 19.0,        // divided by PI in the shader
   transPow: 3.4,
   aoInner: 0.66,
   aoPow: 0.90,
@@ -167,7 +194,8 @@ export function buildFurUniforms(ctx) {
     const r = REGION_TABLE[i] ?? { a: [1, 1, 1, 0.3], b: [1, 1, 1, 0.8] };
     regionA.push(new THREE.Vector4(...r.a));
     regionB.push(new THREE.Vector4(...r.b));
-    regionC.push(new THREE.Vector4(CARD_LEN_SCALE[i] ?? 1.0, CARD_INNER_FLOOR[i] ?? 0, 0, 0));
+    regionC.push(new THREE.Vector4(CARD_LEN_SCALE[i] ?? 1.0, CARD_INNER_FLOOR[i] ?? 0,
+                                   SHELL_LEN_SCALE[i] ?? 1.0, TRANS_BOOST[i] ?? 1.0));
   }
 
   return {

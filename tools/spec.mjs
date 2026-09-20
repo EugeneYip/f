@@ -393,7 +393,20 @@ const results = await page.evaluate(async () => {
   for (const pose of ['portrait', 'hero', 'silhouette', 'profile']) {
     renderPose(pose, true);
     const p = project('nose');
-    out.nosePoses[pose] = p ? sample(p.x, p.y, 5) : null;
+    if (!p) { out.nosePoses[pose] = null; continue; }
+    // Scale the sample box to the feature. A fixed 10x10 box averaged an
+    // 11.9 px nose with its bright surroundings at `hero` and reported 216
+    // where the nose itself reads ~165 -- an instrument artefact on top of a
+    // real defect, which is the most confusing kind. Estimate the nose's
+    // projected size from the camera and sample a box that fits inside it.
+    const a = ctx.fox?.anchors?.nose;
+    a.updateWorldMatrix(true, false);
+    const wpos = new THREE.Vector3().setFromMatrixPosition(a.matrixWorld);
+    const dist = ctx.camera.position.distanceTo(wpos);
+    const ppm = cv.height / (2 * dist * Math.tan(ctx.camera.fov * Math.PI / 360));
+    const widthPx = 0.012 * ppm;                   // the pad is ~12 mm across
+    const r = Math.max(1, Math.min(5, Math.floor(widthPx / 3)));
+    out.nosePoses[pose] = { ...sample(p.x, p.y, r), widthPx: +widthPx.toFixed(1), rad: r };
   }
 
   // 10. PER-REGION SILHOUETTE — a whole-animal median let a good torso mask a
@@ -547,7 +560,8 @@ record('[unvalidated] fur covers camera-facing surfaces', idt && idt.meanHF >= 1
 // enough.
 for (const [pose, c] of Object.entries(results.nosePoses ?? {})) {
   record(`nose stays dark at ${pose}`, c && c.r < 95,
-    `${hex(c)} vs spec (23,26,32)`, pose === 'portrait' ? 'error' : 'warn');
+    `${hex(c)} vs spec (23,26,32) — sampled r=${c?.rad ?? '?'}px ` +
+    `in a ${c?.widthPx ?? '?'}px feature`, pose === 'portrait' ? 'error' : 'warn');
 }
 
 // Aurora structure. Restraint achieved by fading it to nothing also passes a

@@ -154,6 +154,7 @@ varying vec3 vTan;    // world hair direction at this depth
 varying vec4 vP0;     // x t · y baseTint · z bakedOcclusion · w density
 varying vec4 vP1;     // x clumpScale · y freqScale · z tipWhite · w coatLen
 varying vec3 vAxis;   // BIND-space hair axis — the lattice is stretched along it
+varying vec2 vShellMod;  // x: shell hair-length scale · y: transmission boost
 `;
 
 /* ------------------------------------------------------------ vertex helpers */
@@ -185,6 +186,22 @@ const COATLEN_FN = /* glsl */ `
  * swallows the whole face at macro range, and real canids are bald to the
  * lid margin.
  */
+/**
+ * Bare-skin mask: 0 on the rhinarium and the eyelid margin, 1 in full coat.
+ *
+ * Zeroing the coat LENGTH is not enough on its own — the shells then collapse
+ * onto the skin and keep drawing at full alpha, so they still paint undercoat
+ * cream over the nose pad. At distance that reads as (209,198,186) against a
+ * (23,26,32) spec, which is very close to the undercoat colour #dcd3c6. The
+ * mask has to gate coverage as well as offset.
+ */
+float furSkinMask(vec3 p){
+  float de = min(distance(p, uEyeL), distance(p, uEyeR));
+  float eye = smoothstep(uEyeFade.x, uEyeFade.y, de);
+  float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
+  return eye * nose;
+}
+
 float furCoatLength(vec3 p, float lengthScale){
   float de = min(distance(p, uEyeL), distance(p, uEyeR));
   float eye = smoothstep(uEyeFade.x, uEyeFade.y, de);
@@ -305,7 +322,8 @@ export const FUR_FIELD = /* glsl */ `
  * of being point-sampled, which is what stops the coat crawling at distance.
  */
 vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
-             float freqScale, float shellFill, float pathK, float detail, vec3 axis, out vec3 site)
+             float freqScale, float shellFill, float pathK, float detail, vec3 axis,
+             float hairLenScale, out vec3 site)
 {
   // Large-scale variation: real fur is not uniformly dense.
   float coatVar = snoise(p * uCoatVarFreq) * octaveFade(px, uCoatVarFreq);
@@ -334,8 +352,17 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
 
   // Per-strand length. Without this every hair ends on the same shell and the
   // coat gets a hard outer boundary — the shrink-wrapped shag-carpet tell.
+  // Shell hairs stop early where hairLenScale < 1.
+  //
+  // On a thin coat the shells present a near-binary boundary only a few pixels
+  // out from the mesh, and that step sits exactly on top of the cards' graded
+  // fringe and flattens it: measured at the head, cards alone ramp over 4 px,
+  // shells alone over 1, and together 2. Feathering the shells out early on
+  // the head and legs lets the cards own the outline where the coat is too
+  // shallow for shells to ramp on their own.
   float hairLen = uHairLenMin + (1.0 - uHairLenMin) *
                   clamp(mix(cRand, 0.25 + 0.75 * sRand * sRand, 0.58), 0.0, 1.0);
+  hairLen *= hairLenScale;
   float lenFade = 1.0 - smoothstep(hairLen - 0.30, hairLen + 0.04, t);
 
   // Strand cross-section, tapering to a point.
@@ -365,7 +392,12 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // ---- undercoat fill -----------------------------------------------------
   // Near the skin the coat is dense felt, not separate hairs. Without this the
   // shells read as a stack of nets and you see straight through to the body.
-  float fill = 1.0 - smoothstep(shellFill * 0.42, shellFill * 1.18, t);
+  // The undercoat fill, not the guard-hair length, is what makes the shells
+  // read as opaque out to t ~ 0.55 — and it ignores hairLen entirely. On a
+  // thin coat that is the binary step sitting on top of the cards' fringe, so
+  // it has to be pulled in by the same per-region scale.
+  float fillDepth = shellFill * hairLenScale;
+  float fill = 1.0 - smoothstep(fillDepth * 0.42, fillDepth * 1.18, t);
 
   // ---- the tuft --------------------------------------------------------
   // Each clump is a CONE: wide enough at the root to cover the skin, narrowing
@@ -434,7 +466,7 @@ float kkLobe(vec3 T, vec3 N, vec3 H, float shift, float power){
  *   rnd  per-strand random — breaks the specular into individual hairs
  */
 vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
-              float tipWhite, vec3 tintMul, bool cheap, float thinness)
+              float tipWhite, vec3 tintMul, bool cheap, float thinness, float transBoost)
 {
   vec3  L = uSunDir;
   vec3  H = normalize(L + V);
@@ -517,8 +549,8 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // hard rather than carrying the sun's orange straight through.
   vec3 transLight = mix(vec3(luma(uSunColor)), uSunColor, uTransSat);
   col += transLight * uSunIntensity * uTransTint * albedo *
-         (uTrans * RECIPROCAL_PI * fwd * thin * (1.45 * graze)
-          * thinness * (0.30 + 0.95 * shell));
+         (uTrans * transBoost * RECIPROCAL_PI * fwd * thin * (1.45 * graze)
+          * pow(thinness, 3.0) * (0.30 + 0.95 * shell));
   // NOTE on the constant-free grazing weight: thinness alone cannot tell a
   // fringe hair over sky from an outer shell over dense coat — both have the
   // same low PER-SHELL alpha. With a 0.06 interior floor, every one of the
@@ -601,10 +633,12 @@ void main(){
 
   vRoot = position;
   vAxis = hdir;
+  vShellMod = vec2(uRegionC[ri].z > 0.0 ? uRegionC[ri].z : 1.0,
+                   uRegionC[ri].w > 0.0 ? uRegionC[ri].w : 1.0);
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
-  vP0   = vec4(t, rb.z, aFurAO, ra.x);
+  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask(position));
   vP1   = vec4(rb.x, rb.y, ra.w, L);
 
   vec4 mvPosition = viewMatrix * wp;
@@ -687,7 +721,7 @@ ${isShell ? /* glsl */ `
   vec3 site = vRoot;
   vec4 hair = vec4(1.0, 0.45, hash13(vRoot * 131.7), 1.0);
   if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail,
-                              normalize(vAxis), site);
+                              normalize(vAxis), vShellMod.x, site);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -728,7 +762,8 @@ ${isShell ? /* glsl */ `
 `}
 
   vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint,
-                      ${isShell ? 'deep' : 'false'}, ${isShell ? '1.0 - clamp(alpha, 0.0, 1.0)' : '0.0'});
+                      ${isShell ? 'deep' : 'false'}, ${isShell ? '1.0 - clamp(alpha, 0.0, 1.0)' : '0.0'},
+                      vShellMod.y);
 
 ${isShell ? /* glsl */ `
   // Stochastic cut-out. The threshold is hashed in OBJECT space, so it is
@@ -852,16 +887,17 @@ void main(){
   // thrown away downstream, which is why the flank (7.5 px hairs) broke up
   // beautifully while the ears stayed a hard mesh curve. The floor keeps thin-
   // coat regions above the clamp's reach; thick-coat regions never hit it.
-  float w = uCardWidth * clamp(furLength * uCoatScale, 0.014, 0.06)
+  float w = uCardWidth * clamp(furLength * uCoatScale, 0.0045, 0.06)
           * (0.55 + 0.9 * rnd) * pow(max(1.0 - v, 0.0), 0.5);
   wp.xyz += B * (side * w);
 
   vRoot = position;
   vAxis = hdir;
+  vShellMod = vec2(1.0, uRegionC[ri].w > 0.0 ? uRegionC[ri].w : 1.0);
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
-  vP0   = vec4(v, rb.z, aFurAO, ra.x);
+  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask(position));
   vP1   = vec4(rb.x, rb.y, ra.w, L);
   vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));
@@ -954,7 +990,7 @@ void main(){
   float ao = (1.0 - vP0.z * uAOBake) *
              mix(uAOInner + 0.3, 1.05, pow(clamp(v, 0.0, 1.0), uAOPow * 0.6));
   vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0),
-                      false, 1.0 - clamp(a, 0.0, 1.0) * 0.55);
+                      false, 1.0 - clamp(a, 0.0, 1.0) * 0.55, vShellMod.y);
 
   gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
   #include <tonemapping_fragment>

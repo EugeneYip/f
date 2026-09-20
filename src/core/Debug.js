@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applyAdaptiveFov } from './App.js';
+import { applyAdaptiveFov, REF_ASPECT } from './App.js';
 
 /**
  * The review harness contract.
@@ -48,6 +48,14 @@ export const POSES = {
 
   // Elevated. Terrain shading, sastrugi structure, aerial perspective.
   terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70 },
+
+  // Same framing as `hero`, shot on a long lens instead of a wide one.
+  // `hero` at fov 40 from 1.17 m is a 33 mm equivalent — wide enough to
+  // enlarge the muzzle and shrink the ears, which is exactly the kind of
+  // distortion that skews a proportion read. §9 asks for 50–85 mm. This pose
+  // holds subject size constant (camera pulled back to 2.47 m, fov 19.5) so
+  // the ONLY variable is perspective compression.
+  hero_long:   { pos: [1.803, 0.457, 1.787], target: [0.100, 0.190, 0.020], fov: 19.5, focus: 2.47 },
 
   // Behind and above the head: ruff depth and ear interior.
   nape:        { anchor: 'head', dir: [-0.419, 0.449, -0.789], dist: 0.55, fov: 34 },
@@ -102,8 +110,26 @@ function resolvePose(pose, ctx) {
   if (pose.offset) t.add(new THREE.Vector3().fromArray(pose.offset));
 
   const dir = new THREE.Vector3().fromArray(pose.dir).normalize();
-  const pos = t.clone().addScaledVector(dir, pose.dist);
-  return { pos: pos.toArray(), target: t.toArray(), fov: pose.fov, focus: pose.focus ?? pose.dist };
+
+  // On a narrow viewport, DOLLY BACK rather than widen the lens.
+  //
+  // The interactive rig holds horizontal field constant by widening the
+  // vertical fov, which is right for exploration -- but at 390x844 that means
+  // a 103 degree vertical, roughly a 13 mm ultra-wide, and authored poses are
+  // compositions with a deliberate lens character. Pulling back instead keeps
+  // the authored fov (and therefore the perspective compression) while
+  // covering the same horizontal extent of subject.
+  const aspect = ctx.camera.aspect || (16 / 10);
+  let dist = pose.dist;
+  if (pose.fov && aspect < REF_ASPECT) {
+    const halfV = (pose.fov * Math.PI / 180) / 2;
+    const hRef = Math.atan(Math.tan(halfV) * REF_ASPECT);
+    const hNow = Math.atan(Math.tan(halfV) * aspect);
+    dist = pose.dist * (Math.tan(hRef) / Math.max(Math.tan(hNow), 1e-4));
+  }
+
+  const pos = t.clone().addScaledVector(dir, dist);
+  return { pos: pos.toArray(), target: t.toArray(), fov: pose.fov, focus: pose.focus ?? dist };
 }
 
 export class Debug {
