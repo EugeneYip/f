@@ -73,7 +73,7 @@ export const CARD_INNER_FLOOR = {
  * the lower legs.
  */
 export const SHELL_LEN_SCALE = {
-  1: 0.55, 2: 0.60, 4: 0.50, 5: 0.50, 6: 0.45, 7: 0.50,   // muzzle..ears
+  1: 0.90, 2: 0.92, 4: 0.88, 5: 0.88, 6: 0.80, 7: 0.85,   // muzzle..ears
   18: 0.75, 19: 0.70, 20: 0.60, 21: 0.75, 22: 0.70, 23: 0.60,
 };
 
@@ -219,7 +219,8 @@ export function buildFurUniforms(ctx) {
 
     uEyeL: { value: new THREE.Vector3(-0.027, 0.318, 0.222) },
     uEyeR: { value: new THREE.Vector3(0.027, 0.318, 0.222) },
-    uEyeFade: { value: new THREE.Vector2(0.0092, 0.0190) },
+    // uEyeFade.x = base bare radius (m); .y = extra radius per metre of local coat
+    uEyeFade: { value: new THREE.Vector2(0.0098, 0.85) },
     uNose: { value: new THREE.Vector3(0.001, 0.293, 0.274) },
     uNoseFade: { value: new THREE.Vector2(0.0085, 0.0180) },
     uShellCount: { value: 18 },

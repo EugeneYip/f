@@ -195,21 +195,24 @@ const COATLEN_FN = /* glsl */ `
  * (23,26,32) spec, which is very close to the undercoat colour #dcd3c6. The
  * mask has to gate coverage as well as offset.
  */
-float furSkinMask(vec3 p){
-  float de = min(distance(p, uEyeL), distance(p, uEyeR));
-  float eye = smoothstep(uEyeFade.x, uEyeFade.y, de);
+float furSkinMask(vec3 p, float rawCoat){
+  // Clearance around the eye scales with how DEEP the local coat is.
+  //
+  // A fixed radius cannot be right for both ends: 19 mm was needed to stop the
+  // 30 mm cheek ruff burying the eye at portrait, but at the macro framing the
+  // whole view is only 41 mm tall, so that same disc shaved the brow and
+  // muzzle down to bare skin and the face read as porcelain. A 4 mm brow coat
+  // needs almost no clearance; the ruff needs a lot.
+  float r1 = uEyeFade.x + rawCoat * uEyeFade.y;
+  float r0 = r1 * 0.45;
+  float eye = smoothstep(r0, r1, min(distance(p, uEyeL), distance(p, uEyeR)));
   float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
   return eye * nose;
 }
 
 float furCoatLength(vec3 p, float lengthScale){
-  float de = min(distance(p, uEyeL), distance(p, uEyeR));
-  float eye = smoothstep(uEyeFade.x, uEyeFade.y, de);
-  // The nose pad is bare wet skin. Region 0 already has zero density, but the
-  // muzzle shells around it interpolate straight over the pad and bury it
-  // under pale fur, which turns a black nose into a blue jellybean.
-  float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
-  return furLength * uCoatScale * lengthScale * eye * nose;
+  float raw = furLength * uCoatScale * lengthScale;
+  return raw * furSkinMask(p, raw);
 }
 `;
 
@@ -396,8 +399,11 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // read as opaque out to t ~ 0.55 — and it ignores hairLen entirely. On a
   // thin coat that is the binary step sitting on top of the cards' fringe, so
   // it has to be pulled in by the same per-region scale.
-  float fillDepth = shellFill * hairLenScale;
-  float fill = 1.0 - smoothstep(fillDepth * 0.42, fillDepth * 1.18, t);
+  // hairLenScale shortens the guard hairs so cards own the OUTLINE on thin
+  // coat; it must not touch the undercoat fill, which is what covers the
+  // SURFACE. Scaling the fill too removed the muzzle and brow coat entirely
+  // and left pale porcelain skin at macro range.
+  float fill = 1.0 - smoothstep(shellFill * 0.42, shellFill * 1.18, t);
 
   // ---- the tuft --------------------------------------------------------
   // Each clump is a CONE: wide enough at the root to cover the skin, narrowing
@@ -638,7 +644,7 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
-  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask(position));
+  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask(position, furLength * uCoatScale * ra.y));
   vP1   = vec4(rb.x, rb.y, ra.w, L);
 
   vec4 mvPosition = viewMatrix * wp;
@@ -695,9 +701,19 @@ ${isShell ? /* glsl */ `
   // stair-stepped edges (these were the "texel grid" plates blamed on the
   // cards — they are shells). Smooth trilinear value noise has neither
   // problem, and it fades out once its own cells approach a pixel.
+  // Band-pass the dither by its ON-SCREEN cell size.
+  //
+  // octaveFade alone only kills an octave as it goes sub-pixel, which had the
+  // gating exactly backwards here: at the macro framing the dither cells are
+  // ~38 px and it ran at FULL strength (the pale angular patches over the
+  // muzzle), while at profile the cells are ~2 px and it was faded fully OFF,
+  // which is precisely where it earns its keep breaking shell contours. It is
+  // only useful while its cells are roughly 1.5-8 px.
   float jf = 680.0;
+  float jScale = px * jf;
+  float ditherW = smoothstep(0.09, 0.16, jScale) * (1.0 - smoothstep(0.55, 0.95, jScale));
   float tJ = clamp(t + (vnoise3(vRoot * jf) - 0.5) * uShellJitter
-                       * octaveFade(px, jf) / max(uShellCount, 1.0), 0.0, 1.0);
+                       * ditherW / max(uShellCount, 1.0), 0.0, 1.0);
 
   // Detail fade along the SHELL axis.
   //
@@ -897,7 +913,7 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
-  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask(position));
+  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask(position, furLength * uCoatScale * ra.y));
   vP1   = vec4(rb.x, rb.y, ra.w, L);
   vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));
