@@ -312,3 +312,30 @@ float triDither(vec2 px) {
   return a + b - 1.0;
 }
 `;
+
+/**
+ * Hue-preserving ceiling on an HDR radiance value.
+ *
+ * WHY THIS EXISTS. Every fragment shader in this project ends with
+ * `#include <colorspace_fragment>`, which expands to `linearToOutputTexel()`.
+ * That macro clamps and sRGB-encodes when the destination is the CANVAS, and
+ * is the IDENTITY when the destination is a linear half-float render target.
+ * So anything authored above 1.0 looks fine while you are tuning against the
+ * canvas path and is completely unbounded in the real post-processing
+ * pipeline.
+ *
+ * The breath plume was tuned that way and reached ~20 linear, compositing
+ * over a 0.008-linear nose pad and erasing it; the snow particles reached
+ * ~28 and bloomed into what read as dirt on the lens. Neither is a light
+ * source -- both are small volumes of scattering material, and their radiance
+ * cannot exceed what is illuminating them.
+ *
+ * Scales rather than clamping per channel, so bounding a value cannot shift
+ * its hue toward whichever channel saturates last.
+ */
+export const HDR_CLAMP = /* glsl */ `
+vec3 clampRadiance(vec3 c, float maxR) {
+  float m = max(max(c.r, c.g), c.b);
+  return c * min(1.0, maxR / max(m, 1e-5));
+}
+`;

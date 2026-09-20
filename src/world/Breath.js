@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { rng, clamp, TAU } from '../util/math.js';
 import { HASH, SIMPLEX3 } from '../shaders/noise.glsl.js';
+import { HDR_CLAMP } from '../shaders/sky.glsl.js';
 
 /**
  * Condensation puffs from the fox's nose.
@@ -102,14 +103,19 @@ export class Breath {
       // visible breath at all, so this errs hard toward subtlety: a faint
       // wisp, never a feature. At 0.5 it was an opaque cotton ball; at 0.21
       // it still veiled the whole face in `portrait`.
-      uDensity: { value: 0.075 },
+      uDensity: { value: 0.05 },
+      uMaxRadiance: { value: 0.60 },
       // Per-blob near fade. `portrait` frames the head from 0.55 m and
       // `macro_eye` from 0.13 m, where the camera is effectively INSIDE the
       // plume -- a puff sized to read at 2 m covers the entire face there.
       // Fading each blob by its own distance to the camera is the same
       // treatment the snow near-layer already gets, and it is physically what
       // happens: you cannot see a haze you are standing in.
-      uNear: { value: new THREE.Vector2(0.40, 1.50) },
+      // Pushed well out. The reference photographs show no visible breath
+      // at all, and a translucent veil in front of a near-black nose pad
+      // lifts it no matter how faint it is -- so at any framing where the
+      // face is legible, the honest amount of breath is none.
+      uNear: { value: new THREE.Vector2(1.90, 4.50) },
       uWindDir: { value: new THREE.Vector3(1, 0, 0) },
       uShear: { value: 0.55 },
     };
@@ -184,12 +190,13 @@ export class Breath {
       fragmentShader: /* glsl */ `
         precision highp float;
         uniform vec3 uCamPos, uSunDir, uSunColor, uSkyColor, uBounce;
-        uniform float uDensity;
+        uniform float uDensity, uMaxRadiance;
         varying vec2 vUv;
         varying float vAge, vFade, vSeed, vRot;
         varying vec3 vWorld;
         ${HASH}
         ${SIMPLEX3}
+        ${HDR_CLAMP}
 
         void main() {
           if (vFade <= 0.002) discard;
@@ -214,8 +221,12 @@ export class Breath {
           // between you and a low sun is a bright little cloud.
           vec3 V = normalize(vWorld - uCamPos);
           float fwd = max(dot(V, uSunDir), 0.0);
-          float phase = 0.10 + 0.55 * pow(fwd, 2.5) + 2.2 * pow(fwd, 11.0);
+          // uSunColor is sunColor * sunIntensity, i.e. ~7 linear. A phase term
+          // peaking at 2.85 therefore peaked at ~20 linear -- brighter than the
+          // sun disc -- which is meaningless for a puff of condensation.
+          float phase = 0.10 + 0.55 * pow(fwd, 2.5) + 0.7 * pow(fwd, 11.0);
           vec3 col = uSunColor * phase + uSkyColor * 0.42 + uBounce * 0.22;
+          col = clampRadiance(col, uMaxRadiance);
 
           gl_FragColor = vec4(col, a);
           #include <tonemapping_fragment>

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { rng, gauss, clamp, lerp, fbm1, TAU } from '../util/math.js';
-import { ATMO_PARS, SKY_SAMPLE } from '../shaders/sky.glsl.js';
+import { ATMO_PARS, SKY_SAMPLE, HDR_CLAMP } from '../shaders/sky.glsl.js';
 
 /**
  * High-altitude emissive curtains, plus the star field they hang in.
@@ -191,6 +191,7 @@ export class Aurora {
       uIntensity: { value: 0 },
       uArcRot: { value: new THREE.Vector2(Math.cos(th), Math.sin(th)) },
       uSFreq: { value: 0.0013 },
+      uMaxRadiance: { value: 1.1 },
       uShear: { value: 0.016 },
       // Across-arc distances in km. These set the ELEVATION each curtain
       // appears at: atan(90 / |z|). -110/-200/-340 puts them at roughly
@@ -232,13 +233,14 @@ export class Aurora {
         precision highp float;
         uniform sampler2D uCurtain;
         uniform vec3 uSunDir;
-        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uJitter, uPxAngle;
+        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uJitter, uPxAngle, uMaxRadiance;
         uniform vec2 uArcRot, uFoldPos, uFoldW, uInvFoldW2;
         uniform vec3 uBandZ, uBandThick, uBandAmp, uInvThick2;
         uniform vec3 uColLow, uColMid, uColHigh, uColTop;
         varying vec3 vDir;
         ${ATMO_PARS}
         ${SKY_SAMPLE}
+        ${HDR_CLAMP}
 
         const float AUR_H0 = 90.0;
         const float AUR_H1 = 150.0;
@@ -367,7 +369,8 @@ export class Aurora {
           col = mix(col, uColHigh, smoothstep(0.42, 0.88, vv));
           col = mix(col, uColTop, smoothstep(0.86, 1.0, vv) * 0.6);
 
-          vec3 acc = col * (accD * dt * uScale * uIntensity * atten);
+          // Additive into the same HDR target; bounded for the same reason.
+          vec3 acc = clampRadiance(col * (accD * dt * uScale * uIntensity * atten), uMaxRadiance);
           gl_FragColor = vec4(max(acc, 0.0), 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>

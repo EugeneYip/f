@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { rng, clamp, fbm1 } from '../util/math.js';
 import { HASH, SIMPLEX3, CURL3 } from '../shaders/noise.glsl.js';
+import { HDR_CLAMP } from '../shaders/sky.glsl.js';
 
 /**
  * Airborne snow, in four GPU-advected layers.
@@ -192,6 +193,7 @@ export class SnowParticles {
         uDepthTex: { value: null },
         uCamPlanes: { value: new THREE.Vector2(0.05, 900) },
         uSoftRange: { value: 0.45 },
+        uMaxRadiance: { value: 2.2 },
         uResolution: { value: new THREE.Vector2(1, 1) },
       },
       vertexShader: /* glsl */ `
@@ -273,12 +275,13 @@ export class SnowParticles {
       fragmentShader: /* glsl */ `
         precision highp float;
         uniform vec3 uCamPos, uSunDir, uSunColor, uSkyColor, uBounce;
-        uniform float uScatter, uSoftRange;
+        uniform float uScatter, uSoftRange, uMaxRadiance;
         uniform sampler2D uDepthTex;
         uniform vec2 uCamPlanes, uResolution;
         varying vec2 vUv;
         varying float vRot, vOpacity;
         varying vec3 vWorld;
+        ${HDR_CLAMP}
 
         void main() {
           if (vOpacity <= 0.001) discard;
@@ -301,8 +304,13 @@ export class SnowParticles {
           // Snow crystals forward-scatter hard, so a flake between the camera
           // and the sun lights up far brighter than one beside it.
           float fwd = max(dot(V, uSunDir), 0.0);
-          float phase = 0.085 + 0.50 * pow(fwd, 3.0) + 2.9 * pow(fwd, 14.0);
+          // Same trap as the breath plume: a 2.9 peak against a ~7 linear sun
+          // reached ~28, which bloomed into what read as dirt on the lens. Ice
+          // crystals do glint, so the ceiling here is higher than the breath's
+          // -- but it is a ceiling.
+          float phase = 0.085 + 0.50 * pow(fwd, 3.0) + 0.9 * pow(fwd, 14.0);
           vec3 col = uSunColor * phase * uScatter + uSkyColor * 0.30 + uBounce * 0.18;
+          col = clampRadiance(col, uMaxRadiance);
 
           #if SOFT_DEPTH
             vec2 suv = gl_FragCoord.xy / uResolution;
