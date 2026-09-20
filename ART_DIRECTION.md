@@ -277,3 +277,43 @@ tapering muzzle, no visible bone structure through the coat.
 **Do not trade the §4c fox wedge for this.** The muzzle must still taper to a
 defined point and the ears must still be tapering triangles. Smooth the
 *surface*, keep the *proportions*.
+
+## 4e. The head seen FRONT-ON
+
+**Why this section exists.** Contributors have never seen the client's
+reference photographs — they work from these written descriptions. §4b's error
+(conflating *short* with *blunt*, which produced a bear) happened precisely
+because a description stood in for an image. Anatomy then reported it had been
+inferring the skull's cross-sectional roundness and the true cheek-flare width
+from profile and 3/4 views alone, and that *"that inference is exactly where
+the last three head rounds went wrong."*
+
+So: a front-on description, as precise as I can make it from the reference.
+
+### Proportions, head-on
+- The head is **roughly as wide as it is tall** — crown to chin ≈ cheek to
+  cheek, measured over the fur. It is not a narrow skull with fur added.
+- **The widest point of the whole animal's head is the cheek ruff**, and it
+  sits at **about eye level or slightly below** — not at the cranium, and not
+  at the jaw.
+- The cheek flare extends **well outside the ear bases**. Looking front-on you
+  see cheek fur beyond the ears on both sides.
+- The muzzle is **narrow — roughly a third of the cheek width** — and emerges
+  from the centre of that mass. The overall face shape is a **soft inverted
+  triangle**: broad across the cheeks, tapering to a small dark nose.
+
+### Surface, head-on
+- **There is no visible cheekbone, jaw angle or zygomatic arch.** The outline
+  from ear to cheek to chin is one continuous convex curve of fur.
+- The cranium in cross-section is **round**, not a flattened dome. Seen
+  head-on the top of the skull is an arc, and it continues smoothly into the
+  cheek without a corner.
+- Eyes are **wide-set** — roughly a third of the face width in from each side —
+  and set forward, not on the sides of the head.
+- Ears sit on the **outer upper corners** of that arc, leaning slightly
+  outward, with their bases buried in fur.
+
+### The test
+If a front-on render shows a distinct skull width and a separate, wider fur
+width — i.e. you can see where the bone stops and the coat starts — it is
+wrong. On the real animal those read as **one continuous mass**.
