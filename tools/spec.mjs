@@ -287,12 +287,38 @@ const results = await page.evaluate(async () => {
     root.visible = was;
 
     const W = g.w, H = g.h;
-    const mask = new Uint8Array(W * H);
-    for (let i = 0, px = 0; i < fg.length; i += 4, px++) {
-      const d = Math.abs(fg[i] - bg[i]) + Math.abs(fg[i + 1] - bg[i + 1]) + Math.abs(fg[i + 2] - bg[i + 2]);
-      mask[px] = d > 18 ? 1 : 0;
+
+    // Differencing alone is NOT a silhouette. Hiding the fox also removes its
+    // CAST SHADOW from the snow and changes bloom across the sky, and both
+    // exceed any sensible threshold -- so the naive mask claimed rows over the
+    // whole frame. Found by the fur agent while replicating the check.
+    //
+    // Restrict to the animal's projected bounding box, built from its own rig
+    // anchors, so shadow and sky changes fall outside it.
+    let bx0 = W, by0 = H, bx1 = 0, by1 = 0, any = false;
+    for (const key of Object.keys(ctx.fox?.anchors ?? {})) {
+      const p2 = project(key);
+      if (!p2) continue;
+      any = true;
+      if (p2.x < bx0) bx0 = p2.x; if (p2.x > bx1) bx1 = p2.x;
+      if (p2.y < by0) by0 = p2.y; if (p2.y > by1) by1 = p2.y;
     }
-    return { W, H, fg, bg, mask };
+    if (!any) { bx0 = 0; by0 = 0; bx1 = W; by1 = H; }
+    // Anchors sit on bone centres, so pad generously for the coat.
+    const padX = (bx1 - bx0) * 0.30 + 24, padY = (by1 - by0) * 0.30 + 24;
+    bx0 = Math.max(0, bx0 - padX); bx1 = Math.min(W - 1, bx1 + padX);
+    by0 = Math.max(0, by0 - padY); by1 = Math.min(H - 1, by1 + padY);
+
+    const mask = new Uint8Array(W * H);
+    for (let y = Math.round(by0); y <= Math.round(by1); y++) {
+      for (let x = Math.round(bx0); x <= Math.round(bx1); x++) {
+        const px = y * W + x, i = px * 4;
+        const d = Math.abs(fg[i] - bg[i]) + Math.abs(fg[i + 1] - bg[i + 1]) +
+                  Math.abs(fg[i + 2] - bg[i + 2]);
+        mask[px] = d > 25 ? 1 : 0;
+      }
+    }
+    return { W, H, fg, bg, mask, bbox: [bx0, by0, bx1, by1] };
   }
 
   const lumAt = (fg, px) => (fg[px * 4] + fg[px * 4 + 1] + fg[px * 4 + 2]) / 3;

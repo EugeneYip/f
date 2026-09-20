@@ -735,7 +735,13 @@ ${isShell ? /* glsl */ `
   // temporally stable with or without TAA; interleaved-gradient screen noise is
   // blended in only when a TAA resolve is actually running.
   if (uStochastic > 0.001){
-    float d = mix(hash13(site * 91.7 + t * 3.1),
+    // BOTH terms must vary per accumulated sample. The object-space hash is
+    // what keeps the dither stable when nothing is resolving it, but while TAA
+    // is accumulating a term that never changes contributes no new coverage
+    // estimate — the resolve just re-averages the same pattern and converges
+    // on the mesh edge. Offsetting both by the sample index turns N samples
+    // into N independent estimates of the same partial coverage.
+    float d = mix(hash13(site * 91.7 + t * 3.1 + uFrameSeed * 7.77),
                   ign(gl_FragCoord.xy + uFrameSeed * 5.588238), uStochastic);
     if (alpha < d * 0.92) discard;
     alpha = min(1.0, alpha + 0.55 * uStochastic);

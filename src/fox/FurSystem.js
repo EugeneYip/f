@@ -113,6 +113,20 @@ export class FurSystem {
     fox.root.add(this.shellMesh);
     this.shellMesh.bind(fox.skeleton, fox.skinnedMesh.bindMatrix);
 
+    // Decorrelate the stochastic dither ACROSS TAA SAMPLES.
+    //
+    // A dither that is identical on every accumulated sample carries no new
+    // coverage information, so the resolve has nothing to integrate and
+    // converges onto the underlying mesh edge — which is exactly the crisp
+    // hard triangle the head silhouette was showing. This has to happen per
+    // DRAW, not per update(): during accumulation the harness calls render()
+    // repeatedly without stepping, so ctx.frame is constant and only the TAA
+    // sample index advances.
+    this.shellMesh.onBeforeRender = () => {
+      const i = ctx.postfx?.taaSampleIndex;
+      this.uniforms.uFrameSeed.value = (i != null ? i : ctx.frame) % 64;
+    };
+
     // ----------------------------------------------------------- cards ---
     this.cardMaterial = makeCardMaterial(this.uniforms);
     this._buildCards(ctx);

@@ -332,5 +332,9 @@ export function syncFurUniforms(u, ctx) {
   const gust = ctx.windGust ?? 0;
   u.uWindSpeed.value = (ctx.windSpeed ?? 2.4) * (1 + 1.4 * gust);
   u.uWindGust.value = gust;
-  u.uFrameSeed.value = ctx.frame % 64;
+  // NOTE: the authoritative per-sample seed is written in FurSystem's
+  // onBeforeRender from ctx.postfx.taaSampleIndex — update() runs once per
+  // step, which is too coarse while TAA is accumulating. This is the fallback
+  // for when there is no postfx chain at all.
+  u.uFrameSeed.value = (ctx.postfx?.taaSampleIndex ?? ctx.frame) % 64;
 }
