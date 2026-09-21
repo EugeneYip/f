@@ -192,3 +192,77 @@ Aurora curtain structure. Compositional balance. Whether the ears read as a fox
 or a rabbit — a distinction the client made instantly and no metric here would
 have caught. Gates make review cheaper by removing arithmetic from it; they do
 not remove the need for someone with taste to look.
+
+---
+
+## 8. Addendum: one more session of evidence, and it moves the answer
+
+Written after a session that produced eleven substantive fixes across five
+owners. It changes §4's conclusion about where the waste is, because the waste
+turned out to be more concentrated than §4 estimated.
+
+### The instrument tax dominates, and it is measurable
+
+Of the eleven defects resolved this session, **seven were defects in the
+measuring apparatus rather than in the product**:
+
+| defect | what it actually was |
+|---|---|
+| "the animal's interior is visible" | depth of field; the coat never wrote depth, so DoF resolved coat fringe as the snow behind it |
+| "the fur macro gate fails" | the gate's eye-radius estimator, twice — a ring quorum that marched past the eye, then a threshold sitting inside the noise |
+| "the nose is too bright at profile" | the probe sampling coat around a pad that stands 5.8 mm proud of its anchor |
+| "the eye loses chroma through post" | four animation systems keeping private clocks, so the harness's time rewind moved `ctx.time` and nothing else |
+| "the silhouette is hard" (gate reading) | the gate measured post, normalised by a shadowed interior, and used a metric blind to resolved hair |
+| "fur is not the cause" (any A/B using `nofur`) | the variant referenced a property that never existed and rendered `base` twice |
+| "§8b: overshoot must stay under 18%" | measured without a no-step control; the spring overshoots 0.007% |
+
+The product defects — coat depth in the wrong place, a round-cone ear with a
+straight silhouette, a concha carved by a sphere wider than the pinna, a human
+cornea-to-globe ratio on a fox — took far less effort to fix than to find,
+because finding them meant first establishing that the instrument pointing
+elsewhere was wrong.
+
+**So the single highest-leverage intervention is not a faster model, a better
+prompt or more parallelism. It is requiring a positive control before a gate
+is allowed to assert.** Every gate that has ever been wrong here was wrong in
+the same way: it had never been shown to fail on something known-bad. A gate
+with a control in the same frame costs one extra render — call it 4% of a
+spec run — and would have prevented five of the seven rows above.
+
+### What parallel agents are genuinely good at
+
+The pattern that produced every real find this session: **give the agent the
+symptom and the evidence, label your own diagnosis explicitly as a hypothesis,
+and tell it that disproving you is a success.** Agents did disprove the
+handed-down diagnosis eleven times across the project and were right every
+time. The two largest finds of this session — depth of field, and the human
+cornea ratio — both came from an agent refusing the brief it was given.
+
+The inverse also held, exactly once and expensively: an agent given a bad gate
+and no licence to question it cleared the gate by cutting art-bible snow
+sparkle 71%.
+
+### Revised estimate
+
+§5(a)'s "~1% for a marginal defect" stands, but §4's implied route to it was
+wrong. Getting there is not mostly about cheaper models or tighter loops. On
+this evidence it is roughly:
+
+- **60% instrument discipline** — positive controls, feature-seeking probes,
+  one simulation instant per comparison, no private clocks. Mechanical, and
+  now written into `AGENTS.md` so each wave does not rediscover it.
+- **25% not re-deriving settled facts** — the art bible carried a "short blunt
+  muzzle" line for months after §4c superseded it, and `REVIEW.md` was still
+  handing it to critics this session.
+- **15% everything else**, including model tiering, which §3 already showed is
+  a small effect next to these.
+
+### One cost that is irreducible and was underestimated
+
+Session usage limits killed two complete waves of agents mid-flight. The
+mitigation that worked was not avoidance but **salvage**: instruct every agent
+to commit incrementally, then have the orchestrator recover and land unfinished
+work on their behalf. Three agents' final edits survived that way this session,
+including a shader change that completed a uniform committed an hour earlier.
+Agents that were told to commit as they went lost minutes; the first wave,
+which was not, lost everything.
