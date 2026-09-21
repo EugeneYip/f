@@ -278,6 +278,61 @@ export const EYE = {
 };
 
 /**
+ * ## §4g — the rostrum's LENGTH, as one parameter
+ *
+ * The head is the right SIZE and the wrong DIVISION. Measured on the built
+ * field (nose tip to the caudal pole of a head-only field; the divider is the
+ * anterior orbit, i.e. where the optical axis leaves the skin — the same
+ * landmark the 0.62:1 reading in §4g was taken with):
+ *
+ *     nose tip -> occiput 122.4 mm   rostrum 47.9 (39.1 %)   braincase 74.5
+ *
+ * against a real *Vulpes lagopus* CBL of 121.3 mm with a 74.1 mm rostrum
+ * (Nanova & Prôa 2017, n=43, REFERENCE-FOX.md §3a). Total length is right to
+ * 1 mm; the split is inverted.
+ *
+ * `stretch` scales every rostral feature's distance from `pivot` **along the
+ * rostral axis only**. Radii are not touched by it, which is the point:
+ * §4c's 1.4–1.6:1 figure is the muzzle cone's `ra:rb` WIDTH taper, a
+ * different axis, and conflating the two is the §4b error that produced the
+ * bear. Anything at or behind the pivot is untouched, so the stop, the brow,
+ * the orbit, the cheek and the cranium do not move.
+ *
+ * `occipitalTuck` moves the occipital pole forward, in authored metres. A
+ * pure forward stretch grows the total as fast as it grows the rostrum, so
+ * the fraction converges slowly and the head runs long: reaching 55 % on
+ * `stretch` alone needs +43 mm of nose and a 166 mm head, which is a red
+ * fox. The tuck buys the fraction from the other end, where the coat hides
+ * the change.
+ *
+ * MEASURE, DO NOT DERIVE: `t` below is an authored-space projection but the
+ * rostrum is measured on the blended skin, so a given `stretch` does not move
+ * the nose tip by a predictable amount. The step table lives in the commit
+ * messages and in ART_DIRECTION §4g's increments.
+ */
+export const ROSTRUM = {
+  /** Authored skull-space pivot — the muzzle cone's root, i.e. the stop. */
+  pivot: [0, 0.3020, 0.2255],
+  /** Unit rostral axis in authored space: muzzle root -> nose-pad centre. */
+  axis: [0, -0.26312, 0.96477],
+  stretch: 1.15,
+  occipitalTuck: 0.0000,
+};
+
+/**
+ * Stretch an authored skull-space point along the rostral axis. Points at or
+ * behind the pivot come back unchanged, so this can be applied to any head
+ * primitive without a per-primitive opt-in list drifting out of date.
+ */
+export function rostral(p) {
+  const o = ROSTRUM.pivot, d = ROSTRUM.axis;
+  const t = (p[0] - o[0]) * d[0] + (p[1] - o[1]) * d[1] + (p[2] - o[2]) * d[2];
+  if (t <= 0) return p;
+  const e = t * (ROSTRUM.stretch - 1);
+  return [p[0] + d[0] * e, p[1] + d[1] * e, p[2] + d[2] * e];
+}
+
+/**
  * The cranium, as one place both the primitives and the region test read.
  *
  * `region` on a vertex is "whose primitive is nearest", and on the top of the
@@ -306,6 +361,15 @@ export const EYE = {
 export const CRANIUM = {
   braincase: { c: skullXf([0, 0.3140, 0.1985]), r: sr(0.0216), s: [0.900, 0.880, 0.96] },
   occiput:   { c: skullXf([0, 0.3040, 0.1790]), r: sr(0.0205), s: [0.900, 0.880, 0.78] },
+  /**
+   * Re-derive from `ROSTRUM`. `contains()` runs once per vertex, so the tuck
+   * is baked rather than read through a getter; `buildField` calls this first
+   * so a probe that mutates `ROSTRUM` between builds sees the new pole.
+   */
+  refresh() {
+    this.occiput.c = skullXf([0, 0.3040, 0.1790 + ROSTRUM.occipitalTuck]);
+    return this;
+  },
   /**
    * Multiple of the primitive radius the test reaches to. The blended skin
    * stands ~30 mm off the braincase centre where the primitive's own surface
@@ -691,6 +755,7 @@ function resampleChain(pts, sub, nInterp) {
  * @returns {{field: Field, eyes: {L: object, R: object}}}
  */
 export function buildField() {
+  CRANIUM.refresh();
   const f = new Field();
   const L = LANDMARKS;
 
@@ -765,10 +830,40 @@ export function buildField() {
   // Short and BLUNT: 2:1 taper read as a point once fur was on it, so the
   // muzzle now barely narrows and stops well short of the old nose position.
   f.add({
-    name: 'muzzle', a: H([0, 0.3020, 0.2255]), b: H([0, 0.2952, 0.2380]),
+    name: 'muzzle', a: H(ROSTRUM.pivot), b: H(rostral([0, 0.2952, 0.2380])),
     ra: sr(0.0225), rb: sr(0.0131),
     squash: [1.0, 0.92, 1.0], k: 0.018, ...furOf(R.muzzle),
     flowDir: [0, 0.05, -1], flowRadial: 0.34, tint: TINT_FUR,
+  });
+  /**
+   * ## The distal half of the rostrum was a smin FILLET, not geometry
+   *
+   * Measured on the sagittal midline at `stretch = 1`: the muzzle cone and
+   * the mandible both end at z = 221 mm and the nose pad sits at z = 245, so
+   * everything from u = 0.33 of the rostrum forward was a 24 mm smooth-min
+   * bridge between a cone tip and a 21 mm sphere. Widths at fixed fractions
+   * of the rostrum, with only the layout stretched:
+   *
+   *     u =        0    .15    .30    .45    .60    .75    .90
+   *     s = 1.0  95.0   87.5   76.2   59.0   34.8   25.7   20.7
+   *     s = 1.6  94.9   82.8   62.9   38.5   19.5    3.7   21.0   <- necked
+   *
+   * A fillet's scale is `k`, which is absolute, so stretching the layout
+   * pulls the bridge apart while the proximal cone (which does preserve its
+   * widths at fixed fractions, being a true cone) holds. At s = 1.6 the
+   * rostrum necks to 3.7 mm and the pad becomes a knob on a thread; Fox.js's
+   * nose-anchor raycast lands on the thread and the anchor z collapses
+   * 276 -> 251.
+   *
+   * So the rostrum gets an actual shaft. `ra` is the muzzle's own `rb`, so
+   * the two cones are continuous and no width changes at s = 1; §4g's
+   * length change stays a length change.
+   */
+  f.add({
+    name: 'nasal', a: H(rostral([0, 0.2952, 0.2380])), b: H(rostral([0, 0.29138, 0.2520])),
+    ra: sr(0.0110), rb: sr(0.0072),
+    squash: [1.0, 0.92, 1.0], k: 0.0095, ...furOf(R.muzzle),
+    flowDir: [0, 0.02, -1], flowRadial: 0.34, tint: TINT_FUR,
   });
   /**
    * ## The nose pad was a 31 mm bare disc standing in for a 13 mm rhinarium
@@ -797,12 +892,12 @@ export function buildField() {
    * reach the muzzle cone behind it without a step.
    */
   f.add({
-    name: 'nosePad', a: H([0, 0.2930, 0.2585]), ra: sr(0.0090),
+    name: 'nosePad', a: H(rostral([0, 0.2930, 0.2585])), ra: sr(0.0090),
     squash: [1.0, 0.86, 0.78], k: 0.009, ...furOf(R.nose),
     flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_SKIN,
   });
   f.add({
-    name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2895, 0.2385]),
+    name: 'mandible', a: H(rostral([0, 0.2925, 0.2205])), b: H(rostral([0, 0.2895, 0.2385])),
     ra: sr(0.0178), rb: sr(0.0110),
     squash: [0.95, 0.86, 1.0], k: 0.021, ...furOf(R.jawLower),
     flowDir: [0, -0.30, -1], flowRadial: 0.35, tint: TINT_FUR,
@@ -817,7 +912,7 @@ export function buildField() {
   // skin edge with ruff fur visible beyond it. §4f.2 keeps the muzzle short —
   // it does not ask for the jaw to be short too.
   f.addMirrored({
-    name: 'whiskerPadR', a: H([0.0158, 0.2948, 0.2288]), ra: sr(0.0080),
+    name: 'whiskerPadR', a: H(rostral([0.0158, 0.2948, 0.2288])), ra: sr(0.0080),
     squash: [0.88, 0.84, 1.05], k: 0.015, ...furOf(R.muzzle),
     flowDir: [0.18, -0.25, -0.95], flowRadial: 0.35, tint: TINT_FUR,
   });

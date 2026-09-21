@@ -1203,6 +1203,7 @@ ${UTIL}
 ${FUR_SHADE}
 
 uniform float uCardInner;
+uniform float uCardTipEdge;    // vEdge exponent at a card's TIP; see below
 uniform float uCardOpacity;
 
 varying vec4  vCard;
@@ -1256,8 +1257,17 @@ void main(){
   // the only part that can ever be over sky.
   float innerFloor = max(uCardInner, vCard.w);
   float tipOut = smoothstep(uCardTip, 1.0, v);
+  //
+  // uCardTipEdge is that softened tip exponent, and it is the one number that
+  // decides how much card is visible over the INTERIOR of the animal. At the
+  // outline vEdge -> 1 and pow(1, anything) == 1, so raising it cannot cost a
+  // single pixel of silhouette; it can only fade the tips that stand over
+  // coat. At 0.60 a tip was 38% opaque on a face-on surface (vEdge ~ 0.2),
+  // which at the nape framing is a field of separate needles off the neck --
+  // hiding the cards there removes every one of them and leaves the shells'
+  // smooth granular surface.
   float edge = mix(innerFloor, 1.0,
-                   pow(clamp(vEdge, 0.0, 1.0), mix(2.6, 0.60, tipOut)));
+                   pow(clamp(vEdge, 0.0, 1.0), mix(2.6, uCardTipEdge, tipOut)));
   a *= edge * uCardOpacity * vP0.w;
   if (a < 0.004) discard;
 

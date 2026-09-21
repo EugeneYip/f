@@ -28,7 +28,7 @@ import * as THREE from 'three';
 import { TAU, clamp, damp, fbm1 } from '../util/math.js';
 import { FoxSkeleton, POSE_PRESETS } from './FoxSkeleton.js';
 import { buildFoxSurface, CELL } from './FoxSurface.js';
-import { REGION, REGION_NAME, LANDMARKS, skullXf } from './FoxAnatomy.js';
+import { REGION, REGION_NAME, LANDMARKS, skullXf, rostral } from './FoxAnatomy.js';
 
 const PAW_ANCHORS = ['pawFL', 'pawFR', 'pawRL', 'pawRR'];
 const PRESS_HZ = 8;                 // stamps per simulated second
@@ -176,7 +176,14 @@ export class Fox {
     // Authored in skull-reference space and mapped, like every other head
     // landmark — hardcoding world coordinates here left the nose anchor
     // stranded 33 mm off the face the moment the skull was repositioned.
-    const noseStart = skullXf([0, 0.2930, 0.2480]);
+    //
+    // Both starts also go through `rostral()` for the same reason one step
+    // further on: §4g lengthens the rostrum, and a fixed start that the jaw
+    // has walked away from stops being inside the solid. Measured at
+    // stretch 1.9 with the start left fixed, the MOUTH raycast returned null
+    // and fell through to its 20 mm guess; the nose raycast survived but had
+    // already been landing on the pad's rear flank rather than its apex.
+    const noseStart = skullXf(rostral([0, 0.2930, 0.2480]));
     const noseDir = [0, -0.14, 0.990];
     const tn = f.raycast(noseStart[0], noseStart[1], noseStart[2], noseDir[0], noseDir[1], noseDir[2], 0.08);
     const noseT = tn > 0 ? tn : 0.030;
@@ -191,7 +198,7 @@ export class Fox {
     mk('eyeR', 'head', this.eyes.R.centre);
 
     // --- mouth: front of the lower lip -------------------------------------
-    const ms = skullXf([0, 0.2900, 0.2330]);
+    const ms = skullXf(rostral([0, 0.2900, 0.2330]));
     const mt = f.raycast(ms[0], ms[1], ms[2], 0, -0.18, 0.984, 0.06);
     mk('mouth', 'jaw', mt > 0
       ? [ms[0], ms[1] - 0.18 * mt, ms[2] + 0.984 * mt]

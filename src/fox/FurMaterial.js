@@ -302,6 +302,17 @@ export const FUR_DEFAULTS = {
   cardWidth: 0.115,
   cardLength: 1.20,
   cardInner: 0.17,
+  /*
+   * vEdge exponent at a card TIP. THE ONE KNOB for how much card stands over
+   * the INTERIOR of the animal, and it is free at the outline: there
+   * vEdge -> 1 and pow(1, anything) == 1, so raising it cannot cost a pixel
+   * of silhouette. At the authored 0.60 a tip was 38% opaque on a face-on
+   * surface (vEdge ~ 0.2), which at the nape framing is a field of separate
+   * needles standing off the neck -- hiding the CARDS removes every one of
+   * them and leaves the shells smooth granular surface, so they are cards.
+   * 1.40 takes that 38% to 10%.
+   */
+  cardTipEdge: 1.40,
   cardJitter: 1.05,
   cardOpacity: 1.0,
   // Fraction of a card's lateral distance to its lock's site taken out by the
@@ -511,6 +522,7 @@ export function buildFurUniforms(ctx) {
     uCardWidth: { value: d.cardWidth },
     uCardLength: { value: d.cardLength },
     uCardInner: { value: d.cardInner },
+    uCardTipEdge: { value: d.cardTipEdge },
     uCardJitter: { value: d.cardJitter },
     uCardClump: { value: d.cardClump },
     uCardOpacity: { value: d.cardOpacity },

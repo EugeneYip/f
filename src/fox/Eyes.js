@@ -109,13 +109,38 @@ const IRIS_R = 0.90;        // iris radius / limbus radius (cornea magnifies it 
 // measured target is a different act from rounding a slit into a circle
 // because circles look cuter.
 //
-// AP_W is capped by the skull, not by this file. The anatomy agent's socket
-// lets the globe out of the skin only ~23 degrees off axis on the NASAL side
-// (37 degrees once Eyes.js seats the globe forward), so a canthus beyond
-// AP_W ~ 0.80 is buried in the muzzle. 0.780 gives a 13.0 mm fissure against
-// the measured 17.3: still short, and short for a reason that belongs to the
-// socket.
-const AP_W = 0.780;         // angular half-width  (canthus to canthus)
+// AP_W IS NO LONGER A NUMBER. It is measured, per eye, off the live socket,
+// because a constant here is what made the anatomy agent's anisotropic eye
+// slot a no-op: they widened the nasal wall from 37.5 to 44.0 degrees and the
+// rendered fissure/cornea did not move off 0.97, because 0.780 was already
+// under BOTH caps. `_measureAperture` now walks each meridian of the seated
+// globe against `fox.field` and reports where the skin closes over it, and
+// the canthi are placed just inside that. When the anatomy changes the socket
+// again, the fissure follows on its own.
+//
+// AND THE SOURCED TARGET IS NOT THE QUANTITY WE COMPUTE. The previous pass
+// compared our `2 R sin(atan(AP_W))` — a CHORD BETWEEN THE CANTHI ACROSS THE
+// GLOBE — against the callipered 17.32 mm palpebral fissure of Cerdocyon
+// thous, and called the 0.97 : 1.28 gap a defect to close. It cannot be
+// closed and it never could: that animal's globe is 15.8-16.3 mm across, so
+// its 17.32 mm fissure EXCEEDS ITS OWN GLOBE DIAMETER. It is a canthus-to-
+// canthus measurement across the FACE, with the lid margins running off the
+// globe and onto the orbital rim at both corners; our lid band rides the
+// globe, so the largest number this file can print is 2R = 22.5 mm at +/-90
+// degrees, and any socket at all caps it far below that. f/c 1.28 is not a
+// target we are failing, it is a different measurement.
+//
+// What the same two sources DO give us, apples to apples, is the ordering:
+// fissure > cornea, i.e. the lid margins clear the LIMBUS horizontally and
+// the cornea is cut only top and bottom. That is a statement about angles on
+// the globe and it transfers. With limbus at asin(limbusR/R) ~ 39.5 degrees,
+// the aperture has to reach past 39.5 on both sides — which the socket can
+// just do (it opens 97.9 degrees in total) but only if the globe is not
+// rotated so far nasally that the fissure cannot stay centred on it. Hence
+// CONVERGE_MAX_OFF below.
+const AP_W_CEIL = 1.10;     // never wider than this, whatever the socket allows
+const AP_W_FLOOR = 0.62;    // ...nor narrower; below this the eye is a slit
+const AP_WALL_MARGIN = 1.5 * Math.PI / 180;  // keep the canthus off the wall
 const AP_UP = 0.477;        // upper margin height at u = 0
 const AP_DN = 0.413;        // lower margin depth  at u = 0
 const AP_TILT = 0.045;      // canthal tilt — outer corner rides higher
@@ -155,8 +180,26 @@ const FIT_MARGIN = 0.97;
 // normal, and only the globe is converged. The lids therefore still fit the
 // skull exactly, and the iris sits slightly nasal inside the fissure — which
 // is precisely what an animal looking at the lens looks like.
+//
+// AND THAT LAST SENTENCE IS THE BLACK O-RING. "Slightly nasal" measured out at
+// 8.83 degrees, which on an R = 11.25 mm globe walks the corneal disc 1.7 mm
+// nasal inside a fissure that is still centred on the ORBITAL axis. The lid
+// then crosses 10.4 degrees INSIDE the limbus nasally and stands 7.3 degrees
+// OUTSIDE it temporally, so one side is margin-on-cornea and the other is a
+// band of bare, doubly-darkened sclera. Measured at `macro_eye`, row 860: 90
+// px of dark nasally against 265 px temporally, on a 535 px iris. The ratio
+// the geometry predicts is 1.49 and the render shows 1.58.
+//
+// The fissure cannot simply follow the globe: it is centred on the orbital
+// axis because that is where the socket's opening is, and the nasal wall is
+// the near one. So the convergence is CLAMPED instead — the globe may rotate
+// only as far nasally as the fissure can still clear the limbus on the side
+// it is rotating away from. That bound is measured, not chosen: see
+// `_apertureFor`. At the socket as it stands the clamp bites at ~3 degrees,
+// which is a third of the 8.83 this constant used to buy.
 const EYE_CONVERGE = 0.30;   // share of the lateral splay taken out
 const EYE_LEVEL = 0.50;      // ...and of the upward tilt
+const CONVERGE_RECESS = 0.5 * Math.PI / 180;  // sclera to leave on the tight side
 
 // How far the lid band sweeps outward over the globe, in radians of arc from
 // its own margin. It has to reach from the aperture edge to wherever the skin
@@ -320,7 +363,7 @@ function buildCornea(Rc, zc, thetaMax, segW, segH) {
  * vertex position is evaluated in the shader from (aU, aS, aLid) so that a
  * blink costs one uniform write and no CPU work at all.
  */
-function buildLids(R, nu, ns, spreadAt) {
+function buildLids(R, apW, nu, ns, spreadAt) {
   const count = 2 * (nu + 1) * (ns + 1);
   const pos = new Float32Array(count * 3);
   const aU = new Float32Array(count);
@@ -336,7 +379,7 @@ function buildLids(R, nu, ns, spreadAt) {
       const s = j / ns;
       for (let i = 0; i <= nu; i++) {
         const u = (i / nu) * 2 - 1;
-        const ax = u * AP_W;
+        const ax = u * apW;
         const ay = (sign > 0 ? AP_UP * Math.pow(Math.max(1 - u * u, 0), 0.58)
           : -AP_DN * Math.pow(Math.max(1 - u * u, 0), 0.72)) + AP_TILT * u;
         const l = Math.hypot(ax, ay, 1) || 1;
@@ -471,21 +514,39 @@ export class Eyes {
     ctx.eyes = this;
     this._syncUniforms(ctx);
     const e = this.eyes[0];
+    const deg = (r) => (r * 180 / Math.PI).toFixed(1);
     console.info(
       `[eyes] globe r ${(e.R * 1000).toFixed(2)} mm · cornea r ${(e.Rc * 1000).toFixed(2)} mm · ` +
       `apex ${(e.apexZ * 1000).toFixed(2)} mm · skin ${(e.skin * 1000).toFixed(2)} mm · ` +
       `coat ${(e.coat * 1000).toFixed(2)} mm · seated ${(e.seat * 1000).toFixed(2)} mm · ` +
       `iris ø ${(2 * e.irisR * 1000).toFixed(1)} mm · cornea ø ${(2 * e.limbusR * 1000).toFixed(1)} mm · ` +
-      // CHORD, not tangent-plane. The margin at u = 1 sits at angle atan(AP_W)
-      // off the optical axis, so its half-width on the globe is
-      // R*sin(atan(AP_W)), not R*AP_W. Reporting the tangent value overstated
+      // CHORD, not tangent-plane. The margin at u = 1 sits at angle
+      // atan(apW) off the optical axis, so its half-width on the globe is
+      // R*sin(atan(apW)), not R*apW. Reporting the tangent value overstated
       // the fissure by 21% and is why it took a measured comparison to notice
       // ours was too narrow.
-      `fissure ${(2 * e.R * chord(AP_W) * 1000).toFixed(1)}x` +
+      //
+      // fissure/cornea is printed because two rounds of notes quote it, but
+      // it is a GLOBE CHORD over a corneal diameter and the sourced 1.28 is
+      // a canthus-to-canthus measurement across the face on an animal whose
+      // fissure is longer than its own globe. They are not the same quantity.
+      // `clears limbus` is the comparison that does transfer.
+      `fissure ${(2 * e.R * chord(e.apW) * 1000).toFixed(1)}x` +
       `${(e.R * (chord(AP_UP) + chord(AP_DN)) * 1000).toFixed(1)} mm ` +
-      `(${(2 * chord(AP_W) / (chord(AP_UP) + chord(AP_DN))).toFixed(2)}:1, ` +
-      `fissure/cornea ${(e.R * chord(AP_W) / e.limbusR).toFixed(2)})`,
+      `(${(2 * chord(e.apW) / (chord(AP_UP) + chord(AP_DN))).toFixed(2)}:1, ` +
+      `fissure/cornea ${(e.R * chord(e.apW) / e.limbusR).toFixed(2)})`,
     );
+    for (const x of this.eyes) {
+      const w = x.win;
+      console.info(
+        `[eyes] ${x.side} socket opens T ${w ? deg(w.temporal) : '--'}° ` +
+        `N ${w ? deg(w.nasal) : '--'}° U ${w ? deg(w.up) : '--'}° D ${w ? deg(w.down) : '--'}° ` +
+        `${w ? '' : '(UNMEASURED — field unavailable, using fallback) '}· ` +
+        `canthi ±${deg(x.apTh)}° (AP_W ${x.apW.toFixed(3)}) · limbus ${deg(x.limbusTh)}° · ` +
+        `clears limbus by ${deg(x.apTh - x.limbusTh)}° · ` +
+        `converge ${deg(x.restYawRaw)}° → ${deg(x.restYaw)}° (max ${deg(x.convMax)}°)`,
+      );
+    }
   }
 
   // ------------------------------------------------------------------ build --
@@ -566,7 +627,7 @@ export class Eyes {
     const conv = new THREE.Vector3(
       look.x * (1 - EYE_CONVERGE), look.y * (1 - EYE_LEVEL), look.z).normalize()
       .applyQuaternion(qField.clone().invert());
-    const restYaw = clamp(Math.atan2(conv.x, Math.max(conv.z, 1e-3)), -0.55, 0.55);
+    const restYawRaw = clamp(Math.atan2(conv.x, Math.max(conv.z, 1e-3)), -0.55, 0.55);
     const restPitch = clamp(Math.asin(clamp(conv.y, -1, 1)), -0.35, 0.35);
 
     // --- seat the eye so the cornea clears the coat ------------------------
@@ -580,6 +641,25 @@ export class Eyes {
     const clear = APEX_CLEARANCE + Math.min(COAT_CLEAR_SHARE * Math.max(coat, 0), COAT_CLEAR_MAX);
     if (meas > 0) seat = clamp(meas + clear - apexZ, MAX_SEAT_PULL, MAX_SEAT_PUSH);
 
+    // --- the palpebral aperture, from the socket rather than from a number --
+    const win = this._measureAperture(fox, meta, R, Rc, zc, k, seat);
+    const limbusTh = Math.asin(clamp(limbusR / R, 0, 1));   // limbus, in radians off axis
+    // The canthi go as far as the NEARER wall allows. The aperture stays
+    // centred on the orbital axis: it is the socket's opening, and rotating it
+    // nasally to chase the converged globe walks it straight into the near
+    // wall and comes out SHORTER (13.5 mm against 15.2 for a 3-degree rotation
+    // — measured, not guessed).
+    const apTh = win
+      ? clamp(Math.min(win.temporal, win.nasal) - AP_WALL_MARGIN,
+        Math.atan(AP_W_FLOOR), Math.atan(AP_W_CEIL))
+      : Math.atan(0.78);
+    const apW = Math.tan(apTh);
+    // ...and the globe may converge only as far as the fissure can follow it.
+    // Past `apTh - limbusTh` the lid margin crosses inside the limbus on the
+    // side the globe is turning away from, which is the black O-ring.
+    const convMax = Math.max(0, apTh - limbusTh - CONVERGE_RECESS);
+    const restYaw = clamp(restYawRaw, -convMax, convMax);
+
     // --- assemble ----------------------------------------------------------
     const root = new THREE.Group();
     root.name = `eye${side}`;
@@ -591,7 +671,7 @@ export class Eyes {
     ball.name = `eyeBall${side}`;
     root.add(ball);
 
-    const u = this._makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR);
+    const u = this._makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW);
 
     const globe = new THREE.Mesh(
       buildGlobe(R, Rc, zc, k, segs.GW, segs.GH),
@@ -612,8 +692,8 @@ export class Eyes {
     cornea.castShadow = false;
     ball.add(cornea);
 
-    const spreadAt = this._lidSpreadSampler(fox, meta, R, seat);
-    const lids = new THREE.Mesh(buildLids(R, segs.LU, segs.LS, spreadAt), this._lidMaterial(u));
+    const spreadAt = this._lidSpreadSampler(fox, meta, R, apW, seat);
+    const lids = new THREE.Mesh(buildLids(R, apW, segs.LU, segs.LS, spreadAt), this._lidMaterial(u));
     lids.name = `eyeLids${side}`;
     lids.castShadow = false;
     lids.receiveShadow = false;
@@ -623,6 +703,7 @@ export class Eyes {
     return {
       side, anchor, root, ball, globe, cornea, lids, u, axis,
       R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat, coat, skin: meas,
+      apW, apTh, limbusTh, win, restYawRaw, convMax,
       restYaw, restPitch,
       blink: 0, gazeYaw: 0, gazePitch: 0,
     };
@@ -641,7 +722,7 @@ export class Eyes {
    * smoothly enough around one socket that more would be wasted raycasts.
    * Falls back to a constant if the SDF is not available.
    */
-  _lidSpreadSampler(fox, meta, R, seat = 0) {
+  _lidSpreadSampler(fox, meta, R, apW, seat = 0) {
     const COLS = 15;
     const f = fox.field;
     const flat = () => LID_SPREAD;
@@ -674,7 +755,7 @@ export class Eyes {
         const lap = 0.022 * smoothstep01(0.78, 1.0, Math.abs(u));
         const ay = sign > 0 ? AP_UP * shp(0.58) + AP_TILT * u - lap
           : -AP_DN * shp(0.72) + AP_TILT * u + lap;
-        const ax = u * AP_W;
+        const ax = u * apW;
         const l = Math.hypot(ax, ay, 1);
         const th0 = Math.acos(clamp(1 / l, -1, 1));
         const rl = Math.hypot(ax, ay) || 1;
@@ -696,6 +777,97 @@ export class Eyes {
       const i = Math.min(COLS - 2, Math.floor(t));
       const row = table[sign > 0 ? 0 : 1];
       return lerp(row[i], row[i + 1], t - i);
+    };
+  }
+
+  /**
+   * How far off the optical axis the socket lets the globe out of the skin,
+   * along the four meridians of the eye's own frame. In radians, from the
+   * SEATED globe centre — which is the frame the lid geometry lives in, and
+   * 1.9 mm forward of `meta.centre`, which is the frame the raycasts start in.
+   *
+   * This is the number that decides the palpebral aperture: a canthus placed
+   * past it is a lid margin buried inside the muzzle. Before this existed the
+   * aperture was a constant, and that is exactly why the anatomy agent's eye
+   * slot — which moved the nasal wall from 37.5 to 44.0 degrees — changed the
+   * render by nothing at all.
+   *
+   * Returns null when the field is unavailable, and the caller then keeps the
+   * fallback width rather than silently inventing one (AGENTS.md: an
+   * unmeasurable probe must be a hard failure, not a quiet default).
+   */
+  _measureAperture(fox, meta, R, Rc, zc, k, seat) {
+    const f = fox.field;
+    if (!f?.raycast || !meta?.centre || !meta?.look) return null;
+
+    // The globe's own surface radius along a direction `theta` off axis,
+    // including the corneal cap — the same profile the lid vertex shader
+    // solves, so the two agree on where the globe actually is.
+    const prof = (rho) => {
+      const zs = Math.sqrt(Math.max(R * R - rho * rho, 0));
+      const ic = Rc * Rc - rho * rho;
+      return ic <= 0 ? zs : smaxK(zs, zc + Math.sqrt(ic), k);
+    };
+    const globeR = (th) => {
+      const dz = Math.max(Math.cos(th), 0.35), dxy = Math.abs(Math.sin(th));
+      let t = R;
+      for (let i = 0; i < 4; i++) t = prof(t * dxy) / dz;
+      return t;
+    };
+
+    // The seated centre, and an orthonormal frame on it. `ex` is eye-local
+    // +X carried into the field's space; `ey` is eye-local +Y.
+    const n = new THREE.Vector3().fromArray(meta.look).normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    const ex = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const ey = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+    const c = [meta.centre[0] + n.x * seat, meta.centre[1] + n.y * seat,
+      meta.centre[2] + n.z * seat];
+    const d = new THREE.Vector3();
+
+    // Skin has closed over the globe along `th` when the surface is further
+    // out than the globe plus a lid thickness.
+    const LID_GAP = 0.0009;
+    const closed = (ax, ay, th) => {
+      const st = Math.sin(th), ct = Math.cos(th);
+      d.set(ex.x * ax * st + ey.x * ay * st + n.x * ct,
+        ex.y * ax * st + ey.y * ay * st + n.y * ct,
+        ex.z * ax * st + ey.z * ay * st + n.z * ct).normalize();
+      const t = f.raycast(c[0] + d.x * 1e-3, c[1] + d.y * 1e-3, c[2] + d.z * 1e-3,
+        d.x, d.y, d.z, 0.09);
+      const hit = t > 0 ? 1e-3 + t : Infinity;
+      return hit >= globeR(th) + LID_GAP;
+    };
+
+    const LIM = 85 * Math.PI / 180;
+    const reach = (ax, ay) => {
+      let lo = 0, hi = -1;
+      for (let deg = 2; deg <= 85; deg += 1) {
+        const th = deg * Math.PI / 180;
+        if (closed(ax, ay, th)) { lo = (deg - 1) * Math.PI / 180; hi = th; break; }
+      }
+      if (hi < 0) return LIM;                      // never closes: no wall there
+      for (let i = 0; i < 18; i++) {
+        const m = 0.5 * (lo + hi);
+        if (closed(ax, ay, m)) hi = m; else lo = m;
+      }
+      return 0.5 * (lo + hi);
+    };
+
+    // TEMPORAL is away from the midline. The skinned mesh is symmetric about
+    // x = 0, so the outward lateral direction is sign(centre.x) — derived, not
+    // a per-side constant, because eye-local +X flips meaning between sides
+    // (setFromUnitVectors picks the minimal rotation and the two `look`
+    // vectors are mirrored).
+    const outward = Math.sign(meta.centre[0]) || 1;
+    const xIsTemporal = Math.sign(ex.x * outward) || 1;
+    const thPosX = reach(1, 0), thNegX = reach(-1, 0);
+    return {
+      temporal: xIsTemporal > 0 ? thPosX : thNegX,
+      nasal: xIsTemporal > 0 ? thNegX : thPosX,
+      up: reach(0, 1),
+      down: reach(0, -1),
+      xIsTemporal,
     };
   }
 
@@ -784,7 +956,7 @@ export class Eyes {
   }
 
   // -------------------------------------------------------------- uniforms --
-  _makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR) {
+  _makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW) {
     return {
       uR: { value: R }, uRc: { value: Rc }, uZc: { value: zc }, uK: { value: k },
       uIrisZ: { value: irisZ }, uIrisR: { value: irisR }, uLimbusR: { value: limbusR },
@@ -824,7 +996,7 @@ export class Eyes {
       uBounceCol: { value: new THREE.Color().copy(ctx.groundBounce) },
       uWorldNrm: { value: new THREE.Matrix3() },
 
-      uApW: { value: AP_W }, uApUp: { value: AP_UP },
+      uApW: { value: apW }, uApUp: { value: AP_UP },
       uApDn: { value: AP_DN }, uApTilt: { value: AP_TILT },
       uBlinkU: { value: 0 }, uBlinkD: { value: 0 },
       uSpread: { value: LID_SPREAD },
