@@ -87,8 +87,15 @@ const MAX_REACH_DROP = 0.080;
  * shoots each pose after another 0.35 s, against camera poses that are
  * absolute world coordinates aimed at the origin. Launching the animal this
  * many seconds "upstream" puts it back on its mark when the shutter opens.
+ *
+ * 2.5 + 0.35 = 2.85, and this constant was 3.05 — so the animal was landing
+ * 0.2 s of travel SHORT of its mark in every moving review shot, which is
+ * 0.14 m at a walk and 0.52 m at the new gallop speed. Harmless at a wide
+ * framing and fatal at `profile`. Note the mark still moves if a reviewer
+ * passes a non-default `--settle`: the offset is (settle + 0.35 − 2.85) ×
+ * the gait speed, so use the default when framing matters.
  */
-const REVIEW_LEAD = 3.05;
+const REVIEW_LEAD = 2.85;
 const STATE_BLEND = 0.55;
 
 const LIMB_SPECS = [
@@ -171,7 +178,7 @@ const STATES = {
     ears: { x: -0.085, y: 0.130, z: -0.035 },
     drop: -0.006, look: 0.45, frontIK: 1, hindIK: 1,
     pose: {
-      neck01: [-13, 0, 0], neck02: [-13.5, 0, 0], head: [5, 0, 0],
+      neck01: [-10.5, 0, 0], neck02: [-10.5, 0, 0], head: [6.5, 0, 0],
       spine01: [-2.2, 0, 0], spine02: [-1.8, 0, 0], spine03: [-1.0, 0, 0],
       chest: [-1.6, 0, 0],
     },
@@ -186,9 +193,9 @@ const STATES = {
     ears: { x: 0.060, y: 0.060, z: -0.140 },
     drop: 0, look: 0.28, frontIK: 1, hindIK: 1,
     pose: {
-      neck01: [10, 0, 0], neck02: [7.5, 0, 0], head: [-9, 0, 0], jaw: [7, 0, 0],
-      spine01: [2.5, 0, 0], spine02: [1.5, 0, 0], spine04: [-2.5, 0, 0],
-      chest: [-3.5, 0, 0], hips: [3.0, 0, 0],
+      neck01: [5.5, 0, 0], neck02: [4.0, 0, 0], head: [-5, 0, 0], jaw: [7, 0, 0],
+      spine01: [1.5, 0, 0], spine02: [1.0, 0, 0], spine04: [-2.5, 0, 0],
+      chest: [-2.5, 0, 0], hips: [1.5, 0, 0],
     },
   },
   sit: {

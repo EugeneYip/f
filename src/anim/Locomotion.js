@@ -136,7 +136,7 @@ export const GAITS = {
     // what pays for the extra speed.
     speed: 2.60, cycle: 0.340, duty: 0.250,
     offsets: { RL: 0, RR: 0.10, FR: 0.42, FL: 0.52 },
-    lift: 0.078, drop: 0.050, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
+    lift: 0.078, drop: 0.040, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
     press: 0.30, bob: 0.030, bobBeats: 1, sway: 0.004, swayBeat: 0.0022, pitch: -3.4,
     scapula: 24, spineFlex: 15.0, yawSway: 0.5,
     flight: 1.0, impact: 0.0190,
@@ -501,7 +501,7 @@ export class Locomotion {
     // 146 mm of skid — and the reach backstop SATURATED at its 80 mm cap
     // trying to keep the legs attached, flattening the fox into a squat.
     // Keep the clock running until the animal has genuinely arrived.
-    const wantMove = this.speedTarget > 1e-4 || this.speed > 0.045;
+    const wantMove = this.speedTarget > 1e-4 || this.speed > 0.022;
     let anySwing = false;
     for (const f of this.feet) if (!f.stance && f.shuffleT < 0) anySwing = true;
     if (wantMove || anySwing) {
@@ -590,7 +590,7 @@ export class Locomotion {
         // busy compressing) through a damper so it settles instead of
         // stepping down.
         const gy = terrain?.heightAt ? terrain.heightAt(f.contact.x, f.contact.z) : 0;
-        f.contactGround = damp(f.contactGround, gy, 11, h);
+        f.contactGround = damp(f.contactGround, gy, 16, h);
         // Ramp the sink in fast and hold it almost to toe-off. The ankle bone
         // rides ~20.5 mm above the contact patch, and the audit classifies
         // stance from that BONE at a 22 mm threshold — so a shallow sink left
@@ -816,7 +816,15 @@ export class Locomotion {
     const terrainPitch = Math.atan2(frontY - rearY, this.wheelbase);
     const terrainRoll = Math.atan2(rightY - leftY, this.trackWidth);
 
-    this.groundY = damp(this.groundY, (frontY + rearY) * 0.5, 9, h);
+    // MEASURED: at a fixed rate of 9 (τ = 111 ms) a fox at 2.6 m/s carries its
+    // body 290 mm of travel behind the ground it is standing on, which over
+    // sastrugi is 28 mm of height error — the animal floats over a bump and
+    // sinks into it a beat late. That is a literal, visible lag and it is
+    // separate from the spring tuning. Scale the follow with speed: the
+    // damper is only there to stop the body STEPPING when a foot plants on a
+    // new height, and the faster the animal moves the less time it has to
+    // spend not noticing the terrain.
+    this.groundY = damp(this.groundY, (frontY + rearY) * 0.5, 9 + this.speed * 6.5, h);
     this.pos.y = this.groundY;
 
     // --- vertical bounce and lateral weight transfer ----------------------
