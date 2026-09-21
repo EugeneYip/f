@@ -35,24 +35,81 @@ const MAX_SHELLS = 26;
 const CARD_COUNT_FALLBACK = 13000;
 
 /**
- * How far past the eyeball's own surface the coat is cleared, and the bounds
- * that clearance is allowed to take.
+ * Where the coat's parting stops, as multiples of the LID MARGIN.
  *
- * A canid is bald to the LID MARGIN, and the lid margin is a property of the
- * globe — it sits a millimetre or two outside it, whatever the animal's coat
- * is doing 30 mm away. The clearance used to be `base + perMetre * localCoat`,
- * which is self-defeating: the bare disc grows as fast as the distance from
- * the eye does, so on any region deep enough to need the coat parted, the
- * parting eats the region. That expression was measured clean at a 4 mm head
- * coat and shaved the entire face at 40 mm, with the two discs meeting across
- * a 58.3 mm interpupillary gap. Capping it was a workaround, twice.
+ * A canid is bald to the lid margin, and the lid margin is a property of the
+ * globe — it sits a millimetre or two outside it, whatever the coat is doing
+ * 30 mm away. The clearance used to be `base + perMetre * localCoat`, which
+ * is self-defeating: the bare disc grows as fast as the distance from the eye
+ * does. That is gone, and it must not come back.
  *
- * 1.30 x the globe radius puts the fully-coated boundary just outside the
- * lids; the bounds only guard against an eye measurement that has gone wrong.
+ * What replaced it was `1.30 x the globe radius`, and that was wrong in a
+ * quieter way: it sized the parting off the BALL when what has to be cleared
+ * is the ball plus the corneal dome plus the seat pushing both forward. The
+ * three numbers, from the same centre furSkinMask2 measures against:
+ *
+ *     nearest skin      8.6 mm      lid margin  12.8 mm
+ *     globe surface    13.1 mm      apex        14.0 mm
+ *
+ * against a coverage clearance that was fully restored by 7.8 mm. Every skin
+ * vertex on the face sat outside it, so the coverage mask was identically 1
+ * and the coat closed over the eyeball completely. Measured differentially —
+ * aperture = pixels that change when the globe and cornea are hidden, against
+ * the same count with the coat hidden in the same frame — the coat ate 37.5%
+ * of the eye at `frontal` and 42.4% at `portrait`.
+ *
+ * So the anchor is the lid margin, computed from the eyeball Eyes.js actually
+ * built. The bounds only guard against an eye measurement that has gone wrong.
  */
-const EYE_CLEAR = 1.30;
+/*
+ * All three are multiples of the lid margin, and all three were picked by
+ * sweeping them against BOTH objectives in one render pass — the aperture
+ * the coat leaves, and the bare skin it pays for, since widening the parting
+ * can only be paid for in skin (bible 4f rule 3). Measured, coat-occluded
+ * fraction of the aperture / bare-skin px, at frontal | portrait | macro_eye:
+ *
+ *   before, the disc      0.380 0.424 0.094  ·   2627  2614   43475
+ *   cover 1.32, slot 1.80 0.014 0.013 0.000  ·   5720  7080  184742
+ *   THESE                 0.023 0.043 0.000  ·   4970  5909  149717
+ *   bare 0.975x margin    0.043 0.083 0.001  ·   4438  5108  126728
+ *
+ * i.e. 96-98% of the eye is free at a cost of ~2.4 -> ~5% of the animal in
+ * periocular skin, which is skin a canid genuinely does not grow hair on.
+ * Pulling the bare radius inside the lid margin buys 11% less skin for
+ * double the occlusion, and the eye is what the animal is read by.
+ */
+const LID_MARGIN = 1.03;    // bare to just outside the margin
+const COVER_SPAN = 1.15;    // coverage back by here: short fur, not skin
+const LEN_SPAN = 1.90;      // full coat depth back by here
 const EYE_CLEAR_MIN = 0.009;
 const EYE_CLEAR_MAX = 0.018;
+
+/**
+ * Distance from the bind-space socket centre out to the LID MARGIN, metres.
+ *
+ * The margin rides the outer edge of the limbus, so it is
+ * hypot(seat + sqrt(R^2 - limbusR^2), limbusR) — all four numbers read off
+ * the eye Eyes.js built, never re-derived here, so the parting and the thing
+ * it is parting for cannot disagree. Falls back to the anatomy metadata and
+ * finally to the rig's nominal ball if the face agent has not published.
+ */
+function eyeLidMargin(ctx, foxEyes) {
+  const built = ctx.eyes?.eyes;
+  if (built?.length) {
+    let sum = 0, n = 0;
+    for (const e of built) {
+      if (!(e?.R > 0)) continue;
+      const lr = Math.min(e.limbusR ?? 0.5 * e.R, e.R * 0.999);
+      sum += Math.hypot((e.seat ?? 0) + Math.sqrt(Math.max(e.R * e.R - lr * lr, 0)), lr);
+      n++;
+    }
+    if (n) return sum / n;
+  }
+  // No built eye yet: approximate the margin as the globe surface. This is an
+  // UNDERESTIMATE, which fails toward too little parting rather than a shaved
+  // brow, and it is named in the console line so it cannot pass unnoticed.
+  return eyeGlobeRadius(foxEyes);
+}
 
 /**
  * Radius of the measured eyeball, metres.
@@ -150,8 +207,16 @@ export class FurSystem {
       this.uniforms.uEyeL.value.fromArray(eyes.L.centre);
       this.uniforms.uEyeR.value.fromArray(eyes.R.centre);
       this.eyeGlobeR = eyeGlobeRadius(eyes);
-      this.uniforms.uEyeFade.value.x =
-        clamp(this.eyeGlobeR * EYE_CLEAR, EYE_CLEAR_MIN, EYE_CLEAR_MAX);
+      // The fissure axis. Both `look` vectors are bind space -- they are the
+      // rays the socket was carved along -- so they need no conversion, which
+      // is the same reason uEyeL/uEyeR drop straight in. (uNose, below, is the
+      // cautionary tale about getting this wrong.)
+      if (eyes.L.look) this.uniforms.uEyeAxisL.value.fromArray(eyes.L.look).normalize();
+      if (eyes.R.look) this.uniforms.uEyeAxisR.value.fromArray(eyes.R.look).normalize();
+      this.eyeLidMargin = eyeLidMargin(ctx, eyes);
+      this.eyeMarginMeasured = !!ctx.eyes?.eyes?.length;
+      const bare = clamp(this.eyeLidMargin * LID_MARGIN, EYE_CLEAR_MIN, EYE_CLEAR_MAX);
+      this.uniforms.uEyeFade.value.set(bare, bare * COVER_SPAN, bare * LEN_SPAN);
     }
     // Same for the rhinarium — but it has to be in the SAME SPACE.
     //
@@ -229,8 +294,13 @@ export class FurSystem {
       `${this.stats.cards} cards / ${this.stats.cardTris} tris · ` +
       `${this.cardStats?.locks ?? 0} locks (${this.cardStats?.cardsPerLock ?? 0} cards each) · ` +
       `aniso ${this.uniforms.uAniso.value ? 'on' : 'off'} · ` +
-      `eye globe ${((this.eyeGlobeR ?? 0) * 1000).toFixed(1)} mm → coat clears ` +
-      `${(this.uniforms.uEyeFade.value.x * 1000).toFixed(1)} mm · ` +
+      `eye lid margin ${((this.eyeLidMargin ?? 0) * 1000).toFixed(1)} mm` +
+      `${this.eyeMarginMeasured ? '' : ' (APPROX: no built eye)'} → coat bare ` +
+      `${(this.uniforms.uEyeFade.value.x * 1000).toFixed(1)} mm, covered by ` +
+      `${(this.uniforms.uEyeFade.value.y * 1000).toFixed(1)} mm, full depth by ` +
+      `${(this.uniforms.uEyeFade.value.z * 1000).toFixed(1)} mm ` +
+      `(slot ${(1 / this.uniforms.uEyeSlot.value.x).toFixed(2)}x wide, ` +
+      `${(1 / this.uniforms.uEyeSlot.value.y).toFixed(2)}x tall) · ` +
       `init ${this.initMs.toFixed(0)} ms`,
     );
   }

@@ -99,10 +99,12 @@ uniform vec3  uGravity;        // world down
 // --- coat shape ------------------------------------------------------------
 uniform vec3  uEyeL;           // bind-space eyeball centres: the coat has to
 uniform vec3  uEyeR;           // part around the eye or it buries the face
-// x lid-margin clearance RADIUS in metres, sized off the measured eyeball and
-// NOT off the local coat (see furSkinMask2 for why that mattered) · y inner
-// radius as a fraction of x · z how much tighter COVERAGE clears than LENGTH
+// x bare radius · y where COVERAGE is restored · z where LENGTH is restored,
+// all metres in the fissure's anisotropic metric -- see furSkinMask2
 uniform vec3  uEyeFade;
+uniform vec3  uEyeAxisL;       // bind-space optical axes: the fissure, and
+uniform vec3  uEyeAxisR;       // therefore the slot, is built off these
+uniform vec2  uEyeSlot;        // x along the fissure (<1 = further) · y across
 uniform vec3  uNose;           // nose pad centre, bind space
 uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
@@ -239,9 +241,9 @@ const COATLEN_FN = /* glsl */ `
  * SHORTER toward the lid margin, but it must not get THINNER at the same rate:
  * bible 4f rule 3 allows bare skin only on the rhinarium, the eyes and the paw
  * pads, and a single clearance radius shaved a disc ~45 mm across centred on
- * each eye -- which on a 90 mm head is the entire brow. Coverage therefore
- * clears over a disc uEyeFade.z times the radius that length clears over, so
- * the lid margin is bare and everything past it is short fur rather than skin.
+ * each eye -- which on a 90 mm head is the entire brow. So the coat goes bare
+ * at the lid margin, recovers COVERAGE quickly past it, and recovers LENGTH
+ * slowly: the surround is short fur, never skin.
  *
  * THE RADIUS MUST NOT SCALE WITH THE LOCAL COAT. It used to:
  *
@@ -253,27 +255,50 @@ const COATLEN_FN = /* glsl */ `
  * DISPROVED it by measurement, and both were right at the time. At 17-33 mm it
  * returned 23-37 mm of bald skin around an 8 mm eye and shaved the brow; at a
  * 40 mm face coat the two discs met across the bridge of the nose, 58.3 mm
- * apart, and shaved the whole face. A hard cap papered over it twice and
- * anatomy had to cap the coat at the orbit from its own file to get the head
- * gate green. The cap was never the fix. The coat term is the bug.
+ * apart, and shaved the whole face. A hard cap papered over it twice. The cap
+ * was never the fix; the coat term was the bug, and it is gone.
  *
- * What the clearance is FOR is the lid margin, and a lid margin is a property
- * of the eyeball, not of fur growing 30 mm away from it. uEyeFade.x is
- * therefore a plain radius in metres, derived by FurSystem from the same
- * measured globe that Eyes.js sizes the eyeball from, and there is no coat
- * term left for a deeper coat to detonate.
+ * THE CLEARANCE IS A SLOT, NOT A DISC, and all three radii are metres
+ * measured against the eyeball Eyes.js actually draws -- see eyeLidMargin()
+ * in FurSystem. The previous form could not open the eye at all:
  *
- *   x  lid-margin clearance radius, metres (from the globe; see FurSystem)
- *   y  inner radius as a fraction of x -- fully bare inside it
- *   z  coverage clears over z * the radius that length clears over
+ *   - COVERAGE cleared inside x*y*z = 3.5 mm and was fully restored by
+ *     x*z = 7.8 mm, while the nearest skin to that centre is 8.6 mm and the
+ *     lid margin 12.8 mm. Every skin vertex on the face was outside it, so
+ *     the coverage mask was identically 1: it did nothing whatsoever.
+ *   - LENGTH ramped from 6.8 mm to 15.0 mm, which puts 80% of full coat
+ *     length ON the lid margin. Measured differentially, the coat ate 37.5%
+ *     of the aperture at frontal and 42.4% at portrait, and hiding the
+ *     cards recovered 0.2% of it: this mask, not the cards.
+ *   - A disc big enough to clear the lid margin is also big enough to shave
+ *     the brow, because the fissure is about twice as wide as it is tall.
+ *     Anatomy carves the socket as a capsule along the fissure axis for the
+ *     same reason ("a canid's palpebral fissure is a slot between the medial
+ *     canthal ligament and the lateral raphe, not a hole"), so the parting
+ *     has to be measured in the same anisotropic metric or the two disagree.
+ *
+ *   uEyeFade  x bare radius  y coverage restored  z length restored (metres)
+ *   uEyeSlot  x scale ALONG the fissure (<1 reaches further)
+ *             y scale ACROSS it (>1 keeps the brow and the cheek coated)
  */
+/** Distance to one eye in the fissure's own anisotropic metric. */
+float eyeSlotDist(vec3 p, vec3 c, vec3 axis){
+  vec3  q = p - c;
+  // The fissure runs horizontally, perpendicular to the optical axis: the
+  // same construction Eyes.js uses to orient the socket capsule.
+  vec3  tang = normalize(vec3(axis.z, 0.0, -axis.x));
+  float a = dot(q, tang);                    // temporal <-> nasal
+  vec3  r = q - tang * a;
+  float x = dot(r, axis);                    // along the optical axis: there
+  vec3  up = r - axis * x;                   // is no skin here, so it stays
+  return length(vec3(a * uEyeSlot.x, length(up) * uEyeSlot.y, x));
+}
+
 vec2 furSkinMask2(vec3 p){
-  float r1 = uEyeFade.x;
-  float r0 = r1 * uEyeFade.y;
-  float d  = min(distance(p, uEyeL), distance(p, uEyeR));
-  float eyeL = smoothstep(r0, r1, d);
-  float k    = max(uEyeFade.z, 0.05);
-  float eyeD = smoothstep(r0 * k, r1 * k, d);
+  float d = min(eyeSlotDist(p, uEyeL, uEyeAxisL),
+                eyeSlotDist(p, uEyeR, uEyeAxisR));
+  float eyeL = smoothstep(uEyeFade.x, max(uEyeFade.z, uEyeFade.x + 1e-4), d);
+  float eyeD = smoothstep(uEyeFade.x, max(uEyeFade.y, uEyeFade.x + 1e-4), d);
   // The rhinarium is genuinely bare skin, so it gates both.
   float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
   return vec2(eyeL * nose, eyeD * nose);

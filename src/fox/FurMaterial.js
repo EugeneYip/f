@@ -356,19 +356,36 @@ export function buildFurUniforms(ctx) {
 
     uEyeL: { value: new THREE.Vector3(-0.027, 0.318, 0.222) },
     uEyeR: { value: new THREE.Vector3(0.027, 0.318, 0.222) },
-    // The coat parts around the eye over a radius sized by the EYEBALL.
+    // The coat parts around the eye over a SLOT sized by the EYEBALL.
     //
-    //   x  lid-margin clearance radius, metres — overwritten at init from the
-    //      measured globe (FurSystem.eyeClearRadius); this is only the value
-    //      used if the anatomy agent has not published eye metadata yet
-    //   y  inner radius as a fraction of x: fully bare inside it
-    //   z  coverage clears over z x the radius that length clears over
+    // All three are radii in metres, in the anisotropic metric furSkinMask2
+    // builds off the optical axis, and all three are overwritten at init from
+    // the eyeball Eyes.js actually draws (FurSystem.eyeClearance). These are
+    // only what is used if neither anatomy nor the face agent has published
+    // eye metadata yet.
+    //
+    //   x  bare: no coat at all inside the lid margin
+    //   y  where COVERAGE is restored — just past the margin, so the
+    //      surround is short fur and never bare skin (bible 4f rule 3)
+    //   z  where LENGTH is restored — much further out, so the coat thickens
+    //      back gradually instead of walling the eye in
     //
     // There is deliberately no "per metre of local coat" term any more. It was
     // self-defeating -- the clearance grew as fast as the thing it was meant to
     // clear -- and it went from harmless to fatal purely because the head coat
     // got deeper underneath it. See furSkinMask2 in fur.glsl.js.
-    uEyeFade: { value: new THREE.Vector3(0.0150, 0.45, 0.52) },
+    uEyeFade: { value: new THREE.Vector3(0.0131, 0.0151, 0.0249) },
+    // Bind-space optical axes, overwritten at init from fox.eyes[side].look.
+    // Default points straight ahead so a rig with no eye metadata still gets
+    // a sane (if unrotated) slot rather than a NaN.
+    uEyeAxisL: { value: new THREE.Vector3(-0.58, 0.15, 0.80).normalize() },
+    uEyeAxisR: { value: new THREE.Vector3(0.58, 0.15, 0.80).normalize() },
+    // The fissure is about twice as wide as it is tall, so the parting has to
+    // be too: a disc wide enough to clear the lid margin shaves the brow.
+    // x scales the along-fissure component before the radius test, so < 1
+    // reaches FURTHER temporally and nasally; y > 1 pulls the parting in
+    // above and below, which is what keeps coat on the brow and the cheek.
+    uEyeSlot: { value: new THREE.Vector2(1 / 1.55, 1.50) },
     uNose: { value: new THREE.Vector3(0.001, 0.293, 0.274) },
     // the rhinarium is ~8-10 mm across, so ~4 mm of bare pad and full
     // coat by 7 mm; 18 mm was clearing the entire muzzle
