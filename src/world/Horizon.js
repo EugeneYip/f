@@ -33,9 +33,17 @@ export class Horizon {
       // at the horizon line and at the peak. The crest values are near 1 on
       // purpose -- a distant ridge has to arrive at the sky's value before its
       // silhouette ends, or the eye finds the join.
-      { r: 560, h: 26, min: 7,  base: -140, aerialBase: 0.44, aerialCrest: 0.92, seed: 7717, rough: 1.0 },
-      { r: 690, h: 44, min: 13, base: -160, aerialBase: 0.62, aerialCrest: 0.965, seed: 3391, rough: 0.85 },
-      { r: 840, h: 66, min: 20, base: -180, aerialBase: 0.82, aerialCrest: 0.985, seed: 9043, rough: 0.7 },
+      // The near line is the one that does the work. The clipmap rim reaches
+      // 168 m at `low`, 210 m at `high` and 283 m at `ultra`, so 340 m is the
+      // closest a ring can sit and still clear the snowfield at every tier;
+      // at that range 2.2-10 m of drift is 0.2-1.5 degrees, i.e. 8-60 px of
+      // ragged skyline in a 1800 px frame. The old nearest ring was at 560 m
+      // and 44% hazed at its BASE, which is why three rings of geometry
+      // measured as a flat +14/255 wash rather than as a profile.
+      { r: 340, h: 10.5, min: 2.2, base: -120, aerialBase: 0.20, aerialCrest: 0.80, seed: 5153, rough: 1.0 },
+      { r: 560, h: 26, min: 7,  base: -140, aerialBase: 0.38, aerialCrest: 0.88, seed: 7717, rough: 1.0 },
+      { r: 690, h: 44, min: 13, base: -160, aerialBase: 0.58, aerialCrest: 0.94, seed: 3391, rough: 0.85 },
+      { r: 840, h: 66, min: 20, base: -180, aerialBase: 0.78, aerialCrest: 0.972, seed: 9043, rough: 0.7 },
     ];
     this.fog = { r: 520, top: 30, bottom: -60 };
   }
@@ -96,7 +104,11 @@ export class Horizon {
       norm += amp;
     }
     const t = s / norm;                       // roughly -1..1
-    return Math.pow(Math.max(0, t * 0.5 + 0.5), 1.35);
+    // A steeper exponent leaves most of the ring near `min` with occasional
+    // hummocks reaching `h`. A snowfield horizon is a low ragged line with a
+    // few drifts on it, not a continuous mountain profile, and the flat
+    // stretches are what make the drifts read as drifts.
+    return Math.pow(Math.max(0, t * 0.5 + 0.5), 2.05);
   }
 
   _ridgeGeometry(L) {
@@ -209,10 +221,16 @@ export class Horizon {
           // its top and the least snow on it, so the silhouette should thin
           // out and break up instead of ending on a clean line. The noise is
           // what stops the remaining edge reading as a drawn contour.
-          float edge = smoothstep(1.05, 0.45, hN);
+          //
+          // The old band (fade 1.05 -> 0.45, solid below 0.46) threw away the
+          // top HALF of every column, so the geometry's 0.2-1.5 degrees of
+          // profile arrived on screen as 0.1-0.7 and the skyline went flat.
+          // Carry the alpha to the actual crest and let the raggedness, not
+          // the envelope, be what breaks the line.
+          float edge = smoothstep(1.16, 0.70, hN);
           float ragged = vnoise(vAz * 39.0 + 2.0) * 0.6 + vnoise(vAz * 121.0) * 0.4;
           float a = clamp(edge * (0.62 + 0.72 * ragged), 0.0, 1.0);
-          a = max(a, smoothstep(0.46, 0.20, hN));   // solid below, no see-through
+          a = max(a, smoothstep(0.72, 0.42, hN));   // solid below, no see-through
 
           col *= 1.0 + triDither(gl_FragCoord.xy) * uDither;
           gl_FragColor = vec4(max(col, 0.0), a);

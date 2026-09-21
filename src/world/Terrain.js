@@ -504,6 +504,7 @@ export class Terrain {
     const ac = x * ax + z * az;
 
     let h = 0;
+    h += S.DUNE0_AMP * this._gn(ac * S.DUNE0_AC, al * S.DUNE0_AL) * this._lod(S.DUNE0_SIZE, fw);
     h += S.DUNE1_AMP * this._gn(ac * S.DUNE1_AC, al * S.DUNE1_AL) * this._lod(S.DUNE1_SIZE, fw);
 
     const d2 = this._gn(ac * S.DUNE2_AC + 13.71, al * S.DUNE2_AL + 5.13) * this._lod(S.DUNE2_SIZE, fw);

@@ -21,10 +21,43 @@
 export const SNOW = {
   TABLE: 256,
 
-  // Broad drift topography — two elongated dune scales. Gives the field form
+  // Broad drift topography — three elongated dune scales. Gives the field form
   // and keeps the horizon from reading as a ruled line.
-  DUNE1_AC: 0.0168, DUNE1_AL: 0.0071, DUNE1_AMP: 0.78, DUNE1_SIZE: 58.0,
-  DUNE2_AC: 0.0525, DUNE2_AL: 0.0232, DUNE2_AMP: 0.215, DUNE2_SIZE: 18.0,
+  //
+  // DUNE0 is the SWELL, and it exists for one reason: the terrain/sky boundary.
+  // The clipmap rim sits at 210 m at `high` (283 m at ultra), and a rim on a
+  // dead-flat plane is a circle — which draws a perfectly straight, featureless
+  // line across every wide framing, which is precisely what a critic called
+  // "the largest single reason the shots read as a demo". Relief only breaks
+  // that line if it SURVIVES the band-limiter out at the rim: an octave of
+  // wavelength w is gone once the local sample spacing exceeds w*LOD_HI, and
+  // the outermost clipmap level samples every 5.25 m, so anything above ~48 m
+  // survives. DUNE1 (58 m) does survive — it is simply too shallow to see at
+  // that range: 0.78 m at 210 m subtends 0.21 degrees, 8 px in a 1800 px frame.
+  // DUNE0 is 2.6 m over a ~190 m cell, which is +-0.7 degrees at the rim, ~28
+  // px of skyline movement, and, more usefully, a couple of metres of rise and
+  // fall across the 30-150 m midground so near drifts occlude far ones and the
+  // eye finally has something to read recession from. Its slope is 1.5 deg, so
+  // it costs foot IK nothing.
+  //
+  // The amplitudes are set by ONE number: the camera stands 1.05 m above the
+  // snow in every wide framing, so a crest only occludes the far rim — only
+  // breaks the horizon line — if it clears 1.05 m. At 0.78 m DUNE1 never did,
+  // anywhere, at any azimuth, which is the whole reason the skyline measured
+  // as a ruled line with 17 px of camber across 2800 px. At 1.9 m a crest at
+  // 50 m sits 0.97 deg above eye level: 39 px of broken horizon in an 1800 px
+  // frame, and near drifts start hiding far ones.
+  // The wavelengths matter as much as the amplitudes, and for a reason that
+  // is easy to miss: what breaks a horizon is relief that varies with
+  // AZIMUTH. At 150 m a 10 degree slice of the frame is only 26 m of ground,
+  // so a dune with a 141 m cell along the view axis contributes one smooth
+  // ramp across the whole shot — measured: a monotone skyline from +19 px on
+  // the left to -1 px on the right, with 2 px of ripple on it. Cells of
+  // 36 m / 70 m put two or three crests inside the same slice, and those
+  // crests clear the camera, so near ground starts hiding far ground.
+  DUNE0_AC: 0.0075, DUNE0_AL: 0.0042, DUNE0_AMP: 3.00, DUNE0_SIZE: 133.0,
+  DUNE1_AC: 0.0312, DUNE1_AL: 0.0161, DUNE1_AMP: 2.40, DUNE1_SIZE: 32.0,
+  DUNE2_AC: 0.0525, DUNE2_AL: 0.0232, DUNE2_AMP: 0.55, DUNE2_SIZE: 18.0,
 
 
   // The calm pad the fox stands on. Radius is modulated by noise so the
@@ -64,6 +97,15 @@ export const SNOW = {
   // under 1 leaves >6 samples per wavelength, which is what makes the clipmap
   // level joins sub-pixel and the far field alias-free.
   LOD_LO: 0.11, LOD_HI: 0.34,
+
+  // Sparkle. SPK_R_M is the world size of a glinting facet cluster plus the
+  // lens point-spread it is smeared by; it is what sets the ON-SCREEN size of
+  // a glint at any distance. SPK_R_MIN/MAX bound that in pixels: a glint may
+  // not be drawn under ~0.55 px (it would just alias) nor over ~2.6 px (it
+  // would read as a blob rather than a spark), and the sub-pixel case is paid
+  // for in brightness instead. SPK_CELL_MAX is the coarsest lattice, i.e. the
+  // world spacing the glint field locks to once distance stops resolving it.
+  SPK_R_M: 0.0048, SPK_R_MIN: 0.55, SPK_R_MAX: 2.6, SPK_CELL_MAX: 0.224,
 
   // Normal differencing epsilon (metres). Same on CPU and GPU.
   NRM_EPS: 0.035,
@@ -149,6 +191,7 @@ float sn_field(vec2 p, float fw, out float oSast, out float oExpo, out float oPa
   float ac = dot(p, A);
 
   float h = 0.0;
+  h += S_DUNE0_AMP * sn_gn(vec2(ac*S_DUNE0_AC, al*S_DUNE0_AL)) * sn_lod(S_DUNE0_SIZE, fw);
   h += S_DUNE1_AMP * sn_gn(vec2(ac*S_DUNE1_AC, al*S_DUNE1_AL)) * sn_lod(S_DUNE1_SIZE, fw);
   // The second dune scale doubles as the wind-exposure field: the surface is
   // scoured on the drift crests and collects soft snow in the hollows, so one
@@ -208,6 +251,10 @@ float sn_tapH(vec2 p, float fw, float padCore){
   vec2 A = vec2(-W.y, W.x);
   float al = dot(p, W);
   float ac = dot(p, A);
+  // DUNE0 is deliberately absent. The taps reach at most ~fw*38 and the swell
+  // has a 190 m cell, so over the whole tap fan it is a straight ramp of at
+  // most 0.026 rad — well under the terminator's own softness — and it is
+  // omitted from h0 and hk alike, so it cannot bias the occlusion either way.
   float h = S_DUNE1_AMP * sn_gn(vec2(ac*S_DUNE1_AC, al*S_DUNE1_AL)) * sn_lod(S_DUNE1_SIZE, fw);
   float d2 = sn_gn(vec2(ac*S_DUNE2_AC + 13.71, al*S_DUNE2_AL + 5.13)) * sn_lod(S_DUNE2_SIZE, fw);
   h += S_DUNE2_AMP * d2;
@@ -459,35 +506,74 @@ vec3 sn_detail(vec2 uv, float scale){
  * needs an absolute threshold that catches glints and nothing else, so a
  * facet that fires has to land in the tens, not at 1.2. On the direct path
  * these clip to white anyway — which is exactly what a glint looks like.
+ *
+ * PERSPECTIVE. This used to lock the ACTIVE lattice to a fixed screen cell
+ * size and the dot to a fixed quarter of a cell, so a glint was ~3 px wide
+ * everywhere: the same size at the horizon as at your feet. Scaled to a
+ * 390 px phone that is confetti, and it was the single most artificial thing
+ * on the snow. Two changes fix it and neither costs an instruction in the
+ * inner loop:
+ *
+ *  1. The dot's screen radius is now computed from a real world size
+ *     (S_SPK_R_M, a facet cluster plus the lens PSF) and the ACROSS-view
+ *     pixel footprint. px is max(|dFdx|,|dFdy|) and on a grazing ground
+ *     plane |dFdy| carries a 1/sin(grazing) stretch that reaches 100x — it
+ *     is the right Nyquist limit but a useless distance proxy. |dFdx| is
+ *     just distance * pixel-angle, which is exactly what perspective needs.
+ *     A glint is ~2.6 px at 3 m, 1 px at 10 m and sub-pixel past ~25 m.
+ *
+ *  2. Below one pixel a glint cannot be drawn smaller, so it is drawn at
+ *     S_SPK_R_MIN and dimmed by the area ratio instead. The hit probability
+ *     rises as distance^2 (the world-locked lattice puts more cells in a
+ *     pixel) while the per-glint peak falls as distance^-2, so the MEAN
+ *     radiance is preserved and only the contrast drops: discrete glints
+ *     near, a smooth shimmer far. That is what snow does.
+ *
+ * The octave weights are also a proper partition of unity now. Neighbouring
+ * cells are 4x apart (2 in log2) and the old half-width of 1/0.72 = 1.39
+ * meant the weights summed to 1.0 on an octave centre and 0.56 midway
+ * between two — a 1.8x density ripple every two stops of distance, which is
+ * the horizontal band in the sparkle a critic measured at y=250-300 in
+ * terrain.png. A half-width of exactly 2 sums to 1 at every distance.
  */
-vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
+vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float pxIso, float density){
   vec3 Hv = normalize(L + V);
   vec3 T = normalize(cross(N, vec3(1.0, 0.0, 0.0)));
   vec3 B = cross(N, T);
   float acc = 0.0;
-  float cell = 0.0035;
+  // The ladder always ENDS at S_SPK_CELL_MAX, so dropping octaves at a lower
+  // tier drops the finest crystals rather than the coarse world-locked ones
+  // the far field depends on.
+  float cell = S_SPK_CELL_MAX / pow(4.0, float(SPARKLE_OCT - 1));
+  // Near the camera, track the pixel footprint so glints stay separated and
+  // resolvable; past that, world-lock, and let statistics take over.
+  float target = clamp(px * 5.88, cell, S_SPK_CELL_MAX);
+  // Screen radius this glint should have, and the energy correction for
+  // having to draw it at S_SPK_R_MIN when it is smaller than that.
+  float rPix = S_SPK_R_M / max(pxIso, 1e-6);
+  float rUse = clamp(rPix, S_SPK_R_MIN, S_SPK_R_MAX);
+  float sub = min(1.0, rPix / S_SPK_R_MIN);
+  float amp = sub * sub;
+  float rWorld = rUse * pxIso;
   for (int k = 0; k < SPARKLE_OCT; k++) {
-    // Show a lattice only while its cells are ~4-10 px across, so a glint is
-    // always a resolvable dot rather than sub-pixel noise. Neighbouring
-    // octaves are four times apart and cross-fade, which is what keeps the
-    // glints locked to the surface instead of re-seeding as the camera moves.
-    float w = 1.0 - abs(log2(max(px, 1e-5) / (cell * 0.17))) * 0.72;
-    w = clamp(w, 0.0, 1.0);
+    float w = clamp(1.0 - abs(log2(cell / target)) * 0.5, 0.0, 1.0);
     if (w > 0.004) {
       vec2 q = p / cell;
       vec2 ip = floor(q);
       vec2 fp = q - ip;
       // The feature point is confined to the middle half of its cell and the
-      // dot radius is a quarter of a cell, so no dot can ever cross a cell
-      // border: one lookup is exact where a 2x2 neighbourhood would normally
-      // be needed, and the whole term costs a quarter as much.
+      // dot radius is capped at a quarter of a cell, so no dot can ever cross
+      // a cell border: one lookup is exact where a 2x2 neighbourhood would
+      // normally be needed, and the whole term costs a quarter as much.
       vec3 r = sn_hash23(ip + vec2(cell * 131.0));
       vec2 fpt = r.xy * 0.5 + 0.25 - fp;
       float dd = dot(fpt, fpt);
-      if (dd < 0.0625) {
+      float rc = min(rWorld / cell, 0.25);
+      float r2 = rc * rc;
+      if (dd < r2) {
         // Tight core: the energy belongs in one or two pixels, not spread
         // over five, or the peak never clears the bloom threshold.
-        float dot0 = 1.0 - smoothstep(0.008, 0.0625, dd);
+        float dot0 = 1.0 - smoothstep(r2 * 0.13, r2, dd);
         // Facet orientation is parameterised by ANGLE, not by a tangent
         // offset: with a 6 degree sun and a low camera the half-vector sits
         // ~60 degrees off the surface normal, and a tilt vector added to N can
@@ -503,7 +589,7 @@ vec3 sn_sparkle(vec3 N, vec3 V, vec3 L, vec2 p, float px, float density){
     }
     cell *= 4.0;   // one octave of glint scale per two stops of distance
   }
-  return acc * density * uSparkle.x * mix(uSunColor, vec3(0.86, 0.94, 1.0), 0.25);
+  return acc * amp * density * uSparkle.x * mix(uSunColor, vec3(0.86, 0.94, 1.0), 0.25);
 }
 
 void main(){
@@ -515,6 +601,11 @@ void main(){
   vec2 p = vWorld.xz;
 
   float px = max(length(dFdx(vWorld)), length(dFdy(vWorld)));
+  // Across-view footprint. On a ground plane seen from a metre up, dFdy is
+  // stretched by 1/sin(grazing) — up to ~100x at the horizon — so it is the
+  // right band-limit but the wrong distance measure. dFdx is distance times
+  // the pixel angle, which is what perspective scaling needs.
+  float pxIso = length(dFdx(vWorld));
 
   // --- footprint: displacement gradient + compaction ------------------------
   float fe = max(px, S_FP_SIZE / 1024.0);
@@ -626,11 +717,15 @@ void main(){
   // Glints are a near-field phenomenon: at the horizon a crystal facet
   // subtends far less than a pixel, and keeping them at full strength out
   // there makes the field read as a flat sheet of glitter.
-  float sparkDist = 1.0 / (1.0 + dist * 0.075);
+  // Most of the distance falloff is now physical (see sn_sparkle): the peak
+  // of a glint drops as 1/distance^2 once it goes sub-pixel. What is left
+  // here is only the aerial-perspective share — the haze in front of distant
+  // snow washes the contrast out on top of that.
+  float sparkDist = 1.0 / (1.0 + dist * 0.014);
   float sparkGate = saturate(0.25 + NdotL * 2.5) * shadowMask * horizon
                   * (1.0 - comp * 0.85) * sparkDist;
   if (sparkGate > 0.004) {
-    col += sn_sparkle(N, V, L, p, px, crystal * sparkGate * (0.6 + 0.6 * vFields.y));
+    col += sn_sparkle(N, V, L, p, px, pxIso, crystal * sparkGate * (0.6 + 0.6 * vFields.y));
   }
 
   // --- aerial perspective ---------------------------------------------------
@@ -649,7 +744,7 @@ void main(){
     if (uDebugView < 1.5) col = vec3(shadowMask);
     else if (uDebugView < 2.5) col = vec3(1.0 - vSunOcc);
     else if (uDebugView < 3.5) col = vec3(fract(log2(max(vFw, 1e-4)) * 0.5 + 0.5));
-    else if (uDebugView < 4.5) col = sn_sparkle(N, V, L, p, px, crystal) * 0.25;
+    else if (uDebugView < 4.5) col = sn_sparkle(N, V, L, p, px, pxIso, crystal) * 0.25;
     else if (uDebugView < 5.5) col = vec3(dn * 2.0 + 0.5, 0.5);
     else if (uDebugView < 6.5) col = vec3(comp, ft.x, ft.y);
     else if (uDebugView < 7.5) col = vec3(gShadowDbg.xy, 0.0);
