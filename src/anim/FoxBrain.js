@@ -680,7 +680,19 @@ export class FoxBrain {
 
   _derivatives(h) {
     const loco = this.loco;
-    const bodyY = loco.pos.y + loco.bob;
+    /**
+     * The trunk's TRUE height. `loco.pos.y + loco.bob` was two thirds of it:
+     * the root offset that actually moves the animal is
+     * `bob + flight + impactY - drop`, so the ballistic suspension arc and
+     * the whole ground reaction were invisible to `accelY` — and `accelY` is
+     * what drives the tail's float, the ruff, the belly and the coat's
+     * vertical inertia. The landing that is supposed to throw the coat was
+     * not in the number the coat reads.
+     *
+     * `drop` is deliberately excluded: it is a per-gait ride height, not a
+     * motion, and it changes only when the gait blends.
+     */
+    const bodyY = loco.pos.y + loco.bob + loco.flight + loco.impactY;
     const vy = (bodyY - this._prevBodyY) / h;
     this._prevBodyY = bodyY;
 
