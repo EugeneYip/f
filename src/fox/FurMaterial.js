@@ -153,6 +153,10 @@ export const FUR_DEFAULTS = {
   // shellFill unjittered, which at grazing incidence is a smooth opaque sheet
   // over the inner half of the coat -- the coat's outline was that sheet's
   // edge rather than hair.
+  // Cap on 1/|N.V| for the undercoat's Beer-Lambert boost. At 6 the felt hits
+  // alpha 1.0 several pixels before the coat's outer surface, which both seals
+  // the outline into a smooth curve and kills the transmission term above.
+  pathKMax: 2.5,
   fillTop: 1.12,
   fillJitter: 0.30,
   cardTip: 0.45,
@@ -164,8 +168,19 @@ export const FUR_DEFAULTS = {
   sunSat: 0.30,
   transSat: 0.16,     // scattered light keeps almost none of the sun's hue       // how much of the sun's chromaticity survives scattering
   wrap: 0.40,
-  trans: 19.0,        // divided by PI in the shader
+  trans: 10.0,        // divided by PI in the shader
   transPow: 3.4,
+  // Transmission used to be gated on pow(1 - alpha, 3.0). alpha saturates at
+  // exactly the depth where the undercoat felt becomes opaque, and the oblique
+  // path factor drives that boundary hard against the mesh silhouette -- so the
+  // glow switched OFF across a one-pixel line that traced the skin outline, and
+  // the coat inside it read as a separate flat plate. That luminance step, not
+  // any geometry, is what "you can see where the bone stops and the coat
+  // starts" was actually showing. Softening the exponent and widening the
+  // grazing falloff spreads the rim over a band about one coat deep, which is
+  // what a backlit coat does. uTrans is retuned to hold the rim's brightness.
+  transThin: 1.2,
+  transGraze: 3.0,
   aoInner: 0.66,
   aoPow: 0.90,
   aoFloor: 0.54,
@@ -264,6 +279,7 @@ export function buildFurUniforms(ctx) {
     uHairLenMin: { value: d.hairLenMin },
     uDensity: { value: d.density },
     uFill: { value: d.fill },
+    uPathKMax: { value: d.pathKMax },
     uFillTop: { value: d.fillTop },
     uFillJitter: { value: d.fillJitter },
     uCardTip: { value: d.cardTip },
@@ -285,6 +301,8 @@ export function buildFurUniforms(ctx) {
     uWrap: { value: d.wrap },
     uTrans: { value: d.trans },
     uTransPow: { value: d.transPow },
+    uTransThin: { value: d.transThin },
+    uTransGraze: { value: d.transGraze },
     uAOInner: { value: d.aoInner },
     uAOPow: { value: d.aoPow },
     uAOBake: { value: d.aoBake },

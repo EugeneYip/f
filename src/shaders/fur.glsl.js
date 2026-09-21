@@ -95,6 +95,7 @@ uniform float uStrandTip;
 uniform float uHairLenMin;
 uniform float uDensity;
 uniform float uFill;
+uniform float uPathKMax;       // cap on the oblique-path opacity boost
 uniform float uFillTop;        // where the undercoat stops, x shellFill
 uniform float uFillJitter;     // +/- fraction, per clump/strand
 uniform float uCardTip;        // v past which a card stops being edge-gated
@@ -117,6 +118,8 @@ uniform float uSpecJitter;
 uniform float uWrap;
 uniform float uTrans;
 uniform float uTransPow;
+uniform float uTransThin;      // exponent on (1 - alpha): 0 disables the term
+uniform float uTransGraze;     // exponent on (1 - |N.V|)
 uniform float uAOInner;
 uniform float uAOPow;
 uniform float uAOBake;
@@ -442,7 +445,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // and left pale porcelain skin at macro range.
   //
   // WHERE the undercoat stops is the coat's second silhouette, and it was a
-  // smooth analytic one. `a = max(a, under)` means this term overwrites the
+  // smooth analytic one. a = max(a, under) means this term overwrites the
   // hair field wherever it is the larger of the two, and the Beer-Lambert
   // path factor below drives it to ~1 over the inner HALF of the coat at
   // grazing incidence — so the outline the eye actually read was the offset
@@ -482,6 +485,10 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // which is the one thing that matters most here.
   float under = fill * uFill * (0.86 + 0.14 * cRand);
   under = 1.0 - pow(1.0 - clamp(under, 0.0, 1.0), pathK);
+  // Give the felt the lock structure too, at half strength. Without this the
+  // undercoat is the one part of the coat with no hair in it at all, and
+  // max(a, under) below hands it the outline wherever it is the larger term.
+  under *= mix(1.0, tuft, 0.5);
 
   a = max(a, under) * densityScale * uDensity;
 
@@ -595,7 +602,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // it. A gentle ramp let ~7 shells each contribute a little and they summed
   // into a flat wash over the body.
   float thin  = pow(clamp(t, 0.0, 1.0), 3.5);
-  float graze = pow(1.0 - ndv, 5.0);
+  float graze = pow(1.0 - ndv, uTransGraze);
   float shell = clamp(-ndl * 0.65 + 0.55, 0.0, 1.0);
   // Reference photographs (bible 4b): an arctic fox has NO warm cast, in any
   // light, including direct low sun — shaded fur goes blue-grey, never pink.
@@ -605,7 +612,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   vec3 transLight = mix(vec3(luma(uSunColor)), uSunColor, uTransSat);
   col += transLight * uSunIntensity * uTransTint * albedo *
          (uTrans * transBoost * RECIPROCAL_PI * fwd * thin * (1.45 * graze)
-          * pow(thinness, 3.0) * (0.30 + 0.95 * shell));
+          * pow(thinness, uTransThin) * (0.30 + 0.95 * shell));
   // NOTE on the constant-free grazing weight: thinness alone cannot tell a
   // fringe hair over sky from an outer shell over dense coat — both have the
   // same low PER-SHELL alpha. With a 0.06 interior floor, every one of the
@@ -736,9 +743,9 @@ ${isShell ? /* glsl */ `
   // MINOR axis of the screen-space Jacobian, not its length. fwidth() measures
   // the footprint ALONG THE SURFACE, which diverges at grazing incidence: at
   // the silhouette one pixel covers centimetres of skin, so every octaveFade()
-  // in the hair field returned 0 and `a = mix(mean, a, sLod)` replaced the
+  // in the hair field returned 0 and a = mix(mean, a, sLod) replaced the
   // strands with their analytic mean coverage — pi*r*r — a smooth function of
-  // depth alone. The clump `tuft` term collapsed to 1.0 for the same reason.
+  // depth alone. The clump tuft term collapsed to 1.0 for the same reason.
   // The shells' outline was therefore an offset surface with no hair in it:
   // measured on a coat-alpha coverage pass, the shells alone rendered the
   // silhouette as a graded smear (the user's "milky translucent sheet with
@@ -792,7 +799,7 @@ ${isShell ? /* glsl */ `
   float shellPx = (vP1.w / max(uShellCount, 1.0)) / px;
   float detail  = smoothstep(0.9, 3.2, shellPx);
 
-  float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, 6.0);
+  float pathK = clamp(1.0 / max(abs(dot(normalize(vNrm), V)), 0.16), 1.0, uPathKMax);
 
   // Shells this deep are solid felt and almost entirely hidden behind the coat
   // above them. Neither the strand/micro/clump field nor the specular and
