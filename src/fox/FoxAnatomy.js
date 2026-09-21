@@ -182,6 +182,94 @@ export const EAR_NORMAL = [0.7000, 0.0850, 0.7090];
 /** World-space y of the pinna base and tip, for the ear coat taper. */
 export const EAR_SPAN = { baseY: LANDMARKS.earR01[1], tipY: LANDMARKS.earR_tip[1] };
 
+/**
+ * The pinna, as geometry the rest of the pipeline can interrogate.
+ *
+ * Hoisted out of `buildField` because FoxSurface has to know where the RIM is
+ * and where the BOWL is, and it used to infer both from the surface normal
+ * alone (rim = `|n . EAR_NORMAL| < 0.55`). That worked only while the concha
+ * was a flat plane: the sole place on a flat pinna whose normal faces sideways
+ * IS the outer edge. Carve a real bowl and its side walls face sideways too,
+ * so the normal test would put the ear's heaviest fringe (x2.55 coat) INSIDE
+ * the concha and fill the bowl straight back in. An explicit frame answers it
+ * exactly instead: `u` along the pinna, `w` across the blade, `n` out of the
+ * concha. Left ear: mirror the query point through x = 0 and use this frame.
+ *
+ * Profile shape and the reason it is a chain rather than one cone: see the
+ * ears section of `buildField`.
+ */
+function earFrame() {
+  const a = LANDMARKS.earR01, b = LANDMARKS.earR_tip;
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const len = Math.hypot(d[0], d[1], d[2]);
+  const axis = [d[0] / len, d[1] / len, d[2] / len];
+  const el = Math.hypot(EAR_NORMAL[0], EAR_NORMAL[1], EAR_NORMAL[2]);
+  let n = [EAR_NORMAL[0] / el, EAR_NORMAL[1] / el, EAR_NORMAL[2] / el];
+  // Gram-Schmidt against the axis, exactly as AnatField's 'axis' frame does,
+  // so `w` is the same direction the `squash` widths were authored in.
+  const dp = n[0] * axis[0] + n[1] * axis[1] + n[2] * axis[2];
+  n = [n[0] - axis[0] * dp, n[1] - axis[1] * dp, n[2] - axis[2] * dp];
+  const nl = Math.hypot(n[0], n[1], n[2]);
+  n = [n[0] / nl, n[1] / nl, n[2] / nl];
+  const w = [
+    axis[1] * n[2] - axis[2] * n[1],
+    axis[2] * n[0] - axis[0] * n[2],
+    axis[0] * n[1] - axis[1] * n[0],
+  ];
+  return { a, axis, n, w, len };
+}
+
+export const EAR = {
+  rBase: 0.0228,      // world half-radius at the pinna root (x `wide` across)
+  tipRatio: 0.49,     // r(apex) / r(root) — the §4c base-to-tip wedge
+  power: 1.8,         // >1 bulges the outline off the chord: convex sides
+  uEnd: 0.93,         // the chain stops here; the end cap forms the apex
+  segs: 8,
+  thickRoot: 0.70,    // squash along EAR_NORMAL at the root
+  thickTip: 0.92,     //   ... and at the apex (near-circular cross-section)
+  thickPower: 1.3,
+  wide: 1.02,
+  rim: 0.0105,        // blade left outside the concha on each side
+  // Concha: a cone, not a sphere, sized FROM the blade profile so it can never
+  // outgrow it however the pinna is retuned.
+  bowlU0: 0.12, bowlU1: 0.80, bowlWide: 0.85, bowlThick: 0.50, bowlK: 0.006,
+  bowlFloor0: 0.0035, bowlFloor1: 0.0115,
+
+  ...earFrame(),
+
+  /** Blade half-radius at u (0 = root, 1 = the `earR_tip` landmark). */
+  rAt(u) { return this.rBase * (1 - (1 - this.tipRatio) * Math.pow(u, this.power)); },
+  /** Squash along the concha normal at u — the blade thickens as it narrows. */
+  thickAt(u) {
+    return this.thickRoot + (this.thickTip - this.thickRoot) * Math.pow(u, this.thickPower);
+  },
+  /** Blade half-width across the pinna at u. */
+  halfWidthAt(u) { return this.rAt(u) * this.wide; },
+  /** Concha half-width at u — always `rim` inside the blade edge. */
+  bowlHalfWidthAt(u) { return Math.max(0, this.halfWidthAt(u) - this.rim); },
+  /** World point on the pinna axis at u. */
+  at(u) {
+    return [
+      this.a[0] + this.axis[0] * this.len * u,
+      this.a[1] + this.axis[1] * this.len * u,
+      this.a[2] + this.axis[2] * this.len * u,
+    ];
+  },
+  /**
+   * Project a bind-space point into the pinna frame. Mirrors the left ear onto
+   * the right so one frame serves both. Returns metres.
+   */
+  project(x, y, z, out) {
+    const sx = x < 0 ? -1 : 1;
+    const dx = x * sx - this.a[0], dy = y - this.a[1], dz = z - this.a[2];
+    out.u = (dx * this.axis[0] + dy * this.axis[1] + dz * this.axis[2]) / this.len;
+    out.w = dx * this.w[0] + dy * this.w[1] + dz * this.w[2];
+    out.n = dx * this.n[0] + dy * this.n[1] + dz * this.n[2];
+    out.side = sx;
+    return out;
+  },
+};
+
 // ---------------------------------------------------------------------------
 // fur field presets per region: [length (m), stiffness 0..1]
 // ---------------------------------------------------------------------------
@@ -234,7 +322,7 @@ export const FUR = {
   [R.forehead]: [0.0175, 0.82],
   [R.skull]: [0.0260, 0.74],
   [R.earOuter]: [0.0180, 0.70],
-  [R.earInner]: [0.0080, 0.44],
+  [R.earInner]: [0.0105, 0.44],
   [R.throat]: [0.0310, 0.28],
   [R.neck]: [0.0455, 0.58],
   [R.ruff]: [0.0580, 0.50],
@@ -261,7 +349,6 @@ const TINT_SKIN = 0x171a20;     // bible "skin / nose"
 const TINT_PAW = 0xf0eeea;      // furred white; pad leather faces the ground
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const mirrorX = (p) => [-p[0], p[1], p[2]];
 
 /**
@@ -471,55 +558,90 @@ export function buildField() {
   // height above the dome. Most of the pinna's length is buried inside the
   // cranium, which is what anchors it.
   //
-  // §4f: the pinna was the worst coat-share offender on the head after the
-  // skull — 26 mm of skin carrying 11 mm of coat — and the user's 2x crop
-  // shows exactly what that produces: a flat blue-grey cutout with a hard,
-  // faintly stair-stepped outline and no interior form at all. What renders
-  // there is the SKIN, because there is no coat in front of it.
+  // ## Why the pinna is a CHAIN and not one cone
   //
-  // So the same trade as the trunk: skin 26.4 -> 18.9 mm, coat 11 -> 18.5 mm.
-  // Furred base half-width lands at 37.4 mm and the furred tip at 13.9 mm,
-  // both within a millimetre of what they were, so the §4c taper (2.7:1
-  // base-to-tip, preserved by the tip-ward coat taper in FoxSurface) is
-  // untouched while the coat now carries 49 % of the pinna instead of 29 %.
+  // One round cone has three properties the render shows as defects, and all
+  // three are properties of the primitive rather than of the mesher:
   //
-  // squash.x 0.60 -> 0.70 because §4c warns that thinning the pinna
-  // re-introduces the rim stair-stepping of review blocker 5: a thinner
-  // pinna has sub-cell rim curvature at the 6 mm mesh cell. Slimming the
-  // radius without widening the squash would have made the cross-section
-  // 11 mm thinner; this keeps it at 26 mm, four cells across.
-  const earA = L.earR01;
-  const earB = L.earR_tip;
-  f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0188), rb: sr(0.0072),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.76, 1.02, 1.0],
-    k: 0.015, ...furOf(R.earOuter),
-    flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
-  });
-  // Shallow concha bowl on the forward face.
-  const earMid = lerp3(earA, earB, 0.34);
-  const earAxis = sub(earB, earA);
-  const eal = Math.hypot(earAxis[0], earAxis[1], earAxis[2]);
-  // The bowl has to be deeper than the coat that sits in it, or the shells
-  // simply fill it and the ear reads as a flat plate — which is what the
-  // user's crop shows. Offsetting the carving sphere by less than its own
-  // radius is what sets the depth: 16.5 mm of offset against a 16.5 mm radius
-  // only kissed the surface. 11.4 mm digs ~6 mm, against a 9.5 mm inner coat.
-  const conchaC = [
-    earMid[0] + EAR_NORMAL[0] * sr(0.0132),
-    earMid[1] + EAR_NORMAL[1] * sr(0.0132),
-    earMid[2] + EAR_NORMAL[2] * sr(0.0132),
-  ];
-  f.addMirrored({
-    name: 'conchaR', a: conchaC,
-    b: [conchaC[0] + earAxis[0] / eal * 0.010,
-        conchaC[1] + earAxis[1] / eal * 0.010,
-        conchaC[2] + earAxis[2] / eal * 0.010],
-    ra: sr(0.0165),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.42, 0.96, 1.05],
-    k: 0.008, op: 'subtract', ...furOf(R.earInner),
-    flowDir: sub(earB, earA), flowRadial: 0.20, tint: TINT_FUR,
-  });
+  //   - its silhouette sides are DEAD STRAIGHT by construction. Measured at
+  //     `frontal` the pinna's outer edge was a 45 mm straight line. A real
+  //     pinna's edges are convex; `EAR.power > 1` bulges the profile off the
+  //     chord, which is the whole difference between a triangle and a wedge.
+  //   - its apex is the end sphere, radius 8.5 mm = 1.4 voxels at the 6 mm
+  //     `high` cell. Surface Nets cannot describe a curve at 1.4 cells, so it
+  //     returned a straight chamfer. §4c predicted exactly this ("a sharper
+  //     apex on a thin pinna has sub-cell rim curvature") and prescribed the
+  //     fix: thicken the pinna. The apex radius is now 11 mm and the apex
+  //     cross-section is near-circular (thickness squash rises to 0.98 at the
+  //     tip), so the rim rolls over 3.7 cells instead of 1.4.
+  //   - one cone has one squash, so thinning the tip in width thins it in
+  //     THICKNESS by the same ratio. Measured: 10 mm through the pinna near
+  //     the apex, against the mesher's own ~1.5-cell (9 mm) watertightness
+  //     floor. The chain lets thickness and width taper at different rates,
+  //     which is also what a real ear does — the rim rolls thicker as the
+  //     blade narrows.
+  //
+  // The chain is collinear and its radii match at every joint, so the only
+  // discontinuity is in taper RATE, and `k` here has to be SMALL. Every smin
+  // inflates the union by up to k/4, and a chain pays that at every joint: at
+  // k = 8 mm the 5-segment pinna measured 26.0 mm half-width where 22.8 was
+  // authored, i.e. the blending alone had fattened the ear by 14 %. 8 shorter
+  // segments cut the per-joint slope change to ~3 degrees, which 3 mm hides.
+  for (let i = 0; i < EAR.segs; i++) {
+    const u0 = EAR.uEnd * i / EAR.segs, u1 = EAR.uEnd * (i + 1) / EAR.segs;
+    const p0 = EAR.at(u0), p1 = EAR.at(u1);
+    f.addMirrored({
+      name: `earR${i}`, a: p0, b: p1, ra: EAR.rAt(u0), rb: EAR.rAt(u1),
+      frame: 'axis', normal: EAR_NORMAL,
+      squash: [EAR.thickAt((u0 + u1) * 0.5), EAR.wide, 1.0],
+      // The root segment has to melt into the cranium; the rest only has to
+      // hide its own taper joints, and a large k there erodes the profile.
+      k: i === 0 ? 0.014 : 0.003,
+      ...furOf(R.earOuter),
+      flowDir: sub(p1, p0), flowRadial: 0.30, tint: TINT_FUR,
+    });
+  }
+
+  // ------------------------------------------------------------ concha bowl --
+  // The old bowl was a sphere 18.7 mm wide carved into a pinna 16 mm wide, so
+  // it did not cut a bowl — it PLANED THE WHOLE FRONT FACE OFF. That is the
+  // "flat blue-grey plate with no interior form" in the user's frontal crop,
+  // and it is why the fur agent's coat-occlusion bake found nothing to darken
+  // there: a flat face has no cavity term, so it can never catch a shadow. A
+  // bowl needs to be NARROWER than the blade it sits in, at every height, or
+  // there is no rim and therefore no bowl.
+  //
+  // Depth is set by how far the carve axis is offset along EAR_NORMAL, since
+  // floor = offset - halfThickness; `bowlFloor0/1` author the floor directly
+  // and it is deepest at the root, which is where a canid concha actually is.
+  //
+  // k = 6 mm, not a crisper 3: the rim's own radius of curvature has to stay
+  // above one 6 mm voxel or it stair-steps — the defect §4c warns about — and
+  // that is also why the rim is 10.5 mm wide. Measured after: the rim crest
+  // stands 8.5 mm proud of the bowl floor at mid-pinna and 9.9 mm at the root,
+  // against 0.0 mm before, so the bowl is now a bowl.
+  {
+    const station = (u) => {
+      const rc = EAR.bowlHalfWidthAt(u) / EAR.bowlWide;
+      const floor = EAR.bowlFloor0 + (EAR.bowlFloor1 - EAR.bowlFloor0) *
+        (u - EAR.bowlU0) / (EAR.bowlU1 - EAR.bowlU0);
+      const off = floor + EAR.bowlThick * rc;
+      const p = EAR.at(u);
+      return { rc, p: [
+        p[0] + EAR.n[0] * off, p[1] + EAR.n[1] * off, p[2] + EAR.n[2] * off,
+      ] };
+    };
+    const s0 = station(EAR.bowlU0), s1 = station(EAR.bowlU1);
+    f.addMirrored({
+      name: 'conchaR', a: s0.p, b: s1.p, ra: s0.rc, rb: s1.rc,
+      frame: 'axis', normal: EAR_NORMAL,
+      // 0.42 along the axis keeps the end caps short: a full-length cap on a
+      // 20 mm radius would reach 20 mm below the bowl and eat the ear root.
+      squash: [EAR.bowlThick, EAR.bowlWide, 0.42],
+      k: EAR.bowlK, op: 'subtract', ...furOf(R.earInner),
+      flowDir: sub(EAR.at(1), EAR.at(0)), flowRadial: 0.20, tint: TINT_FUR,
+    });
+  }
 
   // -------------------------------------------------------------- forelimb ---
   // Scapula reads as a flat, fore-aft elongated bulge lying on the ribs.

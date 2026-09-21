@@ -22,7 +22,7 @@
  */
 import * as THREE from 'three';
 import { smoothstep, saturate } from '../util/math.js';
-import { buildField, REGION as R, FUR, TORSO_REGIONS, EAR_NORMAL, EAR_SPAN } from './FoxAnatomy.js';
+import { buildField, REGION as R, FUR, TORSO_REGIONS, EAR, EAR_NORMAL, EAR_SPAN } from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
   sampleGrid, surfaceNets, buildAdjacency, relax,
@@ -105,6 +105,7 @@ export async function buildFoxSurface(skeleton, {
   const regionArr = new Float32Array(nv);
   const colorArr = new Float32Array(nv * 3);
   const s = Field.newSample();
+  const ep = { u: 0, w: 0, n: 0, side: 1 };     // scratch for EAR.project
   // Blend falloff for the fur fields. 20 mm let the 28 mm cheek ruff and the
   // 45 mm neck bleed onto the muzzle and forehead, which must stay at 2-6 mm
   // per the bible. 12 mm keeps the gradients smooth without crossing a whole
@@ -158,21 +159,33 @@ export async function buildFoxSurface(skeleton, {
       fx /= l; fy /= l; fz /= l;
     }
 
-    // --- ear interior ------------------------------------------------------
+    // --- ear: concha, rim and blade ----------------------------------------
     // The concha is carved by a subtraction, and subtractions own no surface,
-    // so `earInner` would never be assigned from primitives alone. Split the
-    // pinna by which way the surface faces instead.
+    // so `earInner` would never be assigned from primitives alone.
+    //
+    // It used to be assigned by surface ORIENTATION — forward-facing is the
+    // concha, edge-on is the rim. That was sound only while the bowl was a
+    // flat plane, because then the one place on the pinna facing sideways WAS
+    // the outer edge. Now that there is a real bowl, its side walls face
+    // sideways too, and the orientation test would have handed them the rim's
+    // x2.55 fringe: the heaviest coat on the head, growing inward, filling in
+    // the concha the carve had just cut. So the concha is located by POSITION,
+    // in the pinna's own frame, and the rim keeps the orientation test with
+    // the bowl explicitly masked out of it.
     let earRim = 0;
     if (reg === R.earOuter) {
-      const sx = x >= 0 ? 1 : -1;
-      const dot = nx * EAR_NORMAL[0] * sx + ny * EAR_NORMAL[1] + nz * EAR_NORMAL[2];
-      const w = smoothstep(0.15, 0.58, dot);
-      if (w > 0) {
-        len = len + (FUR[R.earInner][0] - len) * w;
-        stiff = stiff + (FUR[R.earInner][1] - stiff) * w;
-        if (w > 0.5) reg = R.earInner;
+      EAR.project(x, y, z, ep);
+      const bw = EAR.bowlHalfWidthAt(saturate(ep.u));
+      const wIn =
+        (1 - smoothstep(bw - 0.005, bw + 0.005, Math.abs(ep.w))) *  // inboard of the rim
+        smoothstep(0.0, 0.008, ep.n) *                              // forward of the mid-plane
+        (1 - smoothstep(EAR.bowlU1, EAR.bowlU1 + 0.18, ep.u));      // below the bowl's top
+      if (wIn > 0) {
+        len = len + (FUR[R.earInner][0] - len) * wIn;
+        stiff = stiff + (FUR[R.earInner][1] - stiff) * wIn;
+        if (wIn > 0.5) reg = R.earInner;
       }
-      // The RIM is where the pinna faces edge-on: neither the outer face nor
+      // The RIM is where the pinna goes edge-on: neither the outer face nor
       // the concha, but the band between them, and it is precisely the band
       // that draws the ear's outline. A per-region coat length cannot single
       // it out because it is not a region — it is an orientation. Left at the
@@ -180,7 +193,9 @@ export async function buildFoxSurface(skeleton, {
       // (user 2x crop: a stair-stepped blue-grey cutout). A real winter fox
       // carries a heavy fringe here, sweeping up the leading edge, and that
       // fringe is the thing that breaks the ear silhouette.
-      earRim = 1 - smoothstep(0.05, 0.55, Math.abs(dot));
+      const sx = x >= 0 ? 1 : -1;
+      const dot = nx * EAR_NORMAL[0] * sx + ny * EAR_NORMAL[1] + nz * EAR_NORMAL[2];
+      earRim = (1 - smoothstep(0.05, 0.55, Math.abs(dot))) * (1 - wIn);
     }
 
     // --- pinna coat shortens toward the tip --------------------------------
