@@ -110,7 +110,24 @@ export const CARD_LEN_SCALE = {
 };
 
 export const REGION_TABLE = [
-  /* 0 nose          */ { a: [0.00, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
+  /*
+   * 0 nose — density is 0.98, NOT 0, and the bare pad is uNoseFade's job.
+   *
+   * Zero density here meant the ENTIRE `nose` region rendered with no coat at
+   * all, and that region is not the rhinarium: it carries 69 vertices at this
+   * mesh resolution and spans roughly 40 mm across the front of the muzzle,
+   * against a real rhinarium of 8-10 mm. Measured at the `chin` framing,
+   * 25.5% of the animal's whole projected skin area came back at coat
+   * transmittance 1.0 -- bare skin, in a review pose, which is a flat failure
+   * of bible 4f rule 3. Raising it to 0.98 takes that to 0.0% exactly.
+   *
+   * Two mechanisms were defining the bare pad and they disagreed by a factor
+   * of five. Now one does: uNoseFade clears 4 mm fully bare, full coat by
+   * 7 mm, centred on the region's own bind-space centroid. The length scale
+   * of 0.30 still keeps whatever coat does grow here down to about a
+   * millimetre, which is what stops it reading as fur on the nose leather.
+   */
+  /* 0 nose          */ { a: [0.98, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
   /* 1 muzzle        */ { a: [0.98, 1.40, 0.60, 0.10], b: [1.55, 1.60, 0.90, 1.20] },
   /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 1.10] },
   /* 3 cheek         */ { a: [1.05, 1.34, 1.35, 0.50], b: [0.80, 1.00, 1.00, 1.70] },

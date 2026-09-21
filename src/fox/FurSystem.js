@@ -63,6 +63,23 @@ const EYE_CLEAR_MAX = 0.018;
  * never disagree about how big the eye is. 11.6 mm is the rig's nominal ball
  * and is used only if the anatomy agent has published no metadata.
  */
+/**
+ * Bind-space centroid of every vertex carrying `region`, or null if there are
+ * none. Bind space by construction — it is read straight off `position` — so
+ * it drops into furSkinMask2 without a frame conversion to get wrong.
+ */
+function regionCentroid(geometry, region) {
+  const pos = geometry.getAttribute('position');
+  const reg = geometry.getAttribute('region');
+  if (!pos || !reg) return null;
+  let x = 0, y = 0, z = 0, n = 0;
+  for (let i = 0; i < pos.count; i++) {
+    if (Math.round(reg.getX(i)) !== region) continue;
+    x += pos.getX(i); y += pos.getY(i); z += pos.getZ(i); n++;
+  }
+  return n ? [x / n, y / n, z / n] : null;
+}
+
 function eyeGlobeRadius(eyes) {
   let sum = 0, n = 0;
   for (const side of ['L', 'R']) {
@@ -136,11 +153,27 @@ export class FurSystem {
       this.uniforms.uEyeFade.value.x =
         clamp(this.eyeGlobeR * EYE_CLEAR, EYE_CLEAR_MIN, EYE_CLEAR_MAX);
     }
-    // Same for the rhinarium — measured off the SDF by the anatomy agent.
-    const noseAnchor = fox.anchors?.nose;
-    if (noseAnchor) {
-      noseAnchor.updateWorldMatrix(true, false);
-      this.uniforms.uNose.value.setFromMatrixPosition(noseAnchor.matrixWorld);
+    // Same for the rhinarium — but it has to be in the SAME SPACE.
+    //
+    // furSkinMask2 is evaluated at `position`, i.e. BIND space, and uEyeL/uEyeR
+    // are bind space because the socket carving measured them there. uNose was
+    // being written from the nose anchor's WORLD matrix, which is a different
+    // space: measured, 22.8 mm apart on the live rig, almost all of it in Y. So
+    // the 4-7 mm bare pad the uNoseFade comment describes was being carved in
+    // the wrong place, and had been for as long as it has existed.
+    //
+    // The centroid of the `nose` region's own vertices is bind space by
+    // construction and needs no frame conversion, so it cannot drift out of
+    // sync again. The anchor stays as a fallback, flagged as approximate.
+    const nose = regionCentroid(src, 0);
+    if (nose) {
+      this.uniforms.uNose.value.fromArray(nose);
+    } else {
+      const noseAnchor = fox.anchors?.nose;
+      if (noseAnchor) {
+        noseAnchor.updateWorldMatrix(true, false);
+        this.uniforms.uNose.value.setFromMatrixPosition(noseAnchor.matrixWorld);
+      }
     }
 
     // ------------------------------------------------------------ base ---
@@ -427,6 +460,29 @@ export class FurSystem {
  * copy, no extra VRAM — plus one instanced float carrying the shell index.
  * three dispatches the instanced draw off `geometry.isInstancedBufferGeometry`,
  * not off the object type, so a SkinnedMesh works here unmodified.
+ *
+ * `furFlow` IS BOUND BUT NO SHADER READS IT, and that is on purpose. The comb
+ * separates two things: the attribute says which WAY the hair lies across the
+ * surface, and `lay` says how FLAT it lies —
+ *
+ *     hdir = normalize(normal + furTangent * 2 * lay * t)
+ *
+ * so the fur system wants a purely tangential direction and builds the rise
+ * itself. furTangent is exactly that: FoxSurface derives it by projecting the
+ * normal component straight out of furFlow.
+ *
+ * The consequence is worth writing down, because it has already cost a round.
+ * FoxSurface also clamps furFlow to a minimum rise off the skin (0.04 -> 0.13,
+ * "~7.5 degrees, still a combed coat, but every hair now has a component
+ * pointing out of the surface"). That clamp is applied to furFlow and is then
+ * removed again, in full, by the projection that produces furTangent. It
+ * cannot reach the render. Measured on the built mesh, dot(furTangent, normal)
+ * is 0.000 in all 27 regions — as it must be, it is a tangent — while the hair
+ * direction the shader actually combs with stands 38-65 degrees off the skin
+ * (belly 38, throat 43, cheek 47, ruff 50, chest 52, flank 57, back 65). The
+ * "13% of the animal has hair lying within 3 degrees of the skin" measurement
+ * was taken on furFlow, not on the combed direction, and the trunk is not
+ * flat-coated. If anything the risk now runs the other way; see 4c on urchins.
  */
 function buildShellGeometry(src) {
   const g = new THREE.InstancedBufferGeometry();
