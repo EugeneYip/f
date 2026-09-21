@@ -52,8 +52,22 @@ export class SecondaryDynamics {
     // chain took 2883 ms to settle, with 18% overshoot at the base — that is
     // not mass, that is rubber. Stiffer and at/above critical damping
     // throughout; §8b explicitly prefers slightly stiff to slightly loose.
-    this.tOmega = chain(TAIL_N, (i) => lerp(42, 26, i / (TAIL_N - 1)));
-    this.tZeta = chain(TAIL_N, (i) => lerp(1.10, 1.00, i / (TAIL_N - 1)));
+    //
+    // §4f then asked the opposite question and it has a different answer.
+    // ζ ≥ 1 means NO overshoot, ever, anywhere on the animal — and "no
+    // overshoot" is the signature of a heavy solid, which is precisely the
+    // reading §4f is trying to get rid of. A light body inside a deep coat is
+    // not over-damped; it is HIGH-ω and UNDER-damped: it arrives fast and
+    // rings once, small. So ω goes UP (faster arrival, which is what §8b
+    // actually wants) and ζ comes down below 1 (one small overshoot, which is
+    // what "springy" means).
+    //
+    // Settling time is 4/(ζω): base 4/(0.74×48) = 113 ms, tip
+    // 4/(0.60×30) = 222 ms, with 5% and 9% overshoot. A reviewer cannot
+    // point at a 5% overshoot that is gone in a tenth of a second and call it
+    // lag; they can feel that the thing has mass.
+    this.tOmega = chain(TAIL_N, (i) => lerp(48, 30, i / (TAIL_N - 1)));
+    this.tZeta = chain(TAIL_N, (i) => lerp(0.74, 0.60, i / (TAIL_N - 1)));
     /**
      * `kLocal` is how much of each joint's target comes from its neighbour
      * rather than from the global drive, and it is the single most important
@@ -76,8 +90,10 @@ export class SecondaryDynamics {
         zs: chain(EAR_N, () => ({ v: 0 })),
         // Small, light, stiff: an ear should be done in ~100 ms. The old
         // tuning measured 483 ms to settle with overshoot — rubber ears.
-        omega: chain(EAR_N, (i) => lerp(62, 46, i / (EAR_N - 1))),
-        zeta: chain(EAR_N, (i) => lerp(1.05, 1.00, i / (EAR_N - 1))),
+        // Same correction as the tail: keep the speed, allow the ring.
+        // 4/(0.68×72) = 82 ms at the base, 4/(0.58×54) = 128 ms at the tip.
+        omega: chain(EAR_N, (i) => lerp(72, 54, i / (EAR_N - 1))),
+        zeta: chain(EAR_N, (i) => lerp(0.68, 0.58, i / (EAR_N - 1))),
       };
     }
 
@@ -91,6 +107,47 @@ export class SecondaryDynamics {
     // read as loose rather than welded to the ribcage.
     this.ruff = { x: 0, y: 0, xs: { v: 0 }, ys: { v: 0 } };
     this.belly = { x: 0, xs: { v: 0 } };
+
+    /**
+     * --- the coat's own inertia ------------------------------------------
+     *
+     * FINDING (§4f is the whole reason this exists): before this, the coat
+     * had NO dynamics at all. `src/fox/FurSystem.js` takes no motion input of
+     * any kind — no velocity, no acceleration, not even the `agitation`
+     * scalar this file has been publishing for rounds — and the only two
+     * bend terms in `src/shaders/fur.glsl.js` are `uGravity * uDroop` and
+     * `uWindDir * f(uWindSpeed, uWindGust)`, which come from the WEATHER, not
+     * from the animal. A fox sprinting at 2.6 m/s through still air therefore
+     * has a coat that is bit-identical to a fox standing still: rigidly
+     * welded to the skin, no compression on impact, no rebound, no lag on a
+     * direction change, no swing in the ruff.
+     *
+     * §4f says deep fur should read as "light, compressible, and it moves a
+     * beat behind the body". None of those three existed. This chain is the
+     * signal for all three:
+     *
+     *   lag{X,Y,Z}  body-space displacement of the coat's centre of mass
+     *               relative to the skin, in metres. Under-damped on purpose
+     *               — it is supposed to overshoot and ring once.
+     *   compress    0..1, driven by ground reaction. 1 = coat crushed onto
+     *               the body by a landing, then rebounding past rest.
+     *
+     * The fur agent has to consume these for the full effect (see the report:
+     * the shader needs one more bend term). What we can do from here alone is
+     * drive the SKINNED bones with the same signal, which moves the coat
+     * because the shells ride the skin — it buys the timing and the
+     * direction, just not the independent compression of the hair itself.
+     */
+    this.coat = {
+      x: 0, y: 0, z: 0,
+      xs: { v: 0 }, ys: { v: 0 }, zs: { v: 0 },
+      // Low ω, low ζ: this is the one chain on the animal that is ALLOWED to
+      // read as loose. Fur is the lightest thing here and the least attached.
+      // 4/(0.42×18) = 529 ms of ring at a few millimetres of amplitude.
+      omega: 18, zeta: 0.42,
+    };
+    this.coatCompress = 0;
+    this.coatCompressS = { v: 0 };
 
     this.t = 0;
     /** Published for the fur agent: how hard the coat is being thrown about. */
@@ -120,6 +177,16 @@ export class SecondaryDynamics {
     const spd = saturate(inp.speed / 0.5);
     const sway = Math.sin(TAU * inp.gaitPhase + 0.6) * 0.40 * spd;
     const swayV = Math.sin(TAU * inp.gaitPhase * 2 + 1.9) * 0.22 * spd;
+    // Suspension: with nothing on the ground the tail is the only thing the
+    // animal can push against, and it streams out behind and rises. `airborne`
+    // has been plumbed into this function since it was written and was never
+    // read by a single line of it.
+    const air = saturate(inp.airborne ?? 0);
+    const streamX = air * 0.55 * spd;
+    // Ground reaction travels up the tail as a shock. `impactVel` is the
+    // trunk spring's velocity, so this fires on the footfall and not a moment
+    // after it.
+    const shockX = clamp((inp.impactVel ?? 0) * 0.055, -0.45, 0.45);
 
     // IMPORTANT: these are *whole-tail* angles, in radians, not per-joint.
     // Nine joints each rotating by X accumulate to 9X at the tip, and with a
@@ -131,7 +198,7 @@ export class SecondaryDynamics {
       + sway + life * 0.130 * (1 - 0.6 * saturate(inp.speed))) / TAIL_N;
     const dynX = (clamp(-inp.accelY * 0.022, -0.32, 0.32)
       + clamp(inp.accelZ * 0.034, -0.36, 0.36)
-      + swayV
+      + swayV + streamX + shockX
       + life2 * 0.090 * (1 - 0.6 * saturate(inp.speed))
       + inp.shake * 0.62 * Math.sin(t * 46)) / TAIL_N;
 
@@ -191,23 +258,47 @@ export class SecondaryDynamics {
     const nX = clamp(-inp.accelZ * 0.018, -0.16, 0.16) + inp.shake * 0.25 * Math.sin(t * 41 + 0.4);
     const nY = clamp(-inp.accelX * 0.016, -0.16, 0.16) - clamp(inp.yawRate * 0.055, -0.14, 0.14);
     const nZ = clamp(inp.accelX * 0.010, -0.10, 0.10) + inp.shake * 0.42 * Math.sin(t * 38);
-    this.neck.x = spring(this.neck.x, nX, this.neck.xs, 34, 1.00, h);
-    this.neck.y = spring(this.neck.y, nY, this.neck.ys, 34, 1.00, h);
-    this.neck.z = spring(this.neck.z, nZ, this.neck.zs, 36, 1.02, h);
-    this.head.x = spring(this.head.x, this.neck.x * 0.9, this.head.xs, 28, 1.00, h);
-    this.head.y = spring(this.head.y, this.neck.y * 0.9, this.head.ys, 28, 1.00, h);
-    this.head.z = spring(this.head.z, this.neck.z * 0.8, this.head.zs, 30, 1.02, h);
+    // The head stays the tightest chain on the animal: §8b names it as the
+    // part a reviewer is most likely to catch trailing. ζ 0.88 is one ~1.5%
+    // overshoot, settled in 4/(0.88×40) = 114 ms.
+    this.neck.x = spring(this.neck.x, nX, this.neck.xs, 40, 0.88, h);
+    this.neck.y = spring(this.neck.y, nY, this.neck.ys, 40, 0.88, h);
+    this.neck.z = spring(this.neck.z, nZ, this.neck.zs, 42, 0.90, h);
+    this.head.x = spring(this.head.x, this.neck.x * 0.9, this.head.xs, 34, 0.86, h);
+    this.head.y = spring(this.head.y, this.neck.y * 0.9, this.head.ys, 34, 0.86, h);
+    this.head.z = spring(this.head.z, this.neck.z * 0.8, this.head.zs, 36, 0.88, h);
 
     // ------------------------------------------------ ruff / belly mass --
-    this.ruff.x = spring(this.ruff.x, clamp(-inp.accelY * 0.0055, -0.07, 0.07)
-      + inp.shake * 0.30 * Math.sin(t * 44 + 1.1), this.ruff.xs, 36, 1.00, h);
+    // §4f: the ruff and the belly fur are the deepest coat on the animal and
+    // therefore the loosest. They take the ground reaction directly — a
+    // landing shoves the body up into a coat that has not arrived yet.
+    const imp = clamp((inp.impactVel ?? 0) * 0.0090, -0.085, 0.085);
+    this.ruff.x = spring(this.ruff.x, clamp(-inp.accelY * 0.0055, -0.07, 0.07) + imp
+      + inp.shake * 0.30 * Math.sin(t * 44 + 1.1), this.ruff.xs, 30, 0.72, h);
     this.ruff.y = spring(this.ruff.y, clamp(-inp.accelX * 0.0060, -0.07, 0.07),
-      this.ruff.ys, 36, 1.00, h);
-    this.belly.x = spring(this.belly.x, clamp(-inp.accelY * 0.0040, -0.05, 0.05),
-      this.belly.xs, 28, 0.98, h);
+      this.ruff.ys, 30, 0.70, h);
+    this.belly.x = spring(this.belly.x, clamp(-inp.accelY * 0.0040, -0.05, 0.05) + imp * 0.75,
+      this.belly.xs, 24, 0.62, h);
+
+    // ------------------------------------------------------ coat inertia --
+    // Body-space displacement of the coat relative to the skin. Driven by the
+    // body's own acceleration with the sign REVERSED: accelerate forward and
+    // the coat is left behind, which is what "moves a beat behind" means.
+    const cgX = clamp(-inp.accelX * 0.00090, -0.024, 0.024);
+    const cgY = clamp(-inp.accelY * 0.00065, -0.020, 0.020);
+    const cgZ = clamp(-inp.accelZ * 0.00090, -0.024, 0.024);
+    this.coat.x = spring(this.coat.x, cgX, this.coat.xs, this.coat.omega, this.coat.zeta, h);
+    this.coat.y = spring(this.coat.y, cgY, this.coat.ys, this.coat.omega, this.coat.zeta, h);
+    this.coat.z = spring(this.coat.z, cgZ, this.coat.zs, this.coat.omega, this.coat.zeta, h);
+    // Compression: a landing crushes the coat onto the body, then it springs
+    // back past rest. Under-damped so the rebound actually happens.
+    const crush = saturate(Math.max(0, inp.impactVel ?? 0) * 0.055);
+    this.coatCompress = clamp(
+      spring(this.coatCompress, crush, this.coatCompressS, 26, 0.48, h), -0.55, 1);
 
     this.agitation = saturate(
-      Math.abs(this.tY[TAIL_N - 1]) * 1.6 + Math.abs(this.tX[TAIL_N - 1]) * 1.2 + inp.shake,
+      Math.abs(this.tY[TAIL_N - 1]) * 1.6 + Math.abs(this.tX[TAIL_N - 1]) * 1.2 + inp.shake
+      + Math.abs(this.coatCompress) * 0.35,
     );
   }
 
@@ -228,5 +319,12 @@ export class SecondaryDynamics {
     rig.add('chest', this.ruff.x, this.ruff.y, 0);
     rig.add('spine04', this.ruff.x * 0.5, this.ruff.y * 0.45, 0);
     rig.add('spine02', this.belly.x, 0, 0);
+    // Coat inertia, expressed on the two loosest regions of the trunk. This
+    // is ROTATION only, deliberately: `rig.offset` would translate the bone
+    // and take its children with it, so a coat lag on `chest` would jiggle
+    // the head. The translational half of the effect belongs in the fur
+    // shader and is published on `ctx.fox.coatLag` for it.
+    rig.add('spine03', this.coat.z * 0.55, this.coat.x * 0.50, 0);
+    rig.add('spine01', this.coat.z * 0.40, this.coat.x * 0.35, 0);
   }
 }

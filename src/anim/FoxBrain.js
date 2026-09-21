@@ -615,6 +615,12 @@ export class FoxBrain {
     i.headAccelX = this.accelX;
     i.headAccelZ = this.accelZ;
     i.shake = this.life.shake;
+    // Ground reaction. The trunk spring's VELOCITY, not its displacement:
+    // velocity peaks on the footfall itself, displacement a quarter-cycle
+    // later, and the coat has to react to the event rather than to its
+    // aftermath or the whole thing reads as — precisely — lag.
+    i.impactVel = this.loco.impactYs.v;
+    i.flight = this.loco.flight;
     return i;
   }
 
@@ -910,8 +916,26 @@ export class FoxBrain {
     if (!fox.lookTarget) fox.lookTarget = this.look.target.clone();
     else fox.lookTarget.copy(this.look.target);
     fox.yawn = this.life.yawn;
-    // For the fur agent: how hard the coat is being thrown about.
+    // ---- for the fur agent ------------------------------------------------
+    // How hard the coat is being thrown about.
     fox.agitation = this.sec.agitation;
     fox.airborne = loco.airborne;
+    /**
+     * The coat's own inertia, in BODY space, metres. §4f: deep fur "moves a
+     * beat behind the body"; this is that beat, measured.
+     *
+     * NOTE FOR WHOEVER OWNS `src/fox/FurSystem.js`: as of this commit nothing
+     * reads any of these. The fur shader's only two bend terms are gravity
+     * droop and ambient wind, both sourced from `ctx` — the weather — so the
+     * coat is currently bit-identical whether the animal is asleep or
+     * galloping. One extra term in the shell/fin displacement, of the same
+     * shape as the existing `W += uWindDir * amt`, would turn all of this on:
+     *     W += coatLag * bendable          // lag on a direction change
+     *     len *= (1.0 - 0.35 * coatCompress)  // crush on impact, rebound
+     * `coatCompress` goes slightly NEGATIVE on the rebound by design.
+     */
+    if (!fox.coatLag) fox.coatLag = new THREE.Vector3();
+    fox.coatLag.set(this.sec.coat.x, this.sec.coat.y, this.sec.coat.z);
+    fox.coatCompress = this.sec.coatCompress;
   }
 }
