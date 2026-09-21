@@ -846,6 +846,32 @@ export function buildField() {
   }
 
   // ------------------------------------------------------------ concha bowl --
+  //
+  // ## The concha's torn light/dark boundary is NOT this surface. Measured.
+  //
+  // 245e47c ruled out, by render, the rim lift, the vertex positions, the
+  // fitted outline, the uv, the normals, the shell's own shadow term, both
+  // alpha falloffs and backface culling, and handed on one live candidate:
+  // "shadow-map acne on a thin marching-cubes plate, which is anatomy's
+  // surface." It is not. At `nape`, over a 180 x 180 px box that is solid
+  // ear, mean |difference| against the base frame out of 255 levels, with
+  // the fraction of pixels moving more than 4 levels:
+  //
+  //     shadow casting OFF   0.73   2.5 %     <- the handed-down candidate
+  //     aFurAO zeroed        0.02   0.0 %
+  //     SKIN hidden          0.74   2.5 %     <- this surface, entirely
+  //     fur CARDS hidden     4.89  29.5 %
+  //     fur SHELLS hidden    9.59  59.5 %
+  //
+  // Killing every shadow the scene casts moves the ear by three quarters of
+  // one level, and hiding the marching-cubes plate outright moves it by the
+  // same amount, because at this framing the pinna is 90 % shell. Whatever
+  // the patches are, they are drawn by the shell stack. (The same holds on
+  // the face: with the shells hidden at `chin` the skin renders as one
+  // smooth unbroken surface with no patches on it at all.)
+  //
+  // Also worth someone's time: `aFurAO` moved the ear by 0.02 levels. The
+  // coat-occlusion bake is currently a no-op there.
   // The old bowl was a sphere 18.7 mm wide carved into a pinna 16 mm wide, so
   // it did not cut a bowl — it PLANED THE WHOLE FRONT FACE OFF. That is the
   // "flat blue-grey plate with no interior form" in the user's frontal crop,
