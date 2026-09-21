@@ -30,7 +30,11 @@ const APPLY = {
   nodof:    '(c) => { const d = c.postfx.dof || c.postfx.passes?.dof; const p = d && d.scale; if (d) d.scale = 0; return () => { if (d) d.scale = p; }; }',
   nobloom:  '(c) => { const b = c.postfx.bloom || c.postfx.passes?.bloom; const p = b && b.strength; if (b) b.strength = 0; return () => { if (b) b.strength = p; }; }',
   nobreath: '(c) => { const m = c.breath?.mesh; const v = m && m.visible; if (m) m.visible = false; return () => { if (m) m.visible = v; }; }',
-  nofur:    '(c) => { const g = c.fur?.group || c.fur?.shells; const v = g && g.visible; if (g) g.visible = false; return () => { if (g) g.visible = v; }; }',
+  // `c.fur.group` and `c.fur.shells` have never existed -- FurSystem adds
+  // `shellMesh` and `cardMesh` straight to fox.root. This variant was a silent
+  // no-op that rendered identically to `base`, so every "fur is not the cause"
+  // conclusion drawn from it was drawn from the same image twice.
+  nofur:    '(c) => { const m = [c.fur?.shellMesh, c.fur?.cardMesh].filter(Boolean); if (!m.length) throw new Error("nofur: no coat meshes on ctx.fur"); const v = m.map(o => o.visible); m.forEach(o => { o.visible = false; }); return () => m.forEach((o, i) => { o.visible = v[i]; }); }',
   nosnow:   '(c) => { const g = c.snowParticles?.points || c.snowParticles?.mesh; const v = g && g.visible; if (g) g.visible = false; return () => { if (g) g.visible = v; }; }',
 };
 

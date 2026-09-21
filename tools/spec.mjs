@@ -696,6 +696,90 @@ const results = await page.evaluate(async () => {
     }
   }
 
+  // 10b. SILHOUETTE HARDNESS — width is not softness.
+  //
+  //      Check 10 reports the head's edge ramping over 8 px and passes it,
+  //      while the legacy whole-frame check reports a 1 px transition and the
+  //      renders plainly show a hard edge. Neither instrument is lying: they
+  //      measure DIFFERENT EDGES. The animal has two — a faint wide veil of
+  //      outer shells, and inside it the skin mesh's own hard silhouette.
+  //      Check 10 walks in from 3% coverage to 80% and calls the distance a
+  //      ramp, so a 8 px veil followed by a cliff scores exactly the same as
+  //      a genuine 8 px feather. Transition WIDTH cannot tell them apart.
+  //
+  //      What separates them is the largest single-pixel STEP in coverage.
+  //      Fur ramps; bare mesh jumps. Measured as a fraction of interior
+  //      coverage, a hairy edge stays under ~0.2 and a mesh edge approaches
+  //      the antialiased limit of ~0.5.
+  {
+  atTime();
+    const profileOf = (m) => {
+      if (!m) return null;
+      const { W, H, fg, bg: bgRef, mask } = m;
+      let top = H, bot = 0;
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) if (mask[y * W + x]) { if (y < top) top = y; if (y > bot) bot = y; break; }
+      if (bot <= top) return null;
+      const covAt = (x, y) => {
+        const i = (y * W + x) * 4;
+        return Math.abs(fg[i] - bgRef[i]) + Math.abs(fg[i + 1] - bgRef[i + 1]) +
+               Math.abs(fg[i + 2] - bgRef[i + 2]);
+      };
+      const bands = { head: [top, top + (bot - top) * 0.33], body: [top + (bot - top) * 0.33, bot] };
+      const res = {};
+      for (const [name, [y0, y1]] of Object.entries(bands)) {
+        const steps = [];
+        for (let y = Math.round(y0) + 2; y < Math.round(y1) - 2; y += 3) {
+          let x = 1;
+          while (x < W - 1 && !mask[y * W + x]) x++;
+          if (x >= W - 2 || x < 8) continue;
+          let run = 0;
+          while (x + run < W - 2 && mask[y * W + x + run]) run++;
+          if (run < 6) continue;
+          const probe = Math.min(20, Math.max(4, Math.round(run * 0.6)));
+          const deep = covAt(Math.min(W - 2, x + probe), y);
+          if (deep < 40) continue;
+          // Start OUTSIDE the mask: the ramp begins before coverage reaches
+          // the mask's own 25/765 threshold, and that leading shoulder is
+          // exactly the part a bare mesh edge does not have.
+          let worst = 0;
+          for (let k = -6; k < probe; k++) {
+            const a = covAt(Math.max(1, Math.min(W - 2, x + k)), y);
+            const b = covAt(Math.max(1, Math.min(W - 2, x + k + 1)), y);
+            worst = Math.max(worst, (b - a) / deep);
+          }
+          steps.push(worst);
+        }
+        steps.sort((a, b) => a - b);
+        res[name] = steps.length >= 6
+          ? { median: +steps[steps.length >> 1].toFixed(3),
+              p90: +steps[Math.min(steps.length - 1, Math.floor(steps.length * 0.9))].toFixed(3),
+              n: steps.length }
+          : null;
+      }
+      return res;
+    };
+
+    out.edgeHardness = profileOf(maskedFrame('silhouette', true));
+
+    // POSITIVE CONTROL. A new gate that has never been shown to fail on a
+    // KNOWN defect is not a gate, it is a number -- that mistake has been made
+    // twice on this project already. Hide the coat and the same scan must
+    // report a decidedly harder edge; if it does not, this metric cannot see
+    // what it claims to see and its verdict above is worthless.
+    const coat = [ctx.fur?.shellMesh, ctx.fur?.cardMesh].filter(Boolean);
+    if (coat.length) {
+      const vis = coat.map((o) => o.visible);
+      coat.forEach((o) => { o.visible = false; });
+      atTime();
+      out.edgeHardnessNoFur = profileOf(maskedFrame('silhouette', true));
+      coat.forEach((o, i) => { o.visible = vis[i]; });
+    } else {
+      out.edgeHardnessNoFur = null;
+      out.edgeControlMissing = 'ctx.fur.shellMesh / cardMesh not found';
+    }
+  }
+
   // 11. AURORA STRUCTURE — §7 asks for vertical filaments. Restraint achieved
   //     by fading the aurora to nothing also passes a brightness test, so
   //     measure the RATIO of horizontal to vertical gradient energy in the sky.
@@ -871,6 +955,33 @@ for (const [region, v] of Object.entries(sbr)) {
 // despite an obvious visual difference). Superseded by the per-region check
 // above, which masks the animal properly. Kept as a warning so the number
 // stays visible without gating on it.
+// Silhouette HARDNESS, validated against a fur-off control in the same frame.
+const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
+{
+  const ctl = ehn.head || ehn.body;
+  const sub = eh.head || eh.body;
+  if (!sub || !ctl) {
+    record('silhouette hardness probe is measurable', false,
+      `coat ${sub ? 'ok' : 'null'}, fur-off control ${ctl ? 'ok' : 'null'} — ` +
+      `an unvalidated hardness number is not evidence`);
+  } else if (!(ctl.median > sub.median * 1.25)) {
+    // The control is the whole point. If stripping the coat does not make the
+    // edge measurably harder, this scan is not reading the coat at all.
+    record('silhouette hardness probe detects a known-bare edge', false,
+      `fur-off control median step ${ctl.median} vs coated ${sub.median} — ` +
+      `the control must be at least 1.25x harder or the metric is blind`);
+  } else {
+    for (const [name, v] of Object.entries(eh)) {
+      if (!v) continue;
+      record(`silhouette is hair, not a curve: ${name}`, v.p90 <= 0.25,
+        `largest single-pixel coverage step, 90th percentile ${v.p90} ` +
+        `(median ${v.median}) over ${v.n} rows — want <= 0.25; the fur-off ` +
+        `control on the same frame reads ${ctl.median}, which is what a bare ` +
+        `mesh edge looks like`);
+    }
+  }
+}
+
 const sr = results.silhouetteRamp;
 record('[legacy, unreliable] whole-frame silhouette ramp', sr && sr.median >= 3,
   sr ? `median transition ${sr.median}px over ${sr.n} columns (min ${sr.min}, max ${sr.max})`
