@@ -983,8 +983,17 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
 }
 
 const sr = results.silhouetteRamp;
-record('[legacy, unreliable] whole-frame silhouette ramp', sr && sr.median >= 3,
-  sr ? `median transition ${sr.median}px over ${sr.n} columns (min ${sr.min}, max ${sr.max})`
+// Kept as a REPORTED NUMBER, not an assertion. This check and the per-region
+// one contradicted each other for three rounds (1 px versus 8 px) and the
+// disagreement was resolved by realising they measure different edges, not by
+// either being wrong. Silhouette hardness above now asserts the thing both of
+// them were groping at, and it is validated against a fur-off control. Two
+// unreliable proxies for a quantity a third instrument measures directly are
+// noise in the report, and a failing check nobody trusts teaches everyone to
+// skim the report.
+record('[reported, not asserted] whole-frame silhouette ramp', true,
+  sr ? `median transition ${sr.median}px over ${sr.n} columns (min ${sr.min}, ` +
+       `max ${sr.max}) — width only; see silhouette hardness for ramp vs cliff`
      : 'could not locate the animal against the sky');
 
 const srcAfter = await fingerprint(path.join(ROOT, 'src'));

@@ -18,7 +18,20 @@ cannot find a defect in any category below, and you must say what convinced you.
 4. Also shoot moving states: `--state walk` and `--state trot`, and a couple of
    non-default sun angles (`--sun 2,140`, `--sun 14,-30`) — a look that only
    works at one sun position is not a look, it's a fluke.
-5. Score every category 0–10. Report the **lowest** scores first.
+5. **Compare against real arctic foxes, every round.** This is a standing
+   instruction from the user, who has said the result "requires frequent
+   comparison with real Arctic foxes for improvement". Use WebSearch/WebFetch
+   to pull up photographs of real *Vulpes lagopus* in winter coat at framings
+   matching ours — front-on, three-quarter, profile, and a close-up of the
+   face — and grade ours beside them rather than against your own memory of a
+   fox. `REFERENCE-FOX.md`, if present, holds measured proportions. Reference
+   only: nothing is downloaded into the project.
+6. Run `node tools/spec.mjs` and `node tools/audit.mjs` and read the numbers,
+   but **do not let a passing gate overrule your eye**. Every gate here was
+   written after a defect got through, and twenty-two instruments have now
+   given false readings on this project. If it looks wrong and the gate says
+   it is fine, the gate is the thing to distrust — say so.
+7. Score every category 0–10. Report the **lowest** scores first.
 
 ## Scoring (10 = a shipped AAA title; 7 = competent hobby project; ≤5 = broken)
 
@@ -35,8 +48,20 @@ cannot find a defect in any category below, and you must say what convinced you.
 ### B. Anatomy & believability
 - Correct canid skeleton: hock (not a backwards knee), digitigrade stance,
   scapula placement, forward-set eyes.
-- *Arctic* fox specifically: short blunt muzzle, domed forehead, **small rounded
-  ears**, short legs, round winter body. Red-fox proportions = ≤5.
+- *Arctic* fox specifically: domed forehead, **small rounded-TRIANGULAR ears**,
+  short legs, round winter body. Red-fox proportions = ≤5.
+- The muzzle is **short but genuinely tapering to a point** (1.4–1.6:1), NOT
+  blunt. This line used to read "short blunt muzzle"; implemented faithfully,
+  it produced a bear. See ART_DIRECTION §4c — conflating SHORT with BLUNT is
+  the single most expensive mistake made on this project.
+- **§4f — where the bulk lives.** The bulk of a winter arctic fox is COAT, not
+  body: a slight animal inside an enormous coat, with the coat carrying 45–50%
+  of the silhouette radius on the trunk. If the animal reads as a heavy solid
+  rather than a light compressible volume, say so and score it ≤5 — "bulky
+  rather than bouncy" is the user's own standing complaint.
+- **No bare skin anywhere** except rhinarium, eyes and paw pads. A smooth
+  surface with a geometric silhouette is an automatic ≤4 regardless of any
+  other metric.
 - Weight: does it look like a 3.5 kg animal standing on snow, or a decal
   floating above a plane?
 - Does anything read as a primitive — a sphere for a head, a capsule for a body?
