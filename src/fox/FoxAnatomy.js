@@ -249,6 +249,32 @@ export const EYE = {
    */
   socketSlot: 0.0060,      // half-length of the carve along the fissure axis
   socketNasalBias: 1.00,   // share of the slot spent on the nasal side
+
+  /**
+   * ### Re-measured after the muzzle work, and it got better for free
+   *
+   * Slimming `whiskerPadR` by 2.8 mm pulled skin off the medial canthus, so
+   * the cap moved again without touching this socket at all:
+   *
+   *     slot .0060 bias 1.00, before the muzzle edit   T 54.9  N 42.0  AP_W max 0.900  cornea 13.9
+   *     ...after it                                    T 53.9  N 44.0  AP_W max 0.966  cornea 14.3
+   *
+   * Confirmed against the live `[eyes]` line at the same instant: globe r
+   * 11.25 / 11.25, seat 1.88 / 1.87, cornea 14.3 / 14.3 mm. Fully spent,
+   * AP_W 0.966 would be fissure/cornea 1.09 against the measured 1.28.
+   *
+   * FOR THE FUR AGENT, urgent and adjacent: 57f5742 widened uEyeFade, and
+   * the coat is now shaved off a large oval AROUND the eye. Measured at
+   * `macro_eye`, fraction of 9x9 blocks flatter than 1.0 luminance levels
+   * (the brow 200 px away is the control):
+   *
+   *     nasal patch   0.0 % -> 51.4 %      temporal patch 0.0 % -> 91.9 %
+   *     brow control  0.0 % ->  0.0 %
+   *
+   * That is bare skin outside the palpebral aperture, which §4f rule 3 does
+   * not permit, and it is a new defect of the same kind the muzzle just had.
+   * The clearance needs to follow the aperture, not the globe.
+   */
 };
 
 /**
