@@ -279,6 +279,25 @@ export const FUR_DEFAULTS = {
   specGainB: 0.26,
   specJitter: 0.11,
 
+  /*
+   * Coat dynamics gains (bible 4f: "deep fur ... moves a beat behind the
+   * body"; the user's words are "a different visual experience from a truly
+   * bouncy one").
+   *
+   * coatLagGain multiplies the published body-space lag before it is rotated
+   * into world space. 1.0 means the tip of a full-depth 48 mm coat moves by
+   * the whole published displacement, which peaks near 20 mm at a gallop and
+   * is a spring, not a step.
+   *
+   * coatSquash is the fraction of coatCompress that reaches the hair LENGTH.
+   * coatCompress reaches 0.20 on a gallop landing and is authored to dip to
+   * about -0.55 on the rebound, so 0.35 gives a 7% crush and up to a 19%
+   * overshoot -- squash and stretch, on the one quantity a bone cannot move.
+   */
+  coatLagGain: 1.0,
+  coatSquash: 0.35,
+  coatRuffle: 0.055,
+
   // cards
   cardWidth: 0.115,
   cardLength: 1.20,
@@ -353,6 +372,20 @@ export function buildFurUniforms(ctx) {
     uWindSpeed: { value: ctx.windSpeed ?? 2.4 },
     uWindGust: { value: 0 },
     uGravity: { value: new THREE.Vector3(0, -1, 0) },
+
+    /*
+     * The animal's own motion. Written every frame by syncFurUniforms from
+     * ctx.fox.coatLag / coatCompress / agitation, which animation has been
+     * publishing for several rounds with ZERO consumers anywhere in
+     * src/fox/** or src/shaders/** -- so up to now the coat was
+     * bit-identical asleep and at a gallop, and everything that looked like
+     * secondary motion in the fur was ctx.wind.
+     */
+    uCoatLag: { value: new THREE.Vector3() },
+    uCoatCompress: { value: 0 },
+    uCoatSquash: { value: d.coatSquash },
+    uAgitation: { value: 0 },
+    uCoatRuffle: { value: d.coatRuffle },
 
     uEyeL: { value: new THREE.Vector3(-0.027, 0.318, 0.222) },
     uEyeR: { value: new THREE.Vector3(0.027, 0.318, 0.222) },
@@ -573,6 +606,9 @@ export function makeCardMaterial(uniforms) {
  * never hardcoded here — and the wind vector is scaled exactly as
  * SnowParticles scales it, so blowing snow and blowing fur agree.
  */
+/** Scratch for the body -> world rotation of the coat lag; never allocate per frame. */
+const _q = new THREE.Quaternion();
+
 export function syncFurUniforms(u, ctx) {
   u.uSunDir.value.copy(ctx.sunDirection);
   u.uSunColor.value.copy(ctx.sunColor);
@@ -581,6 +617,30 @@ export function syncFurUniforms(u, ctx) {
   u.uGroundBounce.value.copy(ctx.groundBounce);
 
   u.uTime.value = ctx.time;
+
+  /*
+   * The coat's own inertia. ctx.fox.coatLag is BODY space (x lateral,
+   * y vertical, z longitudinal, metres) and furDynamics adds it in WORLD
+   * space alongside gravity and wind, so it has to be rotated by the
+   * animal's world orientation -- a coat lagging "backwards" has to lag
+   * backwards along the direction the fox is actually facing, not along -Z.
+   * Read defensively: animation may not have run yet, and a fur that throws
+   * here would take the whole coat down with it.
+   */
+  const fox = ctx.fox;
+  if (fox?.coatLag) {
+    u.uCoatLag.value.copy(fox.coatLag).multiplyScalar(FUR_DEFAULTS.coatLagGain);
+    const root = fox.root;
+    if (root) {
+      root.updateWorldMatrix(true, false);
+      u.uCoatLag.value.applyQuaternion(root.getWorldQuaternion(_q));
+    }
+  } else {
+    u.uCoatLag.value.set(0, 0, 0);
+  }
+  u.uCoatCompress.value = fox?.coatCompress ?? 0;
+  u.uAgitation.value = fox?.agitation ?? 0;
+
   u.uWindDir.value.copy(ctx.wind);
   const gust = ctx.windGust ?? 0;
   u.uWindSpeed.value = (ctx.windSpeed ?? 2.4) * (1 + 1.4 * gust);

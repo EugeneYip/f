@@ -95,6 +95,15 @@ uniform vec3  uWindDir;        // ctx.wind, unit — the same vector the snow us
 uniform float uWindSpeed;      // ctx.windSpeed * (1 + 1.4*gust), as SnowParticles
 uniform float uWindGust;
 uniform vec3  uGravity;        // world down
+// --- the animal's own motion, as opposed to the weather --------------------
+// Published by animation on ctx.fox and, until now, read by nothing: the coat
+// was bit-identical whether the fox was asleep or galloping.
+uniform vec3  uCoatLag;        // WORLD-space coat inertia, metres at a 48 mm
+                               // coat (FurSystem rotates it out of body space)
+uniform float uCoatCompress;   // +1 crushed onto the body, negative = rebound
+uniform float uCoatSquash;     // how much of that reaches the hair length
+uniform float uAgitation;      // 0..1, how hard the coat is being thrown about
+uniform float uCoatRuffle;     // agitation -> per-strand flick gain
 
 // --- coat shape ------------------------------------------------------------
 uniform vec3  uEyeL;           // bind-space eyeball centres: the coat has to
@@ -304,8 +313,23 @@ vec2 furSkinMask2(vec3 p){
   return vec2(eyeL * nose, eyeD * nose);
 }
 
+/**
+ * Coat depth in metres, after the eye/nose parting AND the impact crush.
+ *
+ * Hair compression is the half of bible 4f's bounce that a bone rotation
+ * physically cannot express: a skeleton can pitch the trunk, it cannot make
+ * fur shorter. uCoatCompress reaches 0.20 at a gallop and dips negative on
+ * the rebound by design, so this squashes on the landing and overshoots past
+ * rest on the way back out.
+ *
+ * Both the shells and the cards multiply THIS, so the card tip's reach as a
+ * multiple of the local coat -- the quantity CARD_SHAPE.reachBand guards and
+ * the one that produced the urchin coat when it drifted -- is unchanged by
+ * the crush. It scales the coat and the hair in it together.
+ */
 float furCoatLength(vec3 p, float lengthScale){
-  return furLength * uCoatScale * lengthScale * furSkinMask2(p).x;
+  float crush = clamp(1.0 - uCoatCompress * uCoatSquash, 0.62, 1.30);
+  return furLength * uCoatScale * lengthScale * crush * furSkinMask2(p).x;
 }
 `;
 
@@ -327,6 +351,26 @@ vec3 furDynamics(vec3 rootW, float bendable, float seed, float boost){
   float amt   = (uWindSpeed * 0.030 + uWindGust * 0.26 * gust) * uWindBend * bendable * boost;
   W += uWindDir * amt;
   W += vec3(0.0, 1.0, 0.0) * (amt * flick * 0.35);
+
+  // ---- the ANIMAL's motion, not the weather -----------------------------
+  // Everything above this line comes from ctx.wind and ctx.windSpeed, which
+  // is why the coat has been identical asleep and at a gallop. uCoatLag is
+  // the body's acceleration with the sign reversed, sprung and published by
+  // SecondaryDynamics: accelerate and the coat is left behind, which is what
+  // bible 4f's "moves a beat behind the body" is.
+  //
+  // bendable carries the coat's own depth in metres, so dividing by the
+  // 48 mm flank coat (4f, the one sourced depth we have) makes the lag land
+  // at full strength on the deepest fur and nearly vanish on the 4 mm
+  // muzzle. That is the right gradient: a ruff swings, a whisker pad does
+  // not, and it falls out of the geometry instead of a per-region table.
+  W += uCoatLag * (bendable * ${(1 / 0.048).toFixed(4)} * boost);
+
+  // Agitation ruffles the coat out of phase with itself. It rides the
+  // existing per-strand flick rather than adding a second oscillator, so an
+  // agitated coat breaks up along the same axis a gust would break it up.
+  W += vec3(0.0, 1.0, 0.0) *
+       (bendable * boost * uAgitation * uCoatRuffle * flick);
   return W;
 }
 `;
