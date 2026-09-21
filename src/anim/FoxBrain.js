@@ -96,6 +96,15 @@ const MAX_REACH_DROP = 0.080;
  * the gait speed, so use the default when framing matters.
  */
 const REVIEW_LEAD = 2.85;
+/**
+ * Pounce cycle length, and the instant within it that a review shot wants.
+ * NOT the apex: at apex the animal is 440 mm up and the `profile` camera is
+ * framed for a 230 mm one, so it photographs as a fox leaving the top of the
+ * frame. 1.56 s is the late descent — nose down, forelegs reaching, about to
+ * go in — which is the image the behaviour is known for anyway.
+ */
+const POUNCE_CYCLE = 2.35;
+const POUNCE_APEX = 1.56;
 const STATE_BLEND = 0.55;
 
 const LIMB_SPECS = [
@@ -355,13 +364,38 @@ export class FoxBrain {
     if (harness) {
       this.prevState = name;
       this.blend = 1;
-      const lead = (GAITS[s.gait]?.speed ?? 0) * REVIEW_LEAD;
+      let lead = (GAITS[s.gait]?.speed ?? 0) * REVIEW_LEAD;
+      if (s.special === 'pounce') {
+        // The pounce's travel comes from `lungeZ`, which the gait clock knows
+        // nothing about, so the gait-speed lead above is zero and the animal
+        // simply leaps out of frame before the shutter opens. Start the cycle
+        // so the APEX lands on the shutter, then integrate the lunge profile
+        // over the settle to find where that puts it. Exact, not estimated.
+        this.pounceT = POUNCE_APEX - REVIEW_LEAD;
+        while (this.pounceT < 0) this.pounceT += POUNCE_CYCLE;
+        lead = this._pounceTravel(this.pounceT, REVIEW_LEAD);
+      }
       _p.set(0, 0, -lead);
       this.loco.reset(this.ctx, _p, 0, s.gait);
     } else {
       this.loco.setGait(s.gait);
     }
     return true;
+  }
+
+  /** Forward distance a pounce covers over `dur` seconds starting at cycle `t0`. */
+  _pounceTravel(t0, dur) {
+    const h = 1 / 240;
+    let t = t0, d = 0;
+    for (let i = 0; i < Math.round(dur / h); i++) {
+      t += h;
+      if (t > POUNCE_CYCLE) t -= POUNCE_CYCLE;
+      if (t >= 1.05 && t < 1.65) {
+        const x = (t - 1.05) / 0.60;
+        d += 1.50 * (1 - 0.30 * x) * h;
+      }
+    }
+    return d;
   }
 
   /** Point the head somewhere specific (used by cinematics, if they want it). */
@@ -475,6 +509,7 @@ export class FoxBrain {
         this.loco.lungeX = this.loco.lungeZ = 0;
       }
       this.pounceCrouch = 0;
+      this.pounceDive = 0;
       return;
     }
     this.pounceT += h;
@@ -484,7 +519,21 @@ export class FoxBrain {
     const t = this.pounceT;
 
     const loco = this.loco;
-    // 0.00–0.95 crouch and rock · 0.95–1.05 load · 1.05–1.58 flight · 1.58+ recover
+    // 0.00–0.95 crouch and rock · 0.95–1.05 load · 1.05–1.65 flight · 1.65+ recover
+    //
+    // The mousing pounce is the arctic fox's signature move and it was a
+    // 200 mm hop on a half-sine. Two corrections:
+    //
+    //  - The arc is now a PARABOLA, 4x(1−x). A half-sine has its vertical
+    //    velocity changing fastest at the apex, which is the opposite of
+    //    ballistic and is why the old jump had no hang to it.
+    //  - 0.60 s of flight is h = gT²/8 = 0.44 m of rise, self-consistent
+    //    rather than authored, and on a 0.23 m animal that puts the nose
+    //    near 0.9 m at apex — which is the height the behaviour is known for.
+    //
+    // And it lands NOSE-FIRST: the animal pitches down through the descent
+    // and drives the muzzle into the snow. Without that it is a jump, not a
+    // pounce.
     if (t < 0.95) {
       this.pounceCrouch = smootherstep(0, 0.55, t) * (0.9 + 0.1 * Math.sin(t * 9));
       this.pounceAir = 0;
@@ -497,20 +546,25 @@ export class FoxBrain {
       this.pounceRock = 0;
       this.pounceAir = 0;
       loco.airLift = 0;
-    } else if (t < 1.58) {
-      const x = (t - 1.05) / 0.53;
+    } else if (t < 1.65) {
+      const x = (t - 1.05) / 0.60;
       this.pounceCrouch = lerp(-0.45, 0.25, smoothstep(0.5, 1, x));
-      this.pounceAir = Math.sin(Math.PI * x);
-      loco.airLift = 0.20 * Math.sin(Math.PI * x);
-      loco.lungeZ = 1.15 * (1 - 0.25 * x);
+      const arc = 4 * x * (1 - x);                 // ballistic, not a half-sine
+      this.pounceAir = arc;
+      loco.airLift = 0.44 * arc;
+      loco.lungeZ = 1.50 * (1 - 0.30 * x);
+      // Nose-first. Rises level, tips over the apex, drives down on landing.
+      this.pounceDive = smootherstep(0.42, 0.98, x) * 0.62 - smootherstep(0, 0.30, x) * 0.16;
       this.pounceRock = 0;
     } else {
-      const x = clamp((t - 1.58) / 0.5, 0, 1);
+      const x = clamp((t - 1.65) / 0.5, 0, 1);
       this.pounceCrouch = 0.75 * (1 - smootherstep(0, 1, x));
       this.pounceAir = 0;
       loco.airLift = 0;
       loco.lungeX = loco.lungeZ = 0;
       this.pounceRock = 0;
+      // Unwind the dive as the forequarters take the landing.
+      this.pounceDive = 0.62 * (1 - smootherstep(0, 0.55, x));
     }
 
     if (this.pounceAir > 0) {
@@ -579,8 +633,12 @@ export class FoxBrain {
     if (!this.loco.frozen) return;
     // Either the stance has drifted out from under the animal, or the idle
     // scheduler has simply decided it is time to shift weight. One foot only.
+    // 30 mm, not 42: the arrival leaves the stance up to ~43 mm out of square
+    // (it was 146 mm before the freeze fix), and a real animal squares itself
+    // up after halting rather than standing where it happened to stop. This
+    // threshold IS the settle's last beat.
     const w = this.loco.worstPlacement();
-    if (w && w.dist > 0.042) { this.loco.requestShuffle(w.foot.key); return; }
+    if (w && w.dist > 0.030) { this.loco.requestShuffle(w.foot.key); return; }
     const r = this.life.wantShuffle;
     if (r < 0) return;
     const keys = ['RL', 'FL', 'RR', 'FR'];
@@ -750,11 +808,22 @@ export class FoxBrain {
     // impactY   ground reaction: compression on each footfall, then rebound
     rig.offset('root', sway,
       loco.bob + loco.flight + loco.impactY - drop + (loco.airLift || 0) * 0, fwd);
-    rig.add('root', loco.bodyPitch, loco.yawSway + shakeYaw, loco.bodyRoll + shakeRoll);
+    // The mousing dive: the whole animal tips nose-down over the apex, and
+    // the neck and head drive further than the trunk so the muzzle leads.
+    const dive = this.pounceDive || 0;
+    if (dive !== 0) {
+      rig.add('neck01', dive * 0.34, 0, 0);
+      rig.add('neck02', dive * 0.30, 0, 0);
+      rig.add('head', dive * 0.26, 0, 0);
+      rig.add('spine04', dive * 0.10, 0, 0);
+    }
+    rig.add('root', loco.bodyPitch + dive * 0.46,
+      loco.yawSway + shakeYaw, loco.bodyRoll + shakeRoll);
 
     // Rotating the root bone about the ground would swing the whole animal
     // sideways; compensate so the pitch/roll pivot sits inside the ribcage.
-    _eu.set(loco.bodyPitch, loco.yawSway + shakeYaw, loco.bodyRoll + shakeRoll, 'XYZ');
+    _eu.set(loco.bodyPitch + dive * 0.46, loco.yawSway + shakeYaw,
+      loco.bodyRoll + shakeRoll, 'XYZ');
     _qe.setFromEuler(_eu);
     _v.set(0, 0.20, -0.04);
     _p.copy(_v).applyQuaternion(_qe);
