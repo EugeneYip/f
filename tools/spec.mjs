@@ -654,7 +654,33 @@ const results = await page.evaluate(async () => {
     const ppm = cv.height / (2 * dist * Math.tan(ctx.camera.fov * Math.PI / 360));
     const widthPx = 0.012 * ppm;                   // the pad is ~12 mm across
     const r = Math.max(1, Math.min(5, Math.floor(widthPx / 3)));
-    out.nosePoses[pose] = { ...sample(p.x, p.y, r), widthPx: +widthPx.toFixed(1), rad: r };
+    // FIND the pad; do not assume it sits at its anchor.
+    //
+    // The rhinarium stands ~5.8 mm proud of the anchor, so at a shallow angle
+    // the projected anchor lands off the visible pad and the box averages
+    // coat. The face agent measured this directly: at `profile` this check
+    // reported (100,113,130) and failed, while the darkest 5x5 ON the pad is
+    // (12,22,32) -- on spec, and correctly blue-leaning. Widening the box
+    // walks the number monotonically toward the coat (r=3 -> 33, r=5 -> 59,
+    // r=8 -> 78, r=12 -> 99), which is the signature of a probe measuring its
+    // surroundings rather than its subject. Same fault, and same fix, as the
+    // iris probe: search for the feature, then sample it.
+    //
+    // The pad is the darkest thing on the animal, so search darkest-first over
+    // a window scaled to the feature.
+    const win = Math.max(4, Math.round(widthPx));
+    let best = null;
+    for (let dy = -win; dy <= win; dy += 2) {
+      for (let dx = -win; dx <= win; dx += 2) {
+        const c = sample(p.x + dx, p.y + dy, r);
+        if (!c || !c.n) continue;
+        const L = (c.r + c.g + c.b) / 3;
+        if (!best || L < best.L) best = { L, dx, dy, c };
+      }
+    }
+    out.nosePoses[pose] = best
+      ? { ...best.c, widthPx: +widthPx.toFixed(1), rad: r, foundAt: [best.dx, best.dy] }
+      : { ...sample(p.x, p.y, r), widthPx: +widthPx.toFixed(1), rad: r, foundAt: null };
   }
 
   // 10. PER-REGION SILHOUETTE — a whole-animal median let a good torso mask a
