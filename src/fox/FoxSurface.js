@@ -206,6 +206,26 @@ export async function buildFoxSurface(skeleton, {
       }
     }
 
+    // --- the coat shortens to the eyelid margin -----------------------------
+    // The fur shader carves a bald disc around each eye whose RADIUS scales
+    // with the LOCAL coat depth (uEyeFade = 9.8 mm + 0.85 per metre of coat).
+    // That coefficient was tuned when the face carried 4-32 mm. §4f took the
+    // face to 15-40 mm, which puts the disc at ~44 mm radius while the pupils
+    // are only 58 mm apart — the two discs meet across the bridge of the nose
+    // and shave the entire front of the face. That is §4f's own failure,
+    // inverted, and arriving through a uniform the fur agent owns.
+    // Capping the coat by distance to the eyeball shrinks the disc as well as
+    // the coat (the shader reads the raw authored length), so the transition
+    // tightens rather than spreading — and it is what the animal does: canids
+    // are bald to the lid margin and the coat deepens away from the orbit.
+    if (reg === R.forehead || reg === R.cheek || reg === R.skull ||
+        reg === R.muzzle || reg === R.jawLower) {
+      const dx1 = x - eyes.R.centre[0], dy1 = y - eyes.R.centre[1], dz1 = z - eyes.R.centre[2];
+      const dx2 = x - eyes.L.centre[0], dy2 = y - eyes.L.centre[1], dz2 = z - eyes.L.centre[2];
+      const dEye = Math.min(Math.hypot(dx1, dy1, dz1), Math.hypot(dx2, dy2, dz2));
+      len = Math.min(len, 0.0035 + Math.max(0, dEye - 0.007));
+    }
+
     // --- the muzzle's short coat must not leak back onto the jaw ------------
     // §4f.2 pins the muzzle at 3-4 mm, and the softmax that blends the fur
     // fields is isotropic, so the muzzle root drags the coat down across the

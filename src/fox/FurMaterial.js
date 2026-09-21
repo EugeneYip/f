@@ -72,9 +72,20 @@ export const CARD_INNER_FLOOR = {
  * shallow for the shells to ramp over more than a pixel or two — the head and
  * the lower legs.
  */
+/*
+ * These were pulled well below 1 because "the shells present a near-binary
+ * boundary only a few pixels out from the mesh, and that step sits on top of
+ * the cards' graded fringe and flattens it". That binary boundary was the
+ * grazing-angle collapse of the hair field, and it is fixed -- measured on a
+ * coverage pass, the shells ALONE now break their own outline (longest smooth
+ * contour run 0.2-0.9% of the contour, against 5-10% before). Feathering them
+ * out early now costs reach on exactly the regions that have the least of it,
+ * so the handicap is much gentler: still short enough that the cards lead on
+ * the outline, no longer short enough to leave a bare mesh curve under them.
+ */
 export const SHELL_LEN_SCALE = {
-  1: 0.90, 2: 0.92, 4: 0.88, 5: 0.88, 6: 0.80, 7: 0.85,   // muzzle..ears
-  18: 0.75, 19: 0.70, 20: 0.60, 21: 0.75, 22: 0.70, 23: 0.60,
+  1: 0.96, 2: 0.96, 4: 0.96, 5: 0.96, 6: 0.94, 7: 0.94,   // muzzle..ears
+  18: 0.90, 19: 0.88, 20: 0.86, 21: 0.90, 22: 0.88, 23: 0.86,
 };
 
 /**
@@ -100,13 +111,13 @@ export const CARD_LEN_SCALE = {
 
 export const REGION_TABLE = [
   /* 0 nose          */ { a: [0.00, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
-  /* 1 muzzle        */ { a: [0.98, 1.40, 0.60, 0.10], b: [1.55, 1.60, 0.90, 0.85] },
-  /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 0.75] },
+  /* 1 muzzle        */ { a: [0.98, 1.40, 0.60, 0.10], b: [1.55, 1.60, 0.90, 1.20] },
+  /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 1.10] },
   /* 3 cheek         */ { a: [1.05, 1.34, 1.35, 0.50], b: [0.80, 1.00, 1.00, 1.70] },
-  /* 4 forehead      */ { a: [1.00, 1.10, 0.90, 0.10], b: [1.40, 1.35, 0.90, 1.40] },
+  /* 4 forehead      */ { a: [1.00, 1.10, 0.90, 0.10], b: [1.40, 1.35, 0.90, 1.80] },
   /* 5 skull         */ { a: [1.00, 1.40, 0.95, 0.16], b: [1.20, 1.25, 1.00, 1.70] },
-  /* 6 earOuter      */ { a: [1.00, 1.00, 0.80, 0.26], b: [1.45, 1.70, 0.90, 1.60] },
-  /* 7 earInner      */ { a: [0.90, 1.00, 1.20, 0.55], b: [1.30, 1.55, 0.80, 1.40] },
+  /* 6 earOuter      */ { a: [1.00, 1.00, 0.80, 0.26], b: [1.45, 1.70, 0.90, 2.60] },
+  /* 7 earInner      */ { a: [0.90, 1.00, 1.20, 0.55], b: [1.30, 1.55, 0.80, 2.20] },
   /* 8 throat        */ { a: [1.00, 1.10, 1.20, 0.45], b: [0.95, 1.10, 1.00, 0.85] },
   /* 9 neck          */ { a: [1.00, 1.08, 1.05, 0.35], b: [0.90, 1.00, 1.00, 0.90] },
   /* 10 ruff          */ { a: [1.05, 1.16, 1.15, 0.55], b: [0.72, 0.95, 1.00, 1.60] },
@@ -118,11 +129,11 @@ export const REGION_TABLE = [
   /* 16 croup         */ { a: [1.00, 1.04, 1.25, 0.28], b: [0.92, 1.00, 1.00, 1.10] },
   /* 17 haunch        */ { a: [1.00, 1.08, 1.05, 0.30], b: [0.92, 1.00, 1.00, 0.82] },
   /* 18 legFrontUpper */ { a: [1.00, 1.10, 1.00, 0.24], b: [1.10, 1.35, 0.25, 1.05] },
-  /* 19 legFrontLower */ { a: [1.00, 1.15, 0.85, 0.24], b: [1.20, 1.60, 0.16, 1.15] },
-  /* 20 pawFront      */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 0.80] },
+  /* 19 legFrontLower */ { a: [1.00, 1.15, 0.85, 0.24], b: [1.20, 1.60, 0.16, 1.60] },
+  /* 20 pawFront      */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 1.30] },
   /* 21 legHindUpper  */ { a: [1.00, 1.10, 1.05, 0.28], b: [1.05, 1.30, 0.25, 1.05] },
-  /* 22 hock          */ { a: [1.00, 1.10, 0.95, 0.32], b: [1.15, 1.50, 0.16, 1.30] },
-  /* 23 pawHind       */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 0.80] },
+  /* 22 hock          */ { a: [1.00, 1.10, 0.95, 0.32], b: [1.15, 1.50, 0.16, 1.70] },
+  /* 23 pawHind       */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 1.30] },
   /* 24 tailBase      */ { a: [1.04, 1.14, 0.45, 0.34], b: [0.85, 0.95, 1.00, 1.70] },
   /* 25 tailMid       */ { a: [1.06, 1.36, 0.30, 0.42], b: [0.78, 0.92, 1.00, 2.10] },
   /* 26 tailTip       */ { a: [1.04, 1.18, 0.34, 0.36], b: [0.82, 0.95, 1.00, 1.85] },
@@ -181,6 +192,7 @@ export const FUR_DEFAULTS = {
   // what a backlit coat does. uTrans is retuned to hold the rim's brightness.
   transThin: 1.2,
   transGraze: 3.0,
+  transFloor: 0.7,
   aoInner: 0.66,
   aoPow: 0.90,
   aoFloor: 0.54,
@@ -303,6 +315,7 @@ export function buildFurUniforms(ctx) {
     uTransPow: { value: d.transPow },
     uTransThin: { value: d.transThin },
     uTransGraze: { value: d.transGraze },
+    uTransFloor: { value: d.transFloor },
     uAOInner: { value: d.aoInner },
     uAOPow: { value: d.aoPow },
     uAOBake: { value: d.aoBake },
