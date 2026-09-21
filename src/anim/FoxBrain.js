@@ -705,7 +705,12 @@ export class FoxBrain {
     // damped terrain follow is far too spiky to drive springs with.
     const c = Math.cos(-loco.yaw), s = Math.sin(-loco.yaw);
     const bx = ax * c + az * s;
-    const bz = -ax * s + az * c;
+    // `loco.vel` is the planner's mean velocity and carries no intra-stride
+    // structure at all, so this second difference of it is identically zero
+    // in steady straight travel. The surge is the real longitudinal
+    // acceleration of the trunk and has to be added here or the spring
+    // chains keep reading a zero they cannot distinguish from "not moving".
+    const bz = -ax * s + az * c + (loco.surgeAcc || 0);
     this.accelX = damp(this.accelX, clamp(bx, -60, 60), 26, h);
     this.accelY = damp(this.accelY, clamp(ay, -80, 80), 26, h);
     this.accelZ = damp(this.accelZ, clamp(bz, -60, 60), 26, h);
@@ -872,7 +877,11 @@ export class FoxBrain {
     const sway = loco.sway;
     // The arrival rock: the mass the animal was carrying forward gets put
     // down over about 0.7 s instead of simply ceasing to exist.
-    const fwd = loco.settle * 0.014;
+    // Arrival rock, plus the intra-stride surge: the trunk running ahead of
+    // and behind its own mean path as the forelimbs brake and the hindlimbs
+    // drive. Both are body-space forward, both are absorbed by the IK over
+    // planted feet — that is what the reach envelope is for.
+    const fwd = loco.settle * 0.014 + loco.surge;
     // Idle weight transfer moves the ROOT TRANSFORM, not the root bone.
     // Putting it on the bone meant the animal's centre of mass never
     // translated: a 3 s idle probe measured root displacement of exactly

@@ -64,6 +64,9 @@ const U_PLANT = 0.74;
 /** Hind contact planted this far caudal of its rest patch (metres). */
 const HIND_SET_BACK = -0.024;
 
+/** Peak intra-stride fore/aft surge of the trunk over its mean path (metres). */
+const SURGE_M = 0.008;
+
 /**
  * Gait table. `speed` and `cycle` together define the stride; `duty` is the
  * stance fraction; `offsets` are the cycle phase at which each limb touches
@@ -292,6 +295,10 @@ export class Locomotion {
     this.bobS = { v: 0 };
     this.sway = 0;
     this.swayS = { v: 0 };
+    /** Intra-stride fore/aft surge: displacement (m) and its acceleration. */
+    this.surge = 0;
+    this.surgeS = { v: 0 };
+    this.surgeAcc = 0;
     /**
      * Ground reaction. Every footfall drives a velocity impulse into this
      * spring: the trunk compresses onto the loaded limb and rebounds. It is
@@ -879,6 +886,41 @@ export class Locomotion {
     const bobT = clamp((g.vault ? 1 : -1) * this.gBob * 0.5 * bobNorm * moving, -0.06, 0.06);
     this.bobCmd = bobT;                  // published so a probe can measure the spring's loss
     this.bob = clamp(spring(this.bob, bobT, this.bobS, 108, 0.86, h), -0.075, 0.075);
+
+    /**
+     * --- intra-stride SURGE ----------------------------------------------
+     *
+     * A running quadruped does not travel at a constant speed. It brakes as
+     * the forelimbs take the load and accelerates through hindlimb drive,
+     * and every stride is one cycle of that.
+     *
+     * We had none of it, and the cost was much larger than it sounds.
+     * `vel` is derived from a damped mean `speed` along a damped `yaw`, so
+     * in steady straight-line travel the body's LONGITUDINAL and LATERAL
+     * accelerations are identically zero — not small, zero. Everything in
+     * `SecondaryDynamics` that reads `accelX` or `accelZ` was therefore dead
+     * code in every gait: the tail's fore/aft counterweight, the head and
+     * neck lag, the ruff's lateral swing, and the whole fore/aft half of the
+     * coat's inertia (probed over a gallop: coat.x and coat.z peak-to-peak
+     * 0.00 mm). A coat can only lag a motion that exists.
+     *
+     * Phase comes from the support signal for the same reason the bob's
+     * does: deceleration is greatest when the most limbs are on the ground,
+     * and it is zero with nothing on the ground. A spring's acceleration is
+     * in antiphase with its displacement at these frequencies, so driving
+     * the DISPLACEMENT in phase with support puts the BRAKING in phase with
+     * support, which is the physical claim. That holds for every gait in the
+     * table, and mid-blend between two, by construction.
+     *
+     * 8 mm is bounded by precedent, not by taste: the idle weight shift
+     * already moves the root 9 mm laterally and the arrival rock 14 mm
+     * fore/aft, and both pass the foot lock — the IK absorbs a body that
+     * moves over planted feet, which is exactly what it is for.
+     */
+    const surgeT = clamp(SURGE_M * bobNorm * moving, -SURGE_M, SURGE_M);
+    const surgeVPrev = this.surgeS.v;
+    this.surge = spring(this.surge, surgeT, this.surgeS, 96, 0.82, h);
+    this.surgeAcc = (this.surgeS.v - surgeVPrev) / h;
 
     // --- ground reaction --------------------------------------------------
     // Each footfall kicks the trunk spring. This is the only place in the rig

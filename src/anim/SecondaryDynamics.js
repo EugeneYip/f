@@ -362,11 +362,16 @@ export class SecondaryDynamics {
      * behind and then catch up. On the trunk that reads as the loose
      * segments pitching against the throw.
      */
-    // Gain is geometric, not taste: `coat.y` is a displacement in METRES of
-    // the coat's centre of mass, and a trunk segment is ~90 mm long, so
-    // θ ≈ d / 0.09. At the measured ±2.3 mm of gallop lag that is ±1.5 deg.
-    rig.add('spine03', this.coat.y * 11, this.coat.x * 0.50, 0);
-    rig.add('spine01', this.coat.y * 8, this.coat.x * 0.35, 0);
+    // `coat.z` is the LONGITUDINAL lag — the coat left behind as the trunk
+    // surges through the stride — and it is the one §4f actually describes
+    // ("it moves a beat behind the body"). It only exists at all since
+    // Locomotion started producing an intra-stride surge; before that it was
+    // 0.00 mm peak-to-peak in every gait. `coat.y` is a heave, which a bone
+    // rotation can only approximate, so it gets the smaller share.
+    // Gains are geometric, not taste: these are displacements in METRES and
+    // a trunk segment is ~90 mm, so θ ≈ d / 0.09.
+    rig.add('spine03', this.coat.z * 11 + this.coat.y * 6, this.coat.x * 0.50, 0);
+    rig.add('spine01', this.coat.z * 8 + this.coat.y * 4, this.coat.x * 0.35, 0);
     /**
      * Coat compression. `coatCompress` has existed for two rounds, reaches
      * 0.20 at a gallop, and was read by NOTHING — not here, not in
