@@ -84,7 +84,26 @@ export const POSES = {
  * not to the animal.
  */
 function resolvePose(pose, ctx) {
-  if (!pose.anchor) return pose;
+  // Absolute poses are composed against the animal, not against the world
+  // origin -- they only LOOK like world coordinates because the fox idles
+  // there. In a moving state it does not: Locomotion integrates world
+  // position, so after a 2.5 s settle at run speed the animal is ~5 m away
+  // and every absolute pose frames empty snow. `run-paws` came back as a
+  // bare snowfield for exactly this reason.
+  //
+  // Translating camera AND target by the same horizontal offset preserves
+  // the composition exactly: the sun is directional, the sky is at infinity,
+  // and the terrain is statistically uniform, so only the animal's position
+  // in frame is restored.
+  if (!pose.anchor) {
+    const r = ctx.fox?.root?.position;
+    if (!r || (Math.abs(r.x) < 1e-4 && Math.abs(r.z) < 1e-4)) return pose;
+    return {
+      ...pose,
+      pos: [pose.pos[0] + r.x, pose.pos[1], pose.pos[2] + r.z],
+      target: [pose.target[0] + r.x, pose.target[1], pose.target[2] + r.z],
+    };
+  }
   const fox = ctx.fox;
   const t = new THREE.Vector3();
   let found = false;

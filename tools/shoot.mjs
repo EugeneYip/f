@@ -249,7 +249,9 @@ const main = async () => {
       if (a.sun) D.setSun(a.sun[0], a.sun[1]);
       if (a.wind) D.setWind(a.wind[0], a.wind[1]);
       if (a.state) D.setState(a.state);
-      // Let springs, fur and terrain targets reach steady state.
+      // Let springs, fur and terrain targets reach steady state. This is the
+      // ONLY simulation advance in a run, so every pose is rendered from the
+      // same instant and is directly comparable.
       D.settle(a.settle);
     }, args);
 
@@ -260,12 +262,27 @@ const main = async () => {
       try {
         const info = await page.evaluate(async ({ name, taa }) => {
           const D = window.FoxDebug;
+          // NO per-pose settle.
+          //
+          // There used to be a D.settle(0.35) here "so camera-dependent LOD
+          // resolves". It advanced the simulation, and the simulation does
+          // not rewind between poses -- Locomotion integrates this.pos.x/z
+          // from velocity, so in a moving state each pose caught the animal
+          // 0.35 s further downstream than the last. By the fourteenth pose
+          // the fox was roughly 5 m from where the absolute poses are aimed,
+          // which is why `run-paws` came back as an empty snowfield.
+          //
+          // It was also ordered wrongly: setPose resolves anchored poses
+          // against the LIVE rig, so resolving before the settle framed the
+          // head where it had been 0.35 s ago. Settling is done once, before
+          // this loop; poses are resolved against the state they are shot in.
           D.setPose(name);
-          // A short settle so any camera-dependent LOD/streaming resolves,
-          // then repeated renders so TAA / stochastic alpha converge.
-          D.settle(0.35);
+          // Two throwaway renders in place of the settle: LOD that reads the
+          // camera resolves on render, and render does not advance time.
+          D.render(); D.render();
           for (let i = 0; i < taa; i++) D.render();
-          return D.stats();
+          return { ...D.stats(), simTime: D.time?.() ?? null,
+                   root: D.probe?.()?.root ?? null };
         }, { name, taa: args.taa });
 
         const file = path.join(outDir, `${name}.png`);
@@ -286,6 +303,23 @@ const main = async () => {
             '(adaptive resolution leaked into a review run)');
         }
         report.bufferSize = bufKey;
+        // Enforce the invariant rather than trusting it. Every pose in a run
+        // must be the same instant of simulation; if the animal has moved
+        // between poses, absolute poses are aimed at where it used to be and
+        // the images are not comparable. This went unnoticed until an agent
+        // found `run-paws` rendering an empty snowfield.
+        if (info.root) {
+          if (report.rootAt) {
+            const d = Math.hypot(info.root[0] - report.rootAt[0],
+                                 info.root[2] - report.rootAt[2]);
+            if (d > 0.002) {
+              consoleErrors.push(`the animal moved ${(d * 1000).toFixed(0)} mm between ` +
+                `poses (first pose at ${report.rootAt}, ${name} at ${info.root}) — ` +
+                'something advanced the simulation mid-run; these poses are ' +
+                'different instants and are not comparable');
+            }
+          } else report.rootAt = info.root;
+        }
         report.poses[name] = { ok: true, ms: Date.now() - t0, ...info };
         console.log(`[shoot] ${name.padEnd(12)} ${info.drawCalls} calls, ${(info.triangles / 1000).toFixed(0)}k tris`);
       } catch (e) {
