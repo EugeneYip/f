@@ -76,7 +76,12 @@ void main() {
      synthetic sun disc rather than the sky. Scaling by a FIXED 1/N keeps
      the tunable resolution-independent while letting an unoccluded ray
      accumulate more than a blocked one. */
-  gl_FragColor = vec4(acc * (uGain / float(GR_SAMPLES)), 1.0);
+  /* fxSafe, not decoration: blurGain is 4.0 and this pass runs TWICE, so the
+     chain has a x16 gain on whatever the mask handed it. Bounding each stage
+     keeps that multiplier from turning an out-of-spec emissive in the sky into
+     a shaft that swamps the subject -- which is this pass's documented history.
+  */
+  gl_FragColor = vec4(fxSafe(acc * (uGain / float(GR_SAMPLES))), 1.0);
 }
 `;
 

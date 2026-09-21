@@ -175,7 +175,9 @@ export class TAA {
     this.renderer = renderer;
     this.histA = makeRT(w, h, { name: 'taaHistA' });
     this.histB = makeRT(w, h, { name: 'taaHistB' });
-    this.out = makeRT(w, h, { name: 'taaSharp' });
+    // Allocated lazily by _ownOut(), and only if the caller ever sharpens
+    // without handing us a spare buffer. PostFX always hands one over.
+    this.out = null;
 
     this.jitter = [];
     for (let i = 1; i <= 16; i++) {
@@ -217,7 +219,7 @@ export class TAA {
   setSize(w, h) {
     this.histA.setSize(w, h);
     this.histB.setSize(w, h);
-    this.out.setSize(w, h);
+    this.out?.setSize(w, h);
     this.resolve.u.uTexel.value.set(1 / w, 1 / h);
     this.resolve.u.uRes.value.set(w, h);
     this.sharpen.u.uTexel.value.set(1 / w, 1 / h);
@@ -303,17 +305,31 @@ export class TAA {
     return this.histB.texture;     // the target we just wrote
   }
 
-  applySharpen(texture, amount) {
+  /**
+   * @param target a full-res half-float RT the caller has finished with. The
+   *   caller hands us the composite buffer, which TAA has already consumed —
+   *   the third argument used to be passed and silently ignored, so this class
+   *   allocated a fourth full-res half-float target nobody needed (40 MB at
+   *   1400x900 with --dsf 2). Falls back to its own buffer if none is given.
+   */
+  applySharpen(texture, amount, target = null) {
+    const dst = target ?? this._ownOut();
     this.sharpen.u.tSrc.value = texture;
     this.sharpen.u.uAmount.value = amount;
-    this.sharpen.render(this.renderer, this.out);
-    return this.out.texture;
+    this.sharpen.render(this.renderer, dst);
+    return dst.texture;
+  }
+
+  _ownOut() {
+    if (!this.out) this.out = makeRT(this.histA.width, this.histA.height, { name: 'taaSharp' });
+    return this.out;
   }
 
   storePrevViewProj(m) { this._prevViewProj.copy(m); }
 
   dispose() {
     disposeRT(this.histA); disposeRT(this.histB); disposeRT(this.out);
+    this.out = null;
     this.resolve.dispose(); this.sharpen.dispose();
   }
 }
