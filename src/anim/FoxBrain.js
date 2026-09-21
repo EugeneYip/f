@@ -64,6 +64,13 @@ const FOOT_SPLAY = 0.045;
  */
 const CLAMP_FADE_LO = 0.030;
 const CLAMP_FADE_HI = 0.055;
+/**
+ * Width, in swing fraction, of the clamp's SECOND fade — the one that closes
+ * it out on the gait clock rather than on clearance. See the note at 2b: a
+ * clearance-only fade is released inside a single 120 Hz step at a gallop,
+ * because the commanded descent is only four steps long.
+ */
+const CLAMP_FADE_U = 0.25;
 /** Lower bound on airborne limb extension — stops the elbow folding shut. */
 const MIN_EXT = 0.42;
 /**
@@ -1018,7 +1025,14 @@ export class FoxBrain {
         if (f.u < SWING_COMMIT) continue;
       }
       const need = f.limb.requiredDrop(f._A, f.limb.Ltot * REACH_MAX);
-      if (f.stance) dropStance = Math.max(dropStance, need);
+      // A foot past `uPlant` is in its final descent with its XZ already
+      // frozen on the landing spot: it is stance in all but name, and its
+      // demand must be met EXACTLY, or the handover from the rate-limited
+      // branch to the exact one is itself a one-frame body step — which
+      // drags the ankle horizontally on precisely the touchdown frame the
+      // audit samples. Measured 1.6 mm of ankle travel on that frame before
+      // this, against 0.375 mm of budget.
+      if (f.stance || f.u >= this.loco.uPlant) dropStance = Math.max(dropStance, need);
       else dropSwing = Math.max(dropSwing, need);
     }
     const step = SWING_DROP_MPS * (this.h || 1 / 120);
@@ -1036,8 +1050,27 @@ export class FoxBrain {
     //     paw short of it, and that shortfall changes every frame, which is
     //     indistinguishable from sliding. Pull an unreachable *swing* target
     //     toward its shoulder so the limb folds instead of locking straight.
+    //
+    //     THE FADE HAD TO STOP DEPENDING ON CLEARANCE ALONE. Commanded
+    //     clearance is not a slow signal: at a gallop the final descent
+    //     occupies (1 − uPlant) of a 255 ms swing — four 120 Hz steps — and
+    //     the paw falls 34 → 18 → 7 → 1 mm. It therefore crosses the WHOLE
+    //     [30, 55] mm fade window inside one step, so however wide that
+    //     window is made, the clamp's horizontal pull is released in a single
+    //     frame. MEASURED: 2.2 mm of one-frame horizontal ankle travel on the
+    //     touchdown step, which audit.mjs reads as 0.28-0.99 m/s of foot
+    //     slide. Widening the window from a single 32 mm threshold to
+    //     [30, 55] was the previous attempt at this and it could not work.
+    //
+    //     Fade on the SWING CLOCK instead, and take the smaller of the two.
+    //     `u` advances at a bounded 0.033 per step at the fastest gait, so a
+    //     0.25-wide phase fade always takes at least seven frames, and it
+    //     reaches zero at `uPlant` — the instant the descent begins — so the
+    //     clamp is provably inactive for every frame of the touchdown.
     for (const f of feet) {
       if (f.stance || f.clear <= CLAMP_FADE_LO) continue;
+      const uFade = 1 - smoothstep(Math.max(0, this.loco.uPlant - CLAMP_FADE_U), this.loco.uPlant, f.u);
+      if (uFade <= 1e-4) continue;
       const L = f.limb;
       L.hip(_v);
       const dx = f._A.x - _v.x, dy = f._A.y - _v.y, dz = f._A.z - _v.z;
@@ -1050,7 +1083,8 @@ export class FoxBrain {
       // rig before this clamp existed.
       const want = D > maxR ? maxR : D < minR ? minR : 0;
       if (!want) continue;
-      const k = lerp(1, want / D, smoothstep(CLAMP_FADE_LO, CLAMP_FADE_HI, f.clear));
+      const k = lerp(1, want / D,
+        Math.min(smoothstep(CLAMP_FADE_LO, CLAMP_FADE_HI, f.clear), uFade));
       // Never push a paw DOWN. The min case scales the hip→ankle vector up,
       // and that vector points mostly at the ground, so an unguarded clamp
       // would drive a swinging paw through the snow to open the stifle. The

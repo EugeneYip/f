@@ -115,10 +115,18 @@ export const GAITS = {
     press: 0.22, bob: 0.0255, bobBeats: 2, sway: 0.0050, swayBeat: 0.0042, pitch: 0.4,
     scapula: 15, spineFlex: 7.0, spinePhase: 2.33, yawSway: 0.8,
     flight: 0.7, impact: 0.0115,
-    // Mid-suspension, diagonals crossing: the instant a trot is photographed
-    // in. Stance is [0,0.38] and [0.5,0.88], so 0.44 is the middle of the
-    // first zero-support window.
-    reviewPhase: 0.44,
+    // WAS 0.44 — mid-suspension, "the instant a trot is photographed in".
+    // Measured there: all four feet off the ground, the reach backstop
+    // dropping the trunk 69 mm to chase a forefoot that had just lifted, and
+    // the belly through the snow. Review 3 read it as "three flat translucent
+    // shards and the belly intersecting the terrain", and blocker 5 as the
+    // animal floating — a still with zero ground contact has no contact to
+    // show. The backstop bug is fixed separately; this is composition.
+    //
+    // 0.66 is a diagonal pair (RR + FL) at u = 0.42, just before mid-stance,
+    // with the other pair at the top of its swing arc. Two feet planted, two
+    // clearly lifted, reach drop 0.000. That is what a trot photograph is.
+    reviewPhase: 0.66,
   },
   // Rotary gallop: LH → RH → RF → LF, with a gathered and an extended
   // suspension. The one canids actually use at speed.
@@ -145,10 +153,31 @@ export const GAITS = {
     // speed×cycle×duty = 221 mm (±110), a hair over the ±101 mm the old
     // 2.0 m/s tune measured as its reach ceiling, and the lower duty is
     // what pays for the extra speed.
-    speed: 2.60, cycle: 0.340, duty: 0.250,
+    // 2.60 m/s was over the rig's head, and the note two paragraphs up says
+    // so in its own words — "measured ceiling with this planner is ~1.8 m/s"
+    // — before raising the speed past it anyway on the argument that a
+    // suspension phase buys stride. It does not buy REACH. MEASURED at 2.60:
+    // at forelimb touchdown the shoulder sits 200 mm above the ankle target
+    // on a 185 mm usable forelimb, so the reach backstop saturates its 80 mm
+    // cap for ~15% of the cycle and the paw is left short of its target.
+    // With the body translating 21.7 mm per 120 Hz step at that speed, a
+    // saturated limb is dragged — audit.mjs caught 0.99 m/s of forefoot slide
+    // against a 0.045 budget, and the reason it had been reporting a pass is
+    // in the report below: the metric is a lottery at this speed.
+    //
+    // Swept (max reach drop over a cycle / worst forefoot slide):
+    //   2.60/bob .030/drop .040 → 80 mm (saturated) / 0.988 m/s
+    //   2.00/bob .020/drop .058 → 60 mm             / 0.024 m/s
+    //   1.80/bob .026/drop .050 → 59 mm             / 0.024 m/s
+    //   1.80/bob .026/drop .055 → 11 mm             / 0.024 m/s   ← chosen
+    // 11 mm of backstop means the limb is never saturated, which is the
+    // structural reason the skid cannot happen, rather than a lucky frame.
+    // The bounce is unchanged (0.026 against 0.030) and the 15 mm of extra
+    // ride lowering is what a galloping animal does anyway.
+    speed: 1.80, cycle: 0.340, duty: 0.250,
     offsets: { RL: 0, RR: 0.10, FR: 0.42, FL: 0.52 },
-    lift: 0.078, drop: 0.040, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
-    press: 0.30, bob: 0.030, bobBeats: 1, sway: 0.004, swayBeat: 0.0022, pitch: -3.4,
+    lift: 0.078, drop: 0.055, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
+    press: 0.30, bob: 0.026, bobBeats: 1, sway: 0.004, swayBeat: 0.0022, pitch: -3.4,
     scapula: 24, spineFlex: 30.0, spinePhase: 2.325, yawSway: 0.5,
     flight: 1.0, impact: 0.0190,
     // The gathered suspension, at the top of its arc. Support windows are
@@ -160,7 +189,21 @@ export const GAITS = {
     // rise 5.4 mm, bob +12 mm, fore/aft paw spread −148 mm (the feet have
     // crossed under the animal). The old default landed on 0.353, which is
     // inside the 25 ms EXTENDED window: spread +565 mm, rise 0.4 mm.
-    reviewPhase: 0.88,
+    //
+    // 0.88 WAS WRONG TOO, for the reason it was chosen. "The feet have
+    // crossed under the animal" means all four paws sit 53-76 mm above the
+    // snow, tucked directly beneath the belly, inside the coat volume — and
+    // Review 3 photographed exactly that: "no legs and no tail at all, a
+    // furry blimp". Hiding the coat at this same instant renders four
+    // complete, correctly posed limbs, so the geometry was never the
+    // problem; the still was taken at the one instant of the cycle where the
+    // limbs are all inside the animal's own silhouette.
+    //
+    // 0.17 is the hindlimb drive: RL and RR both planted (u 0.70 / 0.30),
+    // both forelimbs mid-swing and protracting (u 0.53 / 0.67, the leading
+    // one 179 mm ahead of its shoulder), reach drop 0.000. Two feet on the
+    // snow with contact shadows, two reaching — a gallop anyone can read.
+    reviewPhase: 0.17,
   },
 };
 
