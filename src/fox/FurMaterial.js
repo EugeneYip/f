@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import {
   furVertexShader, furFragmentShader,
   cardVertexShader, cardFragmentShader,
-  REGION_COUNT,
+  REGION_COUNT, CARD_SHAPE,
 } from '../shaders/fur.glsl.js';
 
 const c = (hex) => new THREE.Color(hex);
@@ -38,15 +38,6 @@ const c = (hex) => new THREE.Color(hex);
  * and belly per the bible, plus the dorsal line, which is on the outline in
  * every side-on framing.
  * ------------------------------------------------------------------------ */
-/**
- * Card length relative to the local coat, per region (uRegionC.x).
- *
- * 1.0 everywhere the coat is thick enough that a coat-proportional fringe
- * already spans several pixels. Short-coat regions need a multiplier or their
- * outline cannot break up at all: the ear fringe was 4.7 mm against a 2.6 mm
- * pixel at the silhouette framing. Absolute lengths stay small — 4.2 mm ear
- * coat x 3.6 is still only a 15 mm fringe.
- */
 /**
  * Per-region interior opacity floor for cards (uRegionC.y), 0 = use the global.
  *
@@ -102,11 +93,53 @@ export const TRANS_BOOST = {
   18: 1.6, 19: 1.8, 21: 1.6, 22: 1.8,               // legs
 };
 
+/**
+ * Card length relative to the local coat, per region (uRegionC.x).
+ *
+ * THIS TABLE IS INSIDE `CARD_SHAPE.reachBand` AND MUST STAY THERE. It used to
+ * carry 1.3–1.8 on the head, the legs and the paws, and that is what the
+ * "sea urchin" coat was. Measured at `frontal`, the card tip's perpendicular
+ * reach past the skin, as a multiple of the LOCAL coat depth:
+ *
+ *     muzzle / earOuter / pawFront / pawHind   2.01   (2.09–2.34 x the shells)
+ *     jawLower / earInner                      1.79
+ *     forehead / legUpper / hock               1.56
+ *     skull                                    1.45
+ *     everything else                          1.12   <- the band
+ *
+ * against a documented band of 1.10–1.25. So on every region that reads as
+ * needles, the outer HALF of each card stood over open sky with no coat behind
+ * it, while the body — the one part of the animal that was authored at 1.0 —
+ * read as soft fur. Hiding the cards (`shots/fur2-layer/frontal.nocards.png`)
+ * removed every spike and left the shells' own soft granular edge intact, so
+ * the attribution is not in doubt.
+ *
+ * `FurSystem.reachReport()` said `ok: true, mean 1.117` throughout. It was
+ * blind: it multiplied the global `uCardLength` by `lenMul` and `rise` and
+ * never looked at `uRegionC.x` at all, on the stated grounds that the
+ * per-region length scale "multiplies the coat and the card equally". That is
+ * true of `uRegionA.y`, which scales the coat, and false of this table, which
+ * scales only the card. It now iterates the regions.
+ *
+ * The justification for the old numbers has also expired. It was "the ear
+ * fringe was 4.7 mm against a 2.6 mm pixel at the silhouette framing". The ear
+ * coat is 17.4 mm now and the skull coat 38 mm — anatomy deepened the head
+ * per bible 4f — so a coat-proportional fringe is 14 px at `silhouette` and
+ * 50 px at `frontal`. There is nothing left to compensate for.
+ *
+ * There is also no headroom left to spend. `lenMul` already runs to 1.10, so
+ * at scale 1.0 the LONGEST third of the cards in a region reaches 1.254 —
+ * the band ceiling, exactly. A first pass at this put the short-coat regions
+ * on 1.06–1.10 and the fixed `reachReport()` immediately failed them at 1.379.
+ * The per-card spread is where the variation belongs; the region table is not
+ * a second place to add some. So: 1.0, everywhere, and the clamp in
+ * `buildFurUniforms` makes that the only value the band admits.
+ */
 export const CARD_LEN_SCALE = {
-  0: 1.0, 1: 1.8, 2: 1.6, 3: 1.0, 4: 1.4, 5: 1.3, 6: 1.8, 7: 1.6,
+  0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.0,
   8: 1.0, 9: 1.0, 10: 1.0, 11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0,
-  15: 1.0, 16: 1.0, 17: 1.0, 18: 1.4, 19: 1.5, 20: 1.8,
-  21: 1.4, 22: 1.4, 23: 1.8, 24: 1.0, 25: 1.0, 26: 1.0,
+  15: 1.0, 16: 1.0, 17: 1.0, 18: 1.0, 19: 1.0, 20: 1.0,
+  21: 1.0, 22: 1.0, 23: 1.0, 24: 1.0, 25: 1.0, 26: 1.0,
 };
 
 export const REGION_TABLE = [
@@ -238,17 +271,47 @@ export const FUR_DEFAULTS = {
   cardOpacity: 1.0,
 };
 
+/**
+ * Reach, as a multiple of the local coat, that a per-region card scale buys —
+ * and the scale that buys a given reach. One expression, both directions, so
+ * the table above, the clamp below and `reachReport()` can never disagree
+ * about the arithmetic again.
+ */
+export function cardReachFor(scale, cardLength = FUR_DEFAULTS.cardLength,
+                             lenMul = CARD_SHAPE.lenMulMin + CARD_SHAPE.lenMulSpread / 3) {
+  return scale * cardLength * lenMul * CARD_SHAPE.rise;
+}
+export function cardScaleForReach(reach, cardLength = FUR_DEFAULTS.cardLength) {
+  return reach / cardReachFor(1, cardLength);
+}
+
 export function buildFurUniforms(ctx) {
   const d = FUR_DEFAULTS;
   const regionA = [];
   const regionB = [];
   const regionC = [];
+  // The band is a hard bound on the TABLE, not advice. Authoring 1.8 here once
+  // put the card tips at 2.0x the local coat and produced the urchin coat; a
+  // guard that only checks the global knob cannot see that, so clamp at the
+  // point the value enters the uniform and name any region that bites.
+  const loS = cardScaleForReach(CARD_SHAPE.reachBand[0], d.cardLength);
+  const hiS = cardScaleForReach(CARD_SHAPE.reachBand[1], d.cardLength);
+  const clamped = [];
   for (let i = 0; i < REGION_COUNT; i++) {
     const r = REGION_TABLE[i] ?? { a: [1, 1, 1, 0.3], b: [1, 1, 1, 0.8] };
+    const want = CARD_LEN_SCALE[i] ?? 1.0;
+    const got = Math.min(hiS, Math.max(loS, want));
+    if (Math.abs(got - want) > 1e-3) {
+      clamped.push(`${i}:${want.toFixed(2)}->${got.toFixed(2)}`);
+    }
     regionA.push(new THREE.Vector4(...r.a));
     regionB.push(new THREE.Vector4(...r.b));
-    regionC.push(new THREE.Vector4(CARD_LEN_SCALE[i] ?? 1.0, CARD_INNER_FLOOR[i] ?? 0,
+    regionC.push(new THREE.Vector4(got, CARD_INNER_FLOOR[i] ?? 0,
                                    SHELL_LEN_SCALE[i] ?? 1.0, TRANS_BOOST[i] ?? 1.0));
+  }
+  if (clamped.length) {
+    console.warn(`[fur] CARD_LEN_SCALE outside reachBand ${CARD_SHAPE.reachBand} — ` +
+                 `clamped ${clamped.join(' ')}`);
   }
 
   return {

@@ -381,12 +381,26 @@ export class FurSystem {
    * number would have caught immediately.
    *
    * Perpendicular reach past the skin, as a multiple of LOCAL coat thickness,
-   * is uCardLength * lenMul * rise, plus gravity on the downward-facing side.
-   * It is region independent because the per-region length scale multiplies
-   * the coat and the card equally — so one band covers the whole animal.
+   * is uRegionC.x * uCardLength * lenMul * rise, plus gravity on the
+   * downward-facing side.
    *
-   * Returns { ok, band, min, mean, max, worstDroop, detail[] }. `ok` false
-   * means the coat will read as either spikes or a smooth edge.
+   * IT IS NOT REGION INDEPENDENT, and this guard used to assert that it was.
+   * The old text read "the per-region length scale multiplies the coat and the
+   * card equally". That is true of uRegionA.y, which scales the coat; it is
+   * false of uRegionC.x (CARD_LEN_SCALE), which scales only the card. So the
+   * guard reported `ok: true, mean 1.117` while the muzzle, both ears and both
+   * paws sat at 2.011 — nearly double the band ceiling — and the render was an
+   * unmistakable sea urchin around the head. A guard blind to the one table
+   * that is actually authored per region is worse than no guard: it was cited
+   * as evidence the cards were fine.
+   *
+   * It now walks all 27 regions and also reports reach against the SHELL
+   * surface (uRegionC.z feathers the shells out early on the head and legs),
+   * which is what the eye actually judges: a card tip is a spike when it
+   * stands over open sky, and what puts sky behind it is the distance to the
+   * outermost opaque shell, not to the skin.
+   *
+   * Returns { ok, band, min, mean, max, worstDroop, worst, detail[] }.
    */
   reachReport() {
     const u = this.uniforms;
@@ -394,30 +408,40 @@ export class FurSystem {
     const { lenMulMin: lo, lenMulSpread: sp, rise, droopBoost, reachBand } = CARD_SHAPE;
     const cardLen = u.uCardLength.value;
     const droop = u.uDroop.value;
+    const rc = u.uRegionC.value;
 
     // lenMul = lo + sp*r^2 with r uniform, so E[r^2] = 1/3.
-    const reach = (lm) => cardLen * lm * rise;
-    const min = reach(lo), mean = reach(lo + sp / 3), max = reach(lo + sp);
+    const reach = (lm, s) => s * cardLen * lm * rise;
 
     // Gravity acts in world space and adds to reach wherever the surface faces
     // down — the belly and chest, which is where the "Afghan skirt" came from.
+    const STIFF = { 11: 0.46, 13: 0.86, 14: 0.62, 15: 0.24 };
     const detail = [];
-    let worstDroop = 0;
-    for (const [name, stiffness] of [['belly', 0.24], ['chest', 0.46],
-                                     ['flank', 0.62], ['back', 0.86]]) {
-      const soft = 1 - stiffness;
-      const extra = droop * (cardLen * (lo + sp / 3)) * (0.30 + soft) * droopBoost;
-      const total = mean + extra;
-      if (total > worstDroop) worstDroop = total;
-      detail.push({ region: name, meanReach: +mean.toFixed(3),
-                    droopExtra: +extra.toFixed(3), total: +total.toFixed(3) });
+    let min = Infinity, max = -Infinity, meanSum = 0;
+    let worstDroop = 0, worst = null, worstOver = 0;
+    for (let i = 0; i < rc.length; i++) {
+      const s = rc[i].x > 0 ? rc[i].x : 1;
+      const shell = rc[i].z > 0 ? rc[i].z : 1;
+      const rMin = reach(lo, s), rMean = reach(lo + sp / 3, s), rMax = reach(lo + sp, s);
+      const soft = 1 - (STIFF[i] ?? 0.62);
+      const extra = droop * (s * cardLen * (lo + sp / 3)) * (0.30 + soft) * droopBoost;
+      min = Math.min(min, rMin); max = Math.max(max, rMax);
+      meanSum += rMean;
+      worstDroop = Math.max(worstDroop, rMean + extra);
+      // How far outside the band this region sits, in either direction.
+      const over = Math.max(rMax - reachBand[1] * 1.02, reachBand[0] * 0.92 - rMin,
+                            (rMean + extra) - reachBand[1] * 1.05);
+      if (over > worstOver) { worstOver = over; worst = i; }
+      detail.push({ region: i, scale: +s.toFixed(3),
+                    min: +rMin.toFixed(3), mean: +rMean.toFixed(3), max: +rMax.toFixed(3),
+                    vsShell: +(rMean / shell).toFixed(3),
+                    droopTotal: +(rMean + extra).toFixed(3) });
     }
 
-    const ok = min >= reachBand[0] * 0.92 && max <= reachBand[1] * 1.02
-             && worstDroop <= reachBand[1] * 1.05;
+    const ok = worstOver <= 0;
     return {
-      ok, band: reachBand,
-      min: +min.toFixed(3), mean: +mean.toFixed(3), max: +max.toFixed(3),
+      ok, band: reachBand, worst, worstOver: +worstOver.toFixed(3),
+      min: +min.toFixed(3), mean: +(meanSum / rc.length).toFixed(3), max: +max.toFixed(3),
       worstDroop: +worstDroop.toFixed(3), detail,
     };
   }
