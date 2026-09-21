@@ -83,7 +83,191 @@ export class SnowParticles {
     this.group.frustumCulled = false;
     ctx.scene.add(this.group);
     this._rebuild(ctx);
+    this._buildPuffs(ctx);
     ctx.snowParticles = this;
+  }
+
+  // -- paw powder -----------------------------------------------------------
+
+  /**
+   * A burst of loose snow thrown up by a paw.
+   *
+   * §6 asks for four things where the animal meets the snow — displacement,
+   * powder, footprints, paw sink — and review 3 found none of them. Three of
+   * the four live in the terrain's deformation target; this is the fourth,
+   * and it is the only one that is airborne, so it belongs here.
+   *
+   * Storage is a fixed ring of PUFF_SLOTS bursts x PUFF_GRAINS grains, all in
+   * ONE instanced draw. A burst is described by four floats (origin, t0) plus
+   * two (strength, heading) and every grain's trajectory is a closed form of
+   * (ctx.time - t0), so nothing integrates on the CPU, nothing allocates per
+   * press, and the same ctx.time always gives the same frame — which
+   * AGENTS.md rule 6 requires and which a per-frame particle sim could not
+   * give us in a harness that rewinds the clock.
+   *
+   * @param x,y,z world position of the contact
+   * @param strength 0..1 — how much snow is thrown (speed x depth)
+   * @param time ctx.time at the moment of contact
+   */
+  puff(x, y, z, strength, time, heading = 0) {
+    if (!this._puff || !(strength > 0.02)) return;
+    const s = this._puff;
+    // Re-arm a slot that is already spent, or the oldest one.
+    let slot = -1, oldest = 0, oldestT = Infinity;
+    for (let i = 0; i < s.slots; i++) {
+      const t0 = s.data[i * 8 + 3];
+      if (time - t0 > s.life) { slot = i; break; }
+      if (t0 < oldestT) { oldestT = t0; oldest = i; }
+    }
+    if (slot < 0) slot = oldest;
+    const o = slot * 8;
+    s.data[o] = x; s.data[o + 1] = y; s.data[o + 2] = z; s.data[o + 3] = time;
+    s.data[o + 4] = Math.min(1, strength);
+    s.data[o + 5] = heading;
+    s.dirty = true;
+  }
+
+  _buildPuffs(ctx) {
+    const SLOTS = 14, GRAINS = 26;
+    const geo = new THREE.InstancedBufferGeometry();
+    const quad = new THREE.PlaneGeometry(1, 1);
+    geo.index = quad.index;
+    geo.attributes.position = quad.attributes.position;
+    geo.attributes.uv = quad.attributes.uv;
+    quad.dispose();
+
+    const n = SLOTS * GRAINS;
+    const slotIdx = new Float32Array(n);
+    const grain = new Float32Array(n * 4);
+    const r = rng(0x9d0f);
+    for (let i = 0; i < SLOTS; i++) {
+      for (let g = 0; g < GRAINS; g++) {
+        const k = i * GRAINS + g;
+        slotIdx[k] = i;
+        // Cone of ejecta: mostly forward and up, a few sideways, with a
+        // spread of speeds so the burst has a leading edge and a tail.
+        const a = r() * Math.PI * 2;
+        const up = 0.35 + 0.85 * r();
+        const sp = 0.30 + 1.35 * Math.pow(r(), 1.6);
+        grain[k * 4] = Math.cos(a) * (0.25 + 0.75 * r());
+        grain[k * 4 + 1] = up;
+        grain[k * 4 + 2] = Math.sin(a) * (0.25 + 0.75 * r());
+        grain[k * 4 + 3] = sp;
+      }
+    }
+    geo.setAttribute('aSlot', new THREE.InstancedBufferAttribute(slotIdx, 1));
+    geo.setAttribute('aGrain', new THREE.InstancedBufferAttribute(grain, 4));
+    geo.instanceCount = n;
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
+
+    const data = new Float32Array(SLOTS * 8);
+    for (let i = 0; i < SLOTS; i++) data[i * 8 + 3] = -1e4;   // all spent
+    const tex = new THREE.DataTexture(data, 2, SLOTS, THREE.RGBAFormat, THREE.FloatType);
+    tex.needsUpdate = true;
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.NoColorSpace;
+
+    const mat = new THREE.ShaderMaterial({
+      defines: { PUFF_SLOTS: SLOTS },
+      uniforms: {
+        uPuff: { value: tex },
+        uTime: { value: 0 },
+        uLife: { value: 1.45 },
+        uWind: { value: new THREE.Vector3() },
+        uCamPos: { value: new THREE.Vector3() },
+        uCamRight: { value: new THREE.Vector3(1, 0, 0) },
+        uCamUp: { value: new THREE.Vector3(0, 1, 0) },
+        uSunDir: { value: new THREE.Vector3() },
+        uSunColor: { value: new THREE.Vector3() },
+        uSkyColor: { value: new THREE.Vector3() },
+        uBounce: { value: new THREE.Vector3() },
+        uMaxRadiance: { value: 2.2 },
+      },
+      vertexShader: /* glsl */ `
+        precision highp float;
+        attribute float aSlot;
+        attribute vec4 aGrain;
+        uniform sampler2D uPuff;
+        uniform float uTime, uLife;
+        uniform vec3 uWind, uCamPos, uCamRight, uCamUp;
+        varying float vA;
+        varying vec3 vWorld;
+        varying vec2 vUv;
+        void main() {
+          vec4 A = texture2D(uPuff, vec2(0.25, (aSlot + 0.5) / float(PUFF_SLOTS)));
+          vec4 B = texture2D(uPuff, vec2(0.75, (aSlot + 0.5) / float(PUFF_SLOTS)));
+          float age = uTime - A.w;
+          float k = age / uLife;
+          if (k < 0.0 || k > 1.0 || B.x <= 0.0) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // off-screen, no cost
+            vA = 0.0; vUv = uv; vWorld = vec3(0.0);
+            return;
+          }
+          float c = cos(B.y), sn = sin(B.y);
+          vec3 dir = vec3(aGrain.x * c - aGrain.z * sn, aGrain.y, aGrain.x * sn + aGrain.z * c);
+          float sp = aGrain.w * (0.55 + 0.9 * B.x);
+          // Ballistic, with air drag folded into an exponential so grains
+          // shed their launch speed and then just ride the wind.
+          float drag = 1.0 - exp(-age * 3.1);
+          vec3 p = vec3(A.xyz)
+                 + dir * sp * drag * 0.34
+                 + uWind * (age * 0.55)
+                 - vec3(0.0, 1.0, 0.0) * (0.9 * age * age);
+          // Grains puff out as they lose speed: a burst spreads, it does not
+          // stay a hard clump.
+          float sz = (0.012 + 0.055 * k) * (0.6 + 0.8 * B.x);
+          vec3 world = p + uCamRight * (position.x * sz) + uCamUp * (position.y * sz);
+          vA = (1.0 - k) * (1.0 - k) * smoothstep(0.0, 0.10, k) * B.x;
+          vUv = uv;
+          vWorld = world;
+          gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform vec3 uCamPos, uSunDir, uSunColor, uSkyColor, uBounce;
+        uniform float uMaxRadiance;
+        varying float vA;
+        varying vec3 vWorld;
+        varying vec2 vUv;
+        ${HDR_CLAMP}
+        void main() {
+          if (vA <= 0.002) discard;
+          vec2 c = vUv - 0.5;
+          float a = exp(-dot(c, c) * 11.0) * vA;
+          if (a <= 0.003) discard;
+          vec3 V = normalize(vWorld - uCamPos);
+          float fwd = max(dot(V, uSunDir), 0.0);
+          float phase = 0.10 + 0.55 * pow(fwd, 3.0);
+          vec3 col = uSunColor * phase + uSkyColor * 0.38 + uBounce * 0.22;
+          col = clampRadiance(col, uMaxRadiance);
+          gl_FragColor = vec4(col, a);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          gl_FragColor.rgb *= gl_FragColor.a;
+        }
+      `,
+      transparent: true,
+      premultipliedAlpha: true,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 21;
+    mesh.name = 'snow-powder';
+    mesh.onBeforeRender = (renderer, scene, camera) => {
+      const u = mat.uniforms;
+      const m = camera.matrixWorld.elements;
+      u.uCamRight.value.set(m[0], m[1], m[2]).normalize();
+      u.uCamUp.value.set(m[4], m[5], m[6]).normalize();
+      u.uCamPos.value.setFromMatrixPosition(camera.matrixWorld);
+    };
+    this.group.add(mesh);
+    this._puff = { slots: SLOTS, grains: GRAINS, data, tex, mesh, mat, life: 1.45, dirty: false };
   }
 
   dispose() {
@@ -444,6 +628,19 @@ export class SnowParticles {
       u.uSunColor.value.set(sun.r * si, sun.g * si, sun.b * si);
       u.uSkyColor.value.set(ctx.skyColor.r, ctx.skyColor.g, ctx.skyColor.b);
       u.uBounce.value.set(ctx.groundBounce.r, ctx.groundBounce.g, ctx.groundBounce.b);
+    }
+
+    const pf = this._puff;
+    if (pf) {
+      if (pf.dirty) { pf.tex.needsUpdate = true; pf.dirty = false; }
+      const u = pf.mat.uniforms;
+      u.uTime.value = ctx.time;
+      u.uWind.value.copy(ctx.wind).multiplyScalar(speed * 0.8);
+      u.uSunDir.value.copy(ctx.sunDirection);
+      u.uSunColor.value.set(sun.r * si, sun.g * si, sun.b * si);
+      u.uSkyColor.value.set(ctx.skyColor.r, ctx.skyColor.g, ctx.skyColor.b);
+      u.uBounce.value.set(ctx.groundBounce.r, ctx.groundBounce.g, ctx.groundBounce.b);
+      u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 3.5;
     }
 
     // Opportunistically pick up a depth buffer if post-processing exposes one.

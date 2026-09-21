@@ -17,7 +17,18 @@ export class SnowTufts {
   }
 
   _build(ctx, terrain) {
-    const count = Math.min(2000, (ctx.quality.get('grassTufts') | 0) * 0.8 | 0);
+    // Spread over 38 m instead of 22 and faded out at 30 m instead of 16, so
+    // the visible population spans a real depth range. It did not before:
+    // every tuft the camera could see sat between 3 m and 16 m, a 5x depth
+    // span, while their heights vary 5x at random — so a near tuft and a far
+    // one came out the same size on screen and review 3 read them as
+    // "identical and screen-space-sized". Perspective needs range to show.
+    const count = Math.min(2600, (ctx.quality.get('grassTufts') | 0) * 1.7 | 0);
+    // The scatter REJECTS most candidates, so `count` is the target and
+    // `this.count` ends up as whatever was planted. Keeping both means
+    // onQuality can compare like with like; comparing the target against the
+    // achieved count made every tier change rebuild unconditionally.
+    this._want = count;
     this.count = count;
     if (!count) return;
 
@@ -69,7 +80,7 @@ export class SnowTufts {
     const iPos = new Float32Array(count * 3);
     const iParam = new Float32Array(count * 4);
     const r2 = rng(13377);
-    const R = 22;
+    const R = 38;
     let n = 0, guard = 0;
     const up = new THREE.Vector3();
     // Sedge grows in clumps, not as an even sprinkle: pick a patch centre every
@@ -85,21 +96,28 @@ export class SnowTufts {
       }
       inClump--;
       const ja = r2() * Math.PI * 2;
-      const jr = Math.pow(r2(), 0.65) * 0.85;
+      const jr = Math.pow(r2(), 0.65) * 1.55;
       x = cx + Math.cos(ja) * jr;
       z = cz + Math.sin(ja) * jr;
       if (x * x + z * z < 1.45 * 1.45) continue;             // clear of the fox
       const h = terrain._fieldRaw(x, z, 0) - terrain._bias;
       // Sedge survives where the wind scours it clear: crests, exposed ground.
+      //
+      // The crest gate used to be a hard `crest < 0.02` reject, and sastrugi
+      // are long parallel ridges, so every tuft landed on a ridge line and
+      // the scatter came out in ROWS. Softening it to a probability, and
+      // widening the clump jitter, keeps the bias toward exposed ground
+      // without printing the sastrugi field onto the planting.
       const crest = terrain._oSast, expo = terrain._oExpo;
-      if (crest < 0.02) continue;
-      if (r2() > 0.25 + expo * 0.75 * (0.3 + crest * 2.2)) continue;
+      if (crest < -0.18) continue;
+      const favour = 0.18 + 0.82 * Math.min(1, Math.max(0, crest + 0.20) * 2.6);
+      if (r2() > favour * (0.25 + expo * 0.75 * (0.3 + crest * 2.2))) continue;
       terrain.normalAt(x, z, up);
       if (up.y < 0.86) continue;
       iPos[n * 3] = x; iPos[n * 3 + 1] = h; iPos[n * 3 + 2] = z;
       iParam[n * 4 + 0] = r2() * Math.PI * 2;
       // Real size variation, not one billboard repeated at every depth.
-      iParam[n * 4 + 1] = 0.026 + Math.pow(r2(), 1.7) * 0.115;  // height, metres
+      iParam[n * 4 + 1] = 0.034 + Math.pow(r2(), 1.7) * 0.132;  // height, metres
       iParam[n * 4 + 2] = r2() * 30;                          // sway phase
       iParam[n * 4 + 3] = 0.55 + r2() * 0.45;                 // stiffness
       n++;
@@ -120,7 +138,9 @@ export class SnowTufts {
           uSunDir: { value: new THREE.Vector3(0, 1, 0) },
           uSunColor: { value: new THREE.Color(1, 1, 1) },
           uSkyColor: { value: new THREE.Color(1, 1, 1) },
-          uFade: { value: 16 },
+          uFade: { value: 30 },
+          uHaze: { value: new THREE.Color(0xaac4e0) },
+          uAerial: { value: new THREE.Vector2(0.030, 0.80) },
         },
       ]),
       vertexShader: TUFT_VERT,
@@ -152,8 +172,8 @@ export class SnowTufts {
   }
 
   onQuality(ctx, terrain) {
-    const want = Math.min(2000, (ctx.quality.get('grassTufts') | 0) * 0.8 | 0);
-    if (want === this.count) return;
+    const want = Math.min(2600, (ctx.quality.get('grassTufts') | 0) * 1.7 | 0);
+    if (want === this._want) return;
     this.dispose();
     if (this.mesh) ctx.scene.remove(this.mesh);
     this.mesh = null;
@@ -192,7 +212,11 @@ void main(){
 
   vec3 p = position;
   p.y *= hs / 0.9;
-  p.xz *= 0.55 + hs * 9.5;    // width tracks height, so clumps vary in bulk
+  // Width tracks height. It used to be 0.55 + hs*9.5, i.e. 0.80..1.89 over a
+  // height range of 5x, so tall tufts were spindly and short ones were fat --
+  // which flattened the size variation the scatter had gone to the trouble of
+  // generating.
+  p.xz *= 0.42 + hs * 7.6;
 
   float c = cos(yaw), s = sin(yaw);
   p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
@@ -229,6 +253,8 @@ varying float vFacing;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec3 uSkyColor;
+uniform vec3 uHaze;
+uniform vec2 uAerial;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -245,6 +271,15 @@ void main(){
   // Snow packed round the base.
   col = mix(vec3(0.42, 0.50, 0.62), col, smoothstep(0.0, 0.22, vT));
   col = mix(vec3(0.55, 0.62, 0.74), col, vFacing * 0.85 + 0.15);
+
+  // Aerial perspective, on the same curve the snow uses. Scene fog alone is
+  // FogExp2 at 0.0125, which over 30 m is a 0.14% effect -- so a tuft at the
+  // fade limit was the same near-black as one at the camera's feet, and a
+  // dark speck that does not lighten with distance is the strongest possible
+  // cue that a sprite has no depth.
+  float dCam = length(cameraPosition - vWorld);
+  float ap = (1.0 - exp(-dCam * uAerial.x)) * uAerial.y;
+  col = mix(col, uHaze * (0.34 + 0.66 * dot(col, vec3(0.2126, 0.7152, 0.0722))), ap);
 
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>

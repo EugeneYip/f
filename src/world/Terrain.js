@@ -40,6 +40,8 @@ export class Terrain {
     this._windZ = 0;
     this._heading = 0;
     this._checked = 0;
+    this._lastPress = -1;
+    this._speed = 0;
     // Scratch outputs of the field evaluation (never allocate in heightAt).
     this._oSast = 0; this._oExpo = 0; this._oPad = 0; this._oRip = 0;
   }
@@ -92,10 +94,17 @@ export class Terrain {
     const seg = ctx.quality.get('terrainSegments') | 0;
     const radius = ctx.quality.get('terrainRadius');
     const K = Math.max(32, Math.min(108, 4 * Math.round(seg / 19.2)));
-    // Base spacing tracks the footprint target's texel size: there is no point
-    // tessellating finer than the deformation we sample.
+    // Base spacing tracks the footprint target's texel size. It used to be
+    // 1.75x that, which put the finest triangles at 2.05 cm at `high` — and a
+    // paw print is ~4.7 cm in radius, so a whole footprint was 4.6 cells
+    // across and its raised lip was well under one. Displacement cannot
+    // render a feature narrower than its own triangles; it renders a spike.
+    // Matching the texel (1.17 cm at `high`) puts 8 cells across a print and
+    // ~2.5 under the lip, costs one more clipmap level (+13k triangles
+    // against a 3.5M budget), and as a side effect pushes the outer rim from
+    // 210 m to 240 m.
     const texel = SNOW.FP_SIZE / Math.max(256, ctx.quality.get('footprintRes') | 0);
-    const s0 = Math.max(0.016, texel * 1.75);
+    const s0 = Math.max(0.010, texel);
     let L = 1;
     while (K * s0 * Math.pow(2, L - 1) * 0.5 < radius && L < 11) L++;
     return { K, s0, L, radius };
@@ -261,7 +270,33 @@ export class Terrain {
    */
   press(x, z, radius = 0.05, depth = 0.7, sharpness = 0.5) {
     if (!this._ready) return;
-    this.foot.press(x, z, radius, depth, sharpness, this._heading, this.ctx.time, true);
+    const slot = this.foot.press(x, z, radius, depth, sharpness,
+      this._heading, this.ctx.time, true);
+    this._powder(x, z, radius, depth, slot);
+  }
+
+  /**
+   * Throw loose snow from a contact. §6 asks for powder as well as
+   * displacement; the displacement lives in the deformation target and the
+   * powder is airborne, so it belongs to SnowParticles.
+   *
+   * Only NEW stamps throw powder. A paw held in stance re-presses every frame
+   * and merges into the same slot, and a puff per frame would be a permanent
+   * fog round a standing animal rather than a kick. `Footprints.press`
+   * returns the slot it used and bumps `pressCount` only on a fresh one, so
+   * that counter is the edge detector.
+   */
+  _powder(x, z, radius, depth, slot) {
+    if (slot < 0) return;
+    const n = this.foot.pressCount;
+    if (n === this._lastPress) return;
+    this._lastPress = n;
+    const sp = this.ctx.subjectSpeed ?? this._speed ?? 0;
+    // Slow contacts barely lift anything; a running paw throws a lot.
+    const strength = Math.min(1, depth * (0.22 + 0.55 * Math.min(sp / 3.2, 1.6))
+      * (radius / 0.05));
+    this.ctx.snowParticles?.puff(x, this.heightAt(x, z) + 0.01, z,
+      strength, this.ctx.time, this._heading);
   }
 
   // -------------------------------------------------------------------------
@@ -287,6 +322,19 @@ export class Terrain {
       this.mesh.position.z = Math.round(subject.z / s) * s;
     }
 
+    // Ground speed of the animal, for how much powder a contact throws.
+    // Derived here rather than read off another system: nothing publishes it
+    // on ctx, and a finite difference of subjectPosition is exact enough for
+    // a particle amplitude.
+    if (subject) {
+      if (this._lastSubX !== undefined && dt > 1e-5) {
+        const vx = (subject.x - this._lastSubX) / dt;
+        const vz = (subject.z - this._lastSubZ) / dt;
+        this._speed += (Math.hypot(vx, vz) - this._speed) * Math.min(1, dt * 6);
+      }
+      this._lastSubX = subject.x; this._lastSubZ = subject.z;
+    }
+
     // Paw prints point where the animal points.
     const root = ctx.fox?.root;
     if (root) {
@@ -297,10 +345,6 @@ export class Terrain {
 
     this._contactPrints(ctx);
     this.tufts?.update(dt, ctx);
-
-    if (import.meta.env?.DEV && this._ready) {
-      if (ctx.frame === 45 || (ctx.frame > 45 && ctx.frame % 1800 === 0)) this._selfCheck(ctx);
-    }
 
     // Keep a trail under the animal if nothing else is driving footprints, so
     // the snow is never a pristine sheet the fox is pasted onto.
@@ -333,10 +377,18 @@ export class Terrain {
       // unsparkling contact patch while the surface only drops a few
       // millimetres — pressing deeper would just open a visible gap under a
       // paw the rig is holding at a fixed height.
-      const pen = this.heightAt(_v.x, _v.z) + 0.004 - _v.y;
+      // Press whenever the paw is ON the snow, not only when the rig has
+      // driven it THROUGH the snow. A paw resting a centimetre proud left no
+      // mark at all, which is most of why review 3 read "no snow interaction
+      // with the animal at any speed": the machinery was all here and the
+      // gate in front of it almost never opened. 3 cm of tolerance covers
+      // the rig's own placement error, and the depth still scales with how
+      // hard the paw is actually pushing.
+      const pen = this.heightAt(_v.x, _v.z) + 0.030 - _v.y;
       if (pen <= 0) continue;
-      this.foot.press(_v.x, _v.z, 0.052, Math.min(0.35, 0.05 + pen * 5),
-        0.55, this._heading, ctx.time, false);
+      const d = Math.min(0.62, 0.10 + pen * 7);
+      const slot = this.foot.press(_v.x, _v.z, 0.052, d, 0.55, this._heading, ctx.time, false);
+      this._powder(_v.x, _v.z, 0.052, d, slot);
     }
   }
 
@@ -344,6 +396,20 @@ export class Terrain {
     if (!this._ready) return;
     const s = ctx.subjectPosition || this.mesh.position;
     this.foot.prerender(ctx, s);
+
+    // AFTER the footprint composite, not before it.
+    //
+    // This used to run in update(), which is ahead of prerender() in the same
+    // frame — so every stamp pressed this frame was already in the CPU model
+    // and not yet on the GPU, and the check measured that one-frame lag as a
+    // CPU/GPU disagreement. Harmless while the fallback contact prints almost
+    // never fired; the moment they fire every frame during a walk it reported
+    // 24 mm of "divergence" on a field that agrees to 2 microns. An
+    // instrument that fails when the thing it watches starts working is worse
+    // than no instrument.
+    if (import.meta.env?.DEV) {
+      if (ctx.frame === 45 || (ctx.frame > 45 && ctx.frame % 1800 === 0)) this._selfCheck(ctx);
+    }
   }
 
   onQuality(e, ctx) {

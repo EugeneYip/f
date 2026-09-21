@@ -112,14 +112,35 @@ export const SNOW = {
 
   // Footprint field.
   FP_SIZE: 24.0,          // metres covered by the deformation target
-  FP_MAXDEPTH: 0.080,     // metres, when the depth channel is 1
-  FP_MAXRIM: 0.026,       // metres, when the rim channel is 1
-  // Profile widths, in units of the press() radius. These are deliberately
-  // wide: the clipmap resolves ~1.6 cm, so a wall or rim narrower than about
-  // 0.25 radii turns into vertex spikes instead of a print.
+  FP_MAXDEPTH: 0.095,     // metres, when the depth channel is 1
+  FP_MAXRIM: 0.016,       // metres, when the rim channel is 1
+  // Profile widths, in units of the press() radius.
+  //
+  // These have to be read against the clipmap's BASE SPACING, and the old
+  // numbers were not. A press radius is ~0.047 m and the base spacing was
+  // 0.0205 m, so the rim — 0.27 radii = 1.27 cm — was 0.6 of a cell wide and
+  // 2.6 cm tall. A lip narrower than the triangles carrying it is not a lip,
+  // it is a vertex spike, and that is what review 3 found and called
+  // "orphaned white geometry shards lying on the snow" in tail.png and
+  // sun2/hero.png: hard-edged faceted V's with a clean silhouette, which an
+  // A/B pins on the snowfield mesh and nothing else. The file already warned
+  // about exactly this failure and then sat below its own threshold.
+  //
+  // The rim is now 0.62 radii = 2.9 cm, about 2.5 cells at the new base
+  // spacing, and 1.6 cm tall rather than 2.6. The fine structure of the lip
+  // is not lost: the fragment stage re-derives the footprint gradient at
+  // render-target resolution, so the NORMAL still carries a crisp rim while
+  // the geometry only carries what it can resolve.
+  // The WALL widths are back where they were: widening them flattened the
+  // floor of the print (measured: the deepest point of a depth-0.84 stamp
+  // went from 35 mm to 24 mm), and the wall was never the part that spiked.
+  // The floor exponents come down because the paw SDF only reaches d = -0.21
+  // at the pad centre, so pow(0.53, 1.25) was throwing away a further 17% of
+  // a depression that has to compete with +-25 mm of surrounding sastrugi to
+  // be seen at all.
   FP_WALL0: 0.46, FP_WALL1: 0.28,   // soft..sharp depression wall
-  FP_POW0: 1.25, FP_POW1: 0.85,     // soft..sharp floor shaping
-  FP_RIM_D: 0.17, FP_RIM_W: 0.27,   // displaced rim: offset and width
+  FP_POW0: 1.00, FP_POW1: 0.78,     // soft..sharp floor shaping
+  FP_RIM_D: 0.34, FP_RIM_W: 0.62,   // displaced rim: offset and width
   FP_TAU_DEPTH: 21.0,     // e-folding time (s); ~60 s to visually vanish
   FP_TAU_RIM: 10.0,       // rims blow away first
   FP_TAU_COMP: 26.0,      // the compacted (bluer, glossier) snow lingers
@@ -659,7 +680,11 @@ void main(){
   float wrapT = saturate((NdotL + 0.42) / 1.42);
   float diff = wrapT * wrapT * (0.55 + 0.45 * wrapT);
 
-  vec3 albedo = uAlbedo * (1.0 - 0.10 * comp) * (1.0 - 0.03 * (1.0 - vFields.y));
+  // Compacted snow is denser, so it scatters less and reads darker and bluer
+  // than the powder around it. At 10% that was not enough for a print to be
+  // legible as a hole rather than as a bright lip; the depression has to have
+  // a visibly different SURFACE, not just a different shape.
+  vec3 albedo = uAlbedo * (1.0 - 0.20 * comp) * (1.0 - 0.03 * (1.0 - vFields.y));
   // Ice barely absorbs in the visible, but what it absorbs is red — light that
   // takes a long path through snow comes back cyan. Together with the sky term
   // below, this is what makes shadowed snow BLUE rather than grey.
