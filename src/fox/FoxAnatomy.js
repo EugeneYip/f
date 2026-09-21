@@ -174,6 +174,47 @@ export const EYE = {
   ballRadius: 0.0098 * SKULL_SCALE,
   socketDepth: 0.0026,     // depression carved into the skin
   cornealProud: 0.0030,    // how far the cornea stands out of the socket
+  socketR: 0.0150,         // carving sphere radius
+  socketK: 0.0165,         // smooth-subtract blend width
+
+  /**
+   * ## The socket is a SLOT, not a dish, and that is what sets the fissure
+   *
+   * Eyes.js draws the palpebral aperture as a band on the globe running from
+   * `-AP_W` to `+AP_W` in gnomonic tangent units, so a canthus at AP_W sits
+   * `atan(AP_W)` off the orbital axis. Wherever the SKIN stands further from
+   * the eyeball centre than the seated globe's own surface does, it covers
+   * the lid: authoring a canthus out there buys nothing, it just buries the
+   * corner. The fissure length is therefore capped by this file, not by the
+   * eye's, and the cap is the angle at which the skin closes over the globe.
+   *
+   * Measured on the built field (replica of Eyes.js's own fit + seat, agreeing
+   * with its console line to 0.01 mm), before this slot existed:
+   *
+   *     visible to   TEMPORAL 54.9   UP 47.2   NASAL 37.5   DOWN 32.2 deg
+   *     => AP_W max 0.768, and Eyes.js was authoring 0.780
+   *
+   * So the aperture was capped NASALLY, by 17 degrees against the temporal
+   * side, and the eye agent's AP_W was already a hair past the cap. That is
+   * the whole reason our fissure/cornea is 0.97 against a measured 1.28
+   * (Cerdocyon thous, PLOS ONE 2019 e0224245): the cornea is the right size
+   * and the lids cannot reach its corners.
+   *
+   * A round dish cannot fix it. Widening the sphere opens nasal and temporal
+   * together, and the TEMPORAL rim at 50 degrees is what `_fitGlobeRadius`
+   * measures the eyeball against — widening there shrinks the globe, and the
+   * cornea with it. The carve has to be ANISOTROPIC: long on the fissure axis,
+   * unchanged on the axis the fit probe rides.
+   *
+   * `socketSlot` is that length, in metres, applied as a segment through the
+   * carving sphere along the fissure axis (`look` x world up), biased nasally
+   * by `socketNasalBias` because the nasal end is the one that is short. It is
+   * also what a real orbit looks like — the palpebral fissure of a canid is a
+   * slot between the medial canthal ligament and the lateral raphe, not a
+   * circular hole.
+   */
+  socketSlot: 0.0120,      // half-length of the carve along the fissure axis
+  socketNasalBias: 0.62,   // share of the slot spent on the nasal side
 };
 
 /**
@@ -780,7 +821,7 @@ export function buildField() {
 
   // ------------------------------------------------- eye sockets (phase 2) ---
   const eyes = {};
-  const SOCKET_R = 0.0150, SOCKET_K = 0.0165;
+  const SOCKET_R = EYE.socketR, SOCKET_K = EYE.socketK;
   for (const side of ['R', 'L']) {
     const seed = side === 'R' ? EYE.seed : mirrorX(EYE.seed);
     const lk = side === 'R' ? EYE.look : mirrorX(EYE.look);
@@ -794,9 +835,20 @@ export function buildField() {
     // depression, not a crater. The k/4 that smooth-subtract eats is folded in.
     const off = SOCKET_R - EYE.socketDepth + SOCKET_K * 0.25;
     const hit = [seed[0] + n[0] * uncarved, seed[1] + n[1] * uncarved, seed[2] + n[2] * uncarved];
+    const c = [hit[0] + n[0] * off, hit[1] + n[1] * off, hit[2] + n[2] * off];
+
+    // The fissure axis: perpendicular to the optical axis and to world up,
+    // signed so it points TEMPORALLY (out to the side of the head) on both
+    // sides. See EYE.socketSlot for why the carve is a slot along it.
+    const tl = Math.hypot(n[2], n[0]) || 1;
+    const sgn = side === 'R' ? 1 : -1;
+    const tang = [sgn * n[2] / tl, 0, -sgn * n[0] / tl];
+    const sN = 2 * EYE.socketSlot * EYE.socketNasalBias;
+    const sT = 2 * EYE.socketSlot * (1 - EYE.socketNasalBias);
     f.add({
       name: `socket${side}`,
-      a: [hit[0] + n[0] * off, hit[1] + n[1] * off, hit[2] + n[2] * off],
+      a: [c[0] - tang[0] * sN, c[1] - tang[1] * sN, c[2] - tang[2] * sN],
+      b: [c[0] + tang[0] * sT, c[1] + tang[1] * sT, c[2] + tang[2] * sT],
       ra: SOCKET_R, squash: [1.0, 0.88, 1.0], k: SOCKET_K, op: 'subtract',
       region: R.forehead, furLength: FUR[R.forehead][0], furStiffness: 0.5,
       flowDir: [0, 0.2, -1], flowRadial: 0.2, tint: 0x2a2a30,
