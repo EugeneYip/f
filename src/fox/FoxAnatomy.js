@@ -278,11 +278,11 @@ export const EAR = {
   thickTip: 0.92,     //   ... and at the apex (near-circular cross-section)
   thickPower: 1.3,
   wide: 1.02,
-  rim: 0.0120,        // blade left outside the concha on each side
+  rim: 0.0112,        // blade left outside the concha on each side
   // Concha: a cone, not a sphere, sized FROM the blade profile so it can never
   // outgrow it however the pinna is retuned.
-  bowlU0: 0.12, bowlU1: 0.80, bowlWide: 0.85, bowlThick: 0.50, bowlK: 0.009,
-  bowlFloor0: 0.0035, bowlFloor1: 0.0115,
+  bowlU0: 0.12, bowlU1: 0.80, bowlWide: 0.85, bowlThick: 0.50, bowlK: 0.0080,
+  bowlFloor0: 0.0022, bowlFloor1: 0.0108,
 
   ...earFrame(),
 
