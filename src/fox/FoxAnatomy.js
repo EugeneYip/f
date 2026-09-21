@@ -439,8 +439,17 @@ export const EAR = {
 //     hair, not a curve" check in tools/spec.mjs. Deep enough to pass that,
 //     shallower than the flank, and no deeper. That is the whole rule.
 export const FUR = {
-  [R.nose]: [0.0006, 1.00],
-  [R.muzzle]: [0.0034, 0.90],
+  // 0.6 mm is a shaved region, and `nosePad` was 31 mm across -- so this
+  // authored a bare disc 2.4x the width of the rhinarium it stands for, which
+  // is what `chin` was showing. The rhinarium's bareness is owned twice over
+  // by FaceDetail's own pad mesh and by fur.glsl's uNoseFade (bare to 4 mm,
+  // full coat by 7 mm); this table does not need to shave it a third time.
+  // Measured at `chin`, fraction of the muzzle core that changes when the
+  // SKIN is hidden -- 11 % on the cheek is the covered control:
+  //     0.6 mm 86.6 %   3.4 mm 80.6 %   8 mm 71.6 %   15 mm 62.3 %
+  // so length alone never closes it; the pad had to shrink as well.
+  [R.nose]: [0.0040, 1.00],
+  [R.muzzle]: [0.0080, 0.90],
   [R.jawLower]: [0.0190, 0.72],
   [R.cheek]: [0.0400, 0.28],
   [R.forehead]: [0.0175, 0.82],
@@ -647,13 +656,39 @@ export function buildField() {
   // muzzle now barely narrows and stops well short of the old nose position.
   f.add({
     name: 'muzzle', a: H([0, 0.3020, 0.2255]), b: H([0, 0.2952, 0.2380]),
-    ra: sr(0.0264), rb: sr(0.0170),
+    ra: sr(0.0225), rb: sr(0.0131),
     squash: [1.0, 0.92, 1.0], k: 0.018, ...furOf(R.muzzle),
     flowDir: [0, 0.05, -1], flowRadial: 0.34, tint: TINT_FUR,
   });
+  /**
+   * ## The nose pad was a 31 mm bare disc standing in for a 13 mm rhinarium
+   *
+   * `ra` was sr(0.0130) = 15.3 mm, i.e. 30.7 mm across in x and 23.9 mm in z,
+   * carrying `R.nose` fur at 0.6 mm and TINT_SKIN. FaceDetail's own comment
+   * already says so from the other side -- "the anatomy agent's nose region
+   * is considerably wider than the rhinarium it represents" -- and it clamps
+   * its drawn pad to 10-14.2 mm to survive it. Nothing clamped the SDF, so
+   * the field kept a bare, skin-tinted dome three times the area of the nose
+   * across the front of the muzzle. At `chin` that is ~600 px of untextured
+   * plane and it is the single worst frame in the review set.
+   *
+   * Measured at `chin`, fraction of the muzzle core that changes when the
+   * skin is hidden (the covered control, cheek, reads 11 %):
+   *
+   *     nose fur 0.6 mm  86.6 %      <- shipped
+   *     nose fur  15 mm  62.3 %      <- length alone, pad unchanged
+   *
+   * So the pad itself had to go. sr(0.0090) = 10.6 mm is 1.77 mesher cells at
+   * the 6 mm `high` grid -- the same sampling the ear apex was rebuilt to in
+   * 13b46b6, which is the floor for anything that has to round over -- and
+   * the centre moves forward so the apex lands 6 mm further out instead of
+   * shorter. §4c: "The nose pad sits at a defined apex, not on a blunt dome."
+   * k rises 6 -> 9 mm because a smaller primitive needs a wider fillet to
+   * reach the muzzle cone behind it without a step.
+   */
   f.add({
-    name: 'nosePad', a: H([0, 0.2930, 0.2510]), ra: sr(0.0130),
-    squash: [1.0, 0.86, 0.78], k: 0.006, ...furOf(R.nose),
+    name: 'nosePad', a: H([0, 0.2930, 0.2585]), ra: sr(0.0090),
+    squash: [1.0, 0.86, 0.78], k: 0.009, ...furOf(R.nose),
     flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_SKIN,
   });
   f.add({
@@ -672,7 +707,7 @@ export function buildField() {
   // skin edge with ruff fur visible beyond it. §4f.2 keeps the muzzle short —
   // it does not ask for the jaw to be short too.
   f.addMirrored({
-    name: 'whiskerPadR', a: H([0.0158, 0.2948, 0.2288]), ra: sr(0.0104),
+    name: 'whiskerPadR', a: H([0.0158, 0.2948, 0.2288]), ra: sr(0.0080),
     squash: [0.88, 0.84, 1.05], k: 0.015, ...furOf(R.muzzle),
     flowDir: [0.18, -0.25, -0.95], flowRadial: 0.35, tint: TINT_FUR,
   });

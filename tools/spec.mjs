@@ -251,6 +251,12 @@ const results = await page.evaluate(async () => {
   {
     const c = project('chest');
     out.coat_lit = c ? sample(c.x, c.y - 30, 24) : null;
+    // In-frame snow reference. §4b says the animal is "only slightly brighter
+    // than its background"; an absolute luminance target would depend on
+    // exposure and sun angle, so compare against the snow in the same frame.
+    // Sampled well away from the animal and below the horizon.
+    const g0 = grab();
+    out.snow_ref = sample(g0.w * 0.12, g0.h * 0.80, 40);
   }
 
   // 4. FRAME FLOOR AND CLIPPING — a grade whose shadow tint peaked at true
@@ -592,14 +598,17 @@ const results = await page.evaluate(async () => {
           core[i] = all;
         }
       }
-      let rimSum = 0, rimN = 0, coreSum = 0, coreN = 0;
+      let rimSum = 0, rimN = 0, coreSum = 0, coreN = 0, behindSum = 0;
       for (let i = 0; i < W * H; i++) {
         if (!mask[i]) continue;
         if (core[i]) { coreSum += lumAt(fg, i); coreN++; }
-        else { rimSum += lumAt(fg, i); rimN++; }
+        // `bg` is this exact frame with the animal hidden, so bg at a rim
+        // pixel is precisely the radiance the fur is standing in front of.
+        else { rimSum += lumAt(fg, i); behindSum += lumAt(m.bg, i); rimN++; }
       }
       out.transmission = rimN && coreN
         ? { rim: rimSum / rimN, core: coreSum / coreN, ratio: (rimSum / rimN) / (coreSum / coreN),
+            behind: behindSum / rimN, seeThrough: (rimSum / rimN) / (behindSum / rimN),
             rimPx: rimN, corePx: coreN }
         : null;
     }
@@ -766,7 +775,18 @@ const results = await page.evaluate(async () => {
         return Math.abs(fg[i] - bgRef[i]) + Math.abs(fg[i + 1] - bgRef[i + 1]) +
                Math.abs(fg[i + 2] - bgRef[i + 2]);
       };
-      const bands = { head: [top, top + (bot - top) * 0.33], body: [top + (bot - top) * 0.33, bot] };
+      // A `legs` band, because §4f says trace the WHOLE contour and the
+      // body band does not. The critic scanned a foreleg edge and got
+      // `173 173 171 156 151 151 150 146 141 136 133 124 119 115 114 112 112
+      // 111 111 111 110` -- monotonic over 13 px with not one hair crossing
+      // it -- while this check passed the body by 0.034. Each leg is ~5% of
+      // the contour against §4f's 2% allowance, so a gate that cannot see
+      // them is passing the animal on its best third.
+      const bands = {
+        head: [top, top + (bot - top) * 0.33],
+        body: [top + (bot - top) * 0.33, top + (bot - top) * 0.70],
+        legs: [top + (bot - top) * 0.70, bot],
+      };
       const res = {};
       for (const [name, [y0, y1]] of Object.entries(bands)) {
         const steps = [];
@@ -897,6 +917,7 @@ await server.close();
 
 // --- assertions -----------------------------------------------------------
 const hex = (c) => c ? `(${c.r.toFixed(0)},${c.g.toFixed(0)},${c.b.toFixed(0)})` : 'n/a';
+const lum = (c) => (c ? (c.r + c.g + c.b) / 3 : 0);
 
 record('no init errors', results.initErrors.length === 0, results.initErrors);
 record('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 5));
@@ -915,8 +936,23 @@ record('eye keeps its chroma through post', er && ep && (ep.r - ep.b) > (er.r - 
   `raw R-B ${er ? (er.r - er.b).toFixed(1) : '?'} -> post R-B ${ep ? (ep.r - ep.b).toFixed(1) : '?'}`);
 
 // Coat: §4b forbids any warm cast.
-const cl = results.coat_lit;
+const cl = results.coat_lit, sn = results.snow_ref;
 record('lit coat is not warm', cl && cl.r - cl.b < 10, `${hex(cl)} — R-B must stay under 10`);
+// This check used to be the whole of the coat's colour contract, and it
+// asserted ONE side of neutrality. A coat at B-R = +59 -- a mid-blue, 43%
+// darker than the snow beside it -- passed cleanly for rounds while the
+// critic and the user both described the animal as an ice carving. A gate
+// that can only fail warm is not a neutrality gate.
+record('lit coat is not BLUE either', cl && cl.b - cl.r < 20,
+  `${hex(cl)} — B-R is ${cl ? (cl.b - cl.r).toFixed(0) : '?'}, must stay under 20. ` +
+  `§3's palette puts LIT fur at #fdfcfa (neutral) and SHADED fur at #b9c7d8 ` +
+  `(B-R +31), so a lit sample anywhere near the shaded figure is wrong`);
+record('lit coat is nearly as bright as the snow', cl && sn &&
+  lum(cl) >= lum(sn) * 0.80,
+  `coat ${hex(cl)} L=${cl ? lum(cl).toFixed(0) : '?'} against snow ${hex(sn)} ` +
+  `L=${sn ? lum(sn).toFixed(0) : '?'} — ratio ${cl && sn ? (lum(cl) / lum(sn)).toFixed(2) : '?'}, ` +
+  `want >= 0.80. §4b: "against snow the animal is only slightly brighter than ` +
+  `its background", so far darker is as wrong as far brighter`);
 
 // Frame: no scrim, no crush, no blowout.
 const f = results.frame;
@@ -942,7 +978,24 @@ record('no hard horizon step', hs && hs.agreeing >= 4 && hs.worst < 45,
 // Backlit transmission (§1's signature effect). Measured on the RAW render so
 // post cannot flatter it.
 const tr = results.transmission;
-record('backlit fur transmits (rim brighter than core)', tr && tr.ratio >= 1.12,
+// Rim-versus-CORE cannot see the failure this check exists to catch.
+//
+// The critic measured the backlit rim at (153,146,142) against snow at
+// (218,218,218) -- 32% DARKER than the light it is supposedly transmitting --
+// while this check reported a comfortable 1.09, because the core was darker
+// still. A ratio between two dark things says nothing about whether light is
+// getting through. What matters is the rim against what is BEHIND it: fur
+// that transmits approaches the radiance of its backdrop and nearly
+// disappears into it, which is the whole look §1 is asking for.
+record('backlit fur is lit THROUGH, not just less dark than its core',
+  tr && tr.seeThrough >= 0.80,
+  tr ? `rim ${tr.rim.toFixed(1)} against a backdrop of ${tr.behind.toFixed(1)} ` +
+       `= ${tr.seeThrough.toFixed(3)} (want >= 0.80; 1.0 would be fur as bright ` +
+       `as the sky behind it). Rim/core is ${tr.ratio.toFixed(3)} and is now ` +
+       `reported only — it compared two dark things and passed at 1.09 while ` +
+       `the rim was 32% darker than the snow`
+     : 'n/a');
+record('[reported, not asserted] rim/core luminance ratio', true,
   tr ? `rim ${tr.rim.toFixed(1)} / core ${tr.core.toFixed(1)} = ${tr.ratio.toFixed(3)} ` +
        `(want >= 1.12; 1.0 means opaque fur)` : 'could not mask the animal');
 
@@ -1064,6 +1117,21 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
     // crossing while staying well under the coated reading. It is asserted on
     // the 10th percentile rather than the median because §4f's test is about
     // the WORST stretch of contour, not the typical one.
+    if (eh.legs && ehn.legs) {
+      record('silhouette is hair, not a curve: legs', eh.legs.p10 >= 1.15,
+        `outline path length over net crossing, 10th percentile ${eh.legs.p10} ` +
+        `(median ${eh.legs.median}) over ${eh.legs.n} rows — want >= 1.15. The ` +
+        `fur-off control on the same frame reads p10 ${ehn.legs.p10}. A bare ` +
+        `leg reads ~1.0: one monotonic crossing, no hair. CAVEAT: measured at ` +
+        `\`frontal\`, where the lower body is partly behind the ruff, so this ` +
+        `band may be reading chest fur rather than leg. The critic scanned a ` +
+        `foreleg at \`profile\` and found a clean monotonic ramp; if that ` +
+        `disagrees with this number, believe the critic`);
+    } else {
+      record('silhouette is hair, not a curve: legs', false,
+        'the leg band produced too few usable rows to measure — that is a ' +
+        'failure, not a pass; a band that cannot be measured cannot be cleared');
+    }
     record('silhouette is hair, not a curve: body', sub.p10 >= 1.15,
       `outline path length over net crossing, 10th percentile ${sub.p10} ` +
       `(median ${sub.median}) over ${sub.n} rows — want >= 1.15. 1.0 is a ` +
