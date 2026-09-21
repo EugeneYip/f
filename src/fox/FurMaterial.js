@@ -368,6 +368,38 @@ export function makeBaseMaterial(uniforms) {
  * drawing the innermost shell as instance 0 gives correct back-to-front
  * compositing through the coat for free, with no sort and no depth writes.
  */
+/*
+ * THE COAT WRITES DEPTH. This is the single most consequential line in the
+ * file and it is not an optimisation — read this before turning it off.
+ *
+ * With depthWrite off, the depth buffer contains the SKIN and nothing else,
+ * because the skin is the only opaque thing the fox draws. Every pixel of
+ * coat outside the skin's own outline therefore reports the depth of the
+ * SNOW BEHIND THE ANIMAL. DoF reads that buffer, computes a full background
+ * circle of confusion for those pixels, and replaces them with the blurred
+ * far field — deliberately, and it says so: its prepare pass picks "the
+ * sub-sample that is MOST out of focus" and weights colour toward that
+ * surface, so a fringe pixel that is 40% hair over sky is resolved as sky.
+ *
+ * The result is a hard-edged, in-focus plate exactly the shape of the skin
+ * mesh, with the coat outside it washed into the background. That plate is
+ * what four rounds of work read as "the skin showing through the coat", and
+ * it is neither the skin (measured: ZERO of the skin's own radiance reaches
+ * the frame — the coat is completely opaque over it) nor the coat's own
+ * outline (measured: postfx off, the silhouette is hair everywhere).
+ *
+ * Shells are drawn inner-to-outer, so each successive shell is NEARER and
+ * passes the depth test against the one below it; writing depth costs the
+ * blend nothing. Discarded fragments write no depth, so the depth silhouette
+ * is hair-shaped rather than an offset envelope. Cards write depth too: they
+ * are the OUTERMOST thing the animal has, and without them the strand fringe
+ * is the one part still left outside the depth buffer and still blurred away.
+ *
+ * Consequences that are intended, not accidents: whiskers, cornea, breath and
+ * snow particles all draw after the coat and are now depth-tested against it,
+ * so a whisker root buried in the ruff is hidden and a flake passing behind
+ * the tail is occluded. That is what the coat being real geometry means.
+ */
 export function makeShellMaterial(uniforms) {
   return new THREE.ShaderMaterial({
     name: 'furShell',
@@ -377,7 +409,7 @@ export function makeShellMaterial(uniforms) {
     fog: true,
     lights: false,
     transparent: true,
-    depthWrite: false,
+    depthWrite: true,
     depthTest: true,
     blending: THREE.NormalBlending,
     side: THREE.FrontSide,
@@ -393,7 +425,7 @@ export function makeCardMaterial(uniforms) {
     fog: true,
     lights: false,
     transparent: true,
-    depthWrite: false,
+    depthWrite: true,
     depthTest: true,
     blending: THREE.NormalBlending,
     side: THREE.DoubleSide,
