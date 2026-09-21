@@ -499,11 +499,19 @@ export const FUR = {
   [R.croup]: [0.0460, 0.80],
   [R.haunch]: [0.0415, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
-  [R.legFrontLower]: [0.0260, 0.66],
-  [R.pawFront]: [0.0120, 0.86],
+  [R.legFrontLower]: [0.0210, 0.66],
+  // §4f's sourced ranking (Underwood & Reynolds via Prestrud 1991) puts the
+  // FOOT PADS among the DEEPEST and most seasonal pelage on the animal and
+  // the DISTAL LEGS among the shallowest. We had it exactly backwards: pads
+  // 12 mm under a 26 mm distal leg. Flipped, which is also the one thing
+  // this species is named for -- lagopus, "hare-foot" -- and §4b's "paws
+  // broad with dense fur between the toes". It gives the foot the flare out
+  // of a slimmer ankle that makes it read as a foot rather than as the
+  // bottom of a column; see the note on `addPaw` about the toes.
+  [R.pawFront]: [0.0220, 0.86],
   [R.legHindUpper]: [0.0380, 0.60],
-  [R.hock]: [0.0220, 0.52],
-  [R.pawHind]: [0.0120, 0.86],
+  [R.hock]: [0.0180, 0.52],
+  [R.pawHind]: [0.0220, 0.86],
   [R.tailBase]: [0.0480, 0.78],
   [R.tailMid]: [0.0540, 0.80],
   [R.tailTip]: [0.0420, 0.72],
