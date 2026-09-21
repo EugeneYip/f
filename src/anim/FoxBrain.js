@@ -170,7 +170,7 @@ const STATES = {
   // walk  ambling. Topline level, head carried easily, no urgency.
   walk: {
     gait: 'walk', alert: 0.50, exert: 0.17, settled: 0,
-    tailLift: 0.60, tailCurl: -0.30, tailStiff: 0.92,
+    tailLift: 0.60, tailCurl: -0.30, tailStiff: 0.96,
     ears: { x: -0.045, y: 0.100, z: 0.010 },
     drop: 0, look: 0.62, frontIK: 1, hindIK: 1,
     pose: {
@@ -183,7 +183,7 @@ const STATES = {
   //       was furthest from the truth.
   trot: {
     gait: 'trot', alert: 0.62, exert: 0.46, settled: 0,
-    tailLift: 0.88, tailCurl: -0.20, tailStiff: 0.82,
+    tailLift: 0.88, tailCurl: -0.20, tailStiff: 0.95,
     ears: { x: -0.085, y: 0.130, z: -0.035 },
     drop: -0.006, look: 0.45, frontIK: 1, hindIK: 1,
     pose: {
@@ -198,7 +198,7 @@ const STATES = {
   //       the compressed one a slink has.
   run: {
     gait: 'run', alert: 0.88, exert: 1.00, settled: 0,
-    tailLift: 1.05, tailCurl: -0.42, tailStiff: 0.70,
+    tailLift: 1.05, tailCurl: -0.42, tailStiff: 0.90,
     ears: { x: 0.060, y: 0.060, z: -0.140 },
     drop: 0, look: 0.28, frontIK: 1, hindIK: 1,
     pose: {

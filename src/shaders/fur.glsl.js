@@ -120,6 +120,7 @@ uniform float uTrans;
 uniform float uTransPow;
 uniform float uTransThin;      // exponent on (1 - alpha): 0 disables the term
 uniform float uTransGraze;     // exponent on (1 - |N.V|)
+uniform float uTransFloor;     // how far the grazing band bypasses the thinness gate
 uniform float uAOInner;
 uniform float uAOPow;
 uniform float uAOBake;
@@ -612,7 +613,8 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   vec3 transLight = mix(vec3(luma(uSunColor)), uSunColor, uTransSat);
   col += transLight * uSunIntensity * uTransTint * albedo *
          (uTrans * transBoost * RECIPROCAL_PI * fwd * thin * (1.45 * graze)
-          * pow(thinness, uTransThin) * (0.30 + 0.95 * shell));
+          * mix(pow(thinness, uTransThin), 1.0, uTransFloor * graze)
+          * (0.30 + 0.95 * shell));
   // NOTE on the constant-free grazing weight: thinness alone cannot tell a
   // fringe hair over sky from an outer shell over dense coat — both have the
   // same low PER-SHELL alpha. With a 0.06 interior floor, every one of the

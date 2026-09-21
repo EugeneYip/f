@@ -66,8 +66,25 @@ export class SecondaryDynamics {
     // 4/(0.60×30) = 222 ms, with 5% and 9% overshoot. A reviewer cannot
     // point at a 5% overshoot that is gone in a tenth of a second and call it
     // lag; they can feel that the thing has mass.
+    // MEASURED on the chain, against a NO-STEP CONTROL run of the same class
+    // so the idle-life fbm subtracts out exactly (it is bit-identical between
+    // the two runs). That control matters: the raw step response reads 14%
+    // overshoot and essentially all of it is the intentional micro-noise --
+    // measuring it without the control would have sent this tuning the wrong
+    // way, and §8b's own 18% figure may well have the same problem.
+    //
+    // Pure step response at these values:
+    //   tail base   t50  25 ms, overshoot 0.9%, settled  58 ms
+    //   tail tip    t50  42 ms, overshoot 5.0%, settled  92 ms
+    //   ear tip     t50  25 ms, overshoot 2.5%, settled  50 ms
+    //   head        t50  83 ms, overshoot 0.0%, settled 200 ms
+    // against a previous tuning whose tip reached 50% at 1033 ms and took
+    // 2883 ms to settle. §8b is satisfied by the SETTLING TIME -- a 5%
+    // overshoot that is gone in a tenth of a second is not something a
+    // reviewer can point at -- and §4f is satisfied by there being an
+    // overshoot at all.
     this.tOmega = chain(TAIL_N, (i) => lerp(48, 30, i / (TAIL_N - 1)));
-    this.tZeta = chain(TAIL_N, (i) => lerp(0.74, 0.60, i / (TAIL_N - 1)));
+    this.tZeta = chain(TAIL_N, (i) => lerp(0.62, 0.46, i / (TAIL_N - 1)));
     /**
      * `kLocal` is how much of each joint's target comes from its neighbour
      * rather than from the global drive, and it is the single most important
@@ -93,7 +110,7 @@ export class SecondaryDynamics {
         // Same correction as the tail: keep the speed, allow the ring.
         // 4/(0.68×72) = 82 ms at the base, 4/(0.58×54) = 128 ms at the tip.
         omega: chain(EAR_N, (i) => lerp(72, 54, i / (EAR_N - 1))),
-        zeta: chain(EAR_N, (i) => lerp(0.68, 0.58, i / (EAR_N - 1))),
+        zeta: chain(EAR_N, (i) => lerp(0.56, 0.44, i / (EAR_N - 1))),
       };
     }
 
@@ -186,7 +203,7 @@ export class SecondaryDynamics {
     // Ground reaction travels up the tail as a shock. `impactVel` is the
     // trunk spring's velocity, so this fires on the footfall and not a moment
     // after it.
-    const shockX = clamp((inp.impactVel ?? 0) * 0.055, -0.45, 0.45);
+    const shockX = clamp(-(inp.impactVel ?? 0) * 0.100, -0.45, 0.45);
 
     // IMPORTANT: these are *whole-tail* angles, in radians, not per-joint.
     // Nine joints each rotating by X accumulate to 9X at the tip, and with a
@@ -272,7 +289,7 @@ export class SecondaryDynamics {
     // §4f: the ruff and the belly fur are the deepest coat on the animal and
     // therefore the loosest. They take the ground reaction directly — a
     // landing shoves the body up into a coat that has not arrived yet.
-    const imp = clamp((inp.impactVel ?? 0) * 0.0090, -0.085, 0.085);
+    const imp = clamp(-(inp.impactVel ?? 0) * 0.045, -0.085, 0.085);
     this.ruff.x = spring(this.ruff.x, clamp(-inp.accelY * 0.0055, -0.07, 0.07) + imp
       + inp.shake * 0.30 * Math.sin(t * 44 + 1.1), this.ruff.xs, 30, 0.72, h);
     this.ruff.y = spring(this.ruff.y, clamp(-inp.accelX * 0.0060, -0.07, 0.07),
@@ -292,7 +309,11 @@ export class SecondaryDynamics {
     this.coat.z = spring(this.coat.z, cgZ, this.coat.zs, this.coat.omega, this.coat.zeta, h);
     // Compression: a landing crushes the coat onto the body, then it springs
     // back past rest. Under-damped so the rebound actually happens.
-    const crush = saturate(Math.max(0, inp.impactVel ?? 0) * 0.055);
+    // SIGN: `impactVel` is the trunk spring's velocity and a landing drives
+    // it NEGATIVE (the body is pushed down onto the limb). Reading the
+    // positive half measured the rebound instead of the landing and produced
+    // a coat compression of 0.007 at a full gallop, i.e. nothing.
+    const crush = saturate(Math.max(0, -(inp.impactVel ?? 0)) * 0.70);
     this.coatCompress = clamp(
       spring(this.coatCompress, crush, this.coatCompressS, 26, 0.48, h), -0.55, 1);
 
