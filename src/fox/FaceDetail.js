@@ -982,18 +982,16 @@ export class FaceDetail {
       if (!inv) { g.dispose(); continue; }
       g.applyMatrix4(inv);
       g.computeVertexNormals();
-      // FACE-AVERAGED NORMALS ARE WRONG HERE. The shell is fitted by raycast,
-      // so its rows are not evenly spaced and some quads are near-degenerate;
-      // the cross products those produce swing wildly and the concha rendered
-      // a torn, saw-toothed light/dark boundary across its middle that looked
-      // for all the world like a geometry or shadow bug. It is neither: the
-      // POSITIONS are fine (verified by holding columns and by a 4 mm
-      // continuity test, neither of which changed the image) and so is the
-      // uv (verified: 27 clean rows, v in [-1,1]). It is the normals.
-      //
-      // The pinna is a thin plate, so its true normal is `face` almost
+      // FACE-AVERAGED NORMALS ARE UNRELIABLE HERE. The shell is fitted by
+      // raycast, so its rows are not evenly spaced and some quads are
+      // near-degenerate; the cross products those produce swing wildly. The
+      // pinna is a thin plate, so its true normal is `face` almost
       // everywhere. Blend the triangle normals most of the way onto it: the
       // rolled rim keeps its shading gradient, the garbage averages out.
+      //
+      // (This was also a candidate for the torn patch — see _earMaterial —
+      // and it is NOT the cause. Kept because a fitted shell should not be
+      // taking its normals from near-degenerate quads either way.)
       {
         const fn = face.clone().transformDirection(inv).normalize();
         const na = g.attributes.normal;
@@ -1012,13 +1010,14 @@ export class FaceDetail {
       cup.name = `foxConcha${side}`;
       cup.castShadow = false;
       // NOT receiveShadow. The shell floats a fifth of a millimetre off the
-      // pinna it is fitted to, and the pinna casts. At that separation the
-      // shadow-map comparison is inside its own bias and the shell samples
-      // itself: it rendered a torn, saw-toothed dark patch across the middle
-      // of the concha, which three passes of geometry work did not touch
-      // because it was never geometry. The pinna underneath still receives
-      // shadow correctly and shows through this shell's alpha, so nothing is
-      // lost — a soft overlay does not need its own shadow term.
+      // pinna it is fitted to, and the pinna casts: at that separation the
+      // shadow-map comparison is inside its own bias. The pinna underneath
+      // still receives shadow correctly and shows through this shell's alpha,
+      // so a soft overlay gains nothing from its own shadow term and can only
+      // acne against its own caster.
+      //
+      // NOTE, for whoever picks up the torn saw-toothed patch across the
+      // middle of the concha: this did not fix it. See _earMaterial.
       cup.receiveShadow = false;
       b1.add(cup);
       this.parts.push(cup);
@@ -1048,6 +1047,35 @@ export class FaceDetail {
    * the thin edge of the ear GLOWS when the sun is behind it. §4b calls the
    * ears thin; an opaque pinna against a low sun is the tell that they are
    * being treated as cardboard.
+   */
+  /**
+   * UNRESOLVED, for routing: a torn, saw-toothed light/dark boundary runs
+   * across the middle of each concha. It is only visible with the coat
+   * hidden — at every shipped framing the pinna is completely buried in fur —
+   * but it is there, and it is NOT any of the following, each ruled out by a
+   * separate render with the coat off:
+   *
+   *   - the rim lift        (rimLift = 0: unchanged)
+   *   - vertex positions    (columns held outward from the axis instead of
+   *                          snapping to the row axis: unchanged; a 4 mm
+   *                          continuity test against the last accepted hit:
+   *                          unchanged)
+   *   - the fitted outline  (5-tap smoothing of ep/en across rows: unchanged)
+   *   - the uv              (measured: 27 clean rows, v in [-1, 1], no
+   *                          out-of-range values, u is analytic)
+   *   - the normals         (blended 75% onto the plate normal: unchanged)
+   *   - this shell's own shadow term (receiveShadow off: unchanged)
+   *   - the alpha falloff   (both the old 0.55-0.96 ramp and the new
+   *                          0.86-0.995 one: unchanged)
+   *   - backface culling    (DoubleSide: unchanged)
+   *
+   * Hiding the two concha meshes does remove it, but hiding them also removes
+   * the whole dark bowl, and the pinna underneath is pale and low-contrast —
+   * so "it disappears with the concha off" is equally consistent with the
+   * patch living on the PINNA SKIN and only becoming visible where this shell
+   * darkens the region. That is now the leading candidate: shadow-map acne on
+   * a thin marching-cubes plate, which belongs to the anatomy agent's
+   * surface, not to this file.
    */
   _earMaterial() {
     const m = new THREE.MeshPhysicalMaterial({
@@ -1113,7 +1141,7 @@ export class FaceDetail {
   // draws a boundary of its own. This used to start fading at |x| = 0.55,
   // which is inboard of the margin — the pinna's whole outer third was being
   // composited away, so there was nothing there to be a rim.
-  float fdEdge = 1.0 - smoothstep(0.55, 0.96, fdAx);
+  float fdEdge = 1.0 - smoothstep(0.86, 0.995, fdAx);
   diffuseColor.a = fdEdge * (0.34 + 0.52 * fdDeep + 0.40 * fdRim) *
     smoothstep(1.0, 0.72, vEarUv.y) * smoothstep(-1.0, -0.78, vEarUv.y);
 `)
