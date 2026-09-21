@@ -213,8 +213,42 @@ export const EYE = {
    * slot between the medial canthal ligament and the lateral raphe, not a
    * circular hole.
    */
-  socketSlot: 0.0120,      // half-length of the carve along the fissure axis
-  socketNasalBias: 0.62,   // share of the slot spent on the nasal side
+  /**
+   * ### VERIFIED, and corrected. The slot works; 0.62 / 0.0120 did not.
+   *
+   * The paragraph above is right about the mechanism and wrong about the
+   * numbers it shipped. Re-measured on the built field with `socketSlot = 0`
+   * as a positive control — which reproduces the pre-slot reading above to
+   * 0.1 deg, so the instrument is reading the carve and not something else:
+   *
+   *     slot 0      (round dish)  T 54.9  U 47.2  N 37.5  D 32.2   AP_W max 0.768   cornea 13.9 mm
+   *     slot .0120 bias 0.62      T 57.5  U 46.4  N 41.0  D 31.8   AP_W max 0.870   cornea 13.0 mm
+   *     slot .0060 bias 1.00      T 54.9  U 47.2  N 42.0  D 32.2   AP_W max 0.900   cornea 13.9 mm
+   *
+   * `socketNasalBias` is the share of the slot spent NASALLY, so 0.62 spent
+   * the other 38 % temporally — straight through the path `_fitGlobeRadius`
+   * rides, which is the one thing the paragraph above says must not happen.
+   * It cost 0.71 mm of globe radius and 0.9 mm of corneal diameter to buy
+   * 3.5 deg of nasal reach. At bias 1.00 the temporal side is untouched
+   * (T and cornea return to the control exactly) and the nasal side opens
+   * further, so bias 1.00 dominates both earlier settings on every axis.
+   *
+   * The length saturates: 0.0040 already yields N 41.9 and 0.0260 only
+   * 42.0, because the nasal wall is the muzzle rising away from the globe
+   * (skin/globe along the nasal meridian runs 12.1/12.3 mm at 40 deg to
+   * 16.3/11.6 at 55) and no plausible carve moves a wall that steep. Keep
+   * the slot short — a long capsule trenches the nose bridge for nothing.
+   *
+   * WHAT THIS DOES NOT FIX. `AP_W` lives in Eyes.js and is still 0.780,
+   * under both the old cap and the new one, so the RENDERED fissure/cornea
+   * is 0.97 before and after — the slot buys headroom that nothing spends.
+   * Even fully spent, AP_W 0.900 is fissure/cornea 1.05 against the measured
+   * 1.28 (Cerdocyon thous, PLOS ONE 2019 e0224245); 1.28 needs AP_W ~ 1.39,
+   * i.e. the lids visible to 54 deg nasally, and the muzzle closes at 42.
+   * That last 12 deg is not available from this socket.
+   */
+  socketSlot: 0.0060,      // half-length of the carve along the fissure axis
+  socketNasalBias: 1.00,   // share of the slot spent on the nasal side
 };
 
 /**
