@@ -489,7 +489,13 @@ export const FUR = {
   [R.shoulder]: [0.0395, 0.66],
   [R.back]: [0.0440, 0.86],
   [R.flank]: [0.0480, 0.62],
-  [R.belly]: [0.0390, 0.22],
+  // 39 mm was 81 % of the flank's 48 — a lateral-trunk depth authored on a
+  // ventral surface. §4f's one sourced regional fact (Underwood & Reynolds
+  // via Prestrud 1991) ranks the belly with the HEAD and the DISTAL LEGS as
+  // shallowest in all seasons, and those are 17.5-26 and 12-26 mm here. It
+  // also cost 43 mm of visible leg, which is most of critic blocker 10.
+  // See the TRUNK_PROFILE docstring; that edit and this one are one change.
+  [R.belly]: [0.0200, 0.22],
   [R.croup]: [0.0460, 0.80],
   [R.haunch]: [0.0415, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
@@ -538,16 +544,60 @@ const mirrorX = (p) => [-p[0], p[1], p[2]];
  *     skin. TOP falls ~4 mm, BOTTOM rises ~22 mm, so the radius still drops
  *     13 mm while the section centre rises 9 mm.
  */
+/**
+ * ## §4f left the animal a BOX, and here is the number for it
+ *
+ * Measured on the field, sagittal, canopy = skin + furLength * uCoatScale
+ * along the outward normal (the offline twin of fur.glsl's furCoatLength):
+ *
+ *     SKIN     topline 271.9  belly 117.8   chest:leg  1.31 : 1
+ *     CANOPY   topline 316.3  belly  75.1   chest:leg  3.21 : 1
+ *
+ * The skin under this table is very nearly a fox. The COAT is what turns it
+ * into a bear, and it does it twice over: 44 mm added on top and 43 mm taken
+ * off the bottom, so a 118 mm leg becomes a 75 mm leg while the trunk gets
+ * half as deep again. The critic read 2.9:1 off `paws.png` by pixel count,
+ * which is the same finding from an instrument that shares nothing with
+ * this one. §4f predicted exactly this failure mode in its own words —
+ * "constant coat depth over a straight-sided trunk cannot" read as a light
+ * layer over a slight core — and then shipped a constant coat depth.
+ *
+ * Two things change here, and both of them follow §4f's own sourced text
+ * rather than fighting it:
+ *
+ * 1. THE BELLY COMES UP AGAIN. §4f's one properly sourced regional fact
+ *    (Underwood & Reynolds via Prestrud 1991) ranks the BELLY with the head
+ *    and the distal legs as shallowest in all seasons. We authored it at
+ *    39 mm, 81 % of the flank's 48 — a lateral-trunk depth on a ventral
+ *    surface, which contradicts the only ranking we actually have. It goes
+ *    to 20 mm, next to the head's 17.5-26 and the distal leg's 12-26. See
+ *    `FUR` below; that change and this one are one edit.
+ *
+ * 2. THE BOTTOM LINE GETS A SHAPE. It had none: the deepest point of the
+ *    belly sat at z = 0, mid-torso, with the brisket 19 mm HIGHER than it.
+ *    That is a sag, not a tuck-up, and it is why the critic could fit a
+ *    straight line to y ~ 600-640 across the whole frame. The brisket
+ *    (z = 0.050-0.086) now holds its depth and the loin lifts 17 mm behind
+ *    it, which is the direction §4f already argued for ("slimming is
+ *    ventral on a real animal") and drops mid-torso diameter from 134 mm to
+ *    123, further under the 150 mm obese-outlier hip that §4f rule 1 cites.
+ *
+ * The topline gets the smaller half of the same treatment. It peaked over
+ * the LOIN (z = -0.100) and dipped at the shoulder, i.e. a roach; a canid's
+ * highest trunk point is the withers. The loin drops ~4 mm and the withers
+ * rise ~4, which is inside the margin §4f left over the spine bones
+ * (spine03 sits 11 mm under TOP at z = 0, and still does).
+ */
 // z, TOP, BOTTOM, sqx, region  — silhouette-first authoring; see below.
 const TRUNK_PROFILE = [
   [-0.1880, 0.2260, 0.1960, 0.90, R.croup],
-  [-0.1700, 0.2395, 0.1815, 0.92, R.croup],
-  [-0.1420, 0.2580, 0.1490, 0.95, R.croup],
-  [-0.1000, 0.2683, 0.1387, 0.95, R.flank],
-  [-0.0520, 0.2648, 0.1272, 0.94, R.flank],
-  [0.0000, 0.2560, 0.1215, 0.93, R.flank],
-  [0.0500, 0.2565, 0.1235, 0.91, R.chest],
-  [0.0860, 0.2685, 0.1405, 0.89, R.chest],
+  [-0.1700, 0.2395, 0.1860, 0.92, R.croup],
+  [-0.1420, 0.2580, 0.1630, 0.95, R.croup],
+  [-0.1000, 0.2640, 0.1560, 0.95, R.flank],
+  [-0.0520, 0.2625, 0.1440, 0.94, R.flank],
+  [0.0000, 0.2570, 0.1330, 0.93, R.flank],
+  [0.0500, 0.2620, 0.1245, 0.91, R.chest],
+  [0.0860, 0.2720, 0.1405, 0.89, R.chest],
   [0.1110, 0.2754, 0.1650, 0.89, R.ruff],
   [0.1300, 0.2895, 0.1835, 0.91, R.neck],
   [0.1450, 0.3010, 0.2005, 0.93, R.neck],
