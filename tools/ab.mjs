@@ -63,6 +63,7 @@ await page.waitForFunction(() => window.__FOX_READY === true, null, { timeout: 1
 await page.evaluate(() => { const D = window.FoxDebug; D.setAdaptive(false); D.setUI(false); D.pause(); D.settle(2.5); });
 
 await mkdir(path.resolve(ROOT, OUT), { recursive: true });
+let rootAt = null;
 for (const v of VARIANTS) {
   const src = APPLY[v];
   if (!src) { console.error(`unknown variant: ${v}`); continue; }
@@ -72,12 +73,31 @@ for (const v of VARIANTS) {
     const undo = eval(src)(ctx);
     window.__undo = undo;
     window.FoxDebug.setPose(POSE);
-    window.FoxDebug.settle(0.3);
-    for (let i = 0; i < 20; i++) window.FoxDebug.render();
-    return window.FoxDebug.stats();
+    // NO settle here. This used to be `settle(0.3)` INSIDE the per-variant
+    // loop, so variant k rendered at 2.5 + 0.3(k+1) seconds and a four-arm
+    // A/B compared four frames 0.3 s apart in animation. That is the same
+    // confound that once made a nose A/B report a 102 -> 61 "erosion" where
+    // a same-state comparison showed 104 -> 0 occlusion -- an A/B tool that
+    // silently varies the scene between arms is worse than no A/B tool.
+    // Render advances no time, so the arms are now the same instant.
+    for (let i = 0; i < 22; i++) window.FoxDebug.render();
+    return { ...window.FoxDebug.stats(), root: window.FoxDebug.probe?.()?.root ?? null };
   }, { src, POSE });
   await page.screenshot({ path: path.join(ROOT, OUT, `${POSE}.${v}.png`), timeout: 20000 });
   await page.evaluate(() => { try { window.__undo?.(); } catch {} });
+  // Enforce it: arms that are not the same instant are not an A/B.
+  if (note.root) {
+    if (rootAt) {
+      const d = Math.hypot(note.root[0] - rootAt[0], note.root[1] - rootAt[1],
+                           note.root[2] - rootAt[2]);
+      if (d > 1e-5) {
+        console.error(`[ab] FATAL: the animal moved ${(d * 1000).toFixed(2)} mm between ` +
+          `arms (base at ${rootAt}, ${v} at ${note.root}). These arms are ` +
+          'different instants; the comparison is meaningless.');
+        process.exitCode = 3;
+      }
+    } else rootAt = note.root;
+  }
   console.log(`${v.padEnd(10)} ${note.drawCalls} calls  ${(note.triangles / 1000) | 0}k tris`);
 }
 if (errors.length) console.error('ERRORS:', errors.slice(0, 5));

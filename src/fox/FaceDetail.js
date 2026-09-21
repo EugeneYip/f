@@ -216,6 +216,33 @@ function buildConchaFitted(probe, len, rows, cols, opts) {
   }
   if (!any) return null;
 
+  // SMOOTH THE OUTLINE ACROSS ROWS. `edge()` binary-searches each row
+  // independently against an SDF with a hit-rejection test, so a row whose
+  // last probe happens to clip the plate's rolled margin comes back 40%
+  // narrower than its neighbours. The shell's boundary then zig-zags row to
+  // row, and with alpha carried out to the margin (which the rim roll needs)
+  // that renders as a torn, saw-toothed edge across the concha — clearly
+  // visible with the coat hidden, and nothing like a pinna. A real ear
+  // outline is smooth; a 5-tap mean over the measurable rows costs nothing
+  // and cannot widen the shell past what was measured, because it is bounded
+  // by a running MIN against the row's own measurement.
+  const smoothCol = (key) => {
+    const src = band.map((b) => (b.ok ? b[key] : NaN));
+    const out = src.slice();
+    for (let j = 0; j < src.length; j++) {
+      if (!Number.isFinite(src[j])) continue;
+      let sum = 0, n = 0;
+      for (let k = -2; k <= 2; k++) {
+        const v = src[j + k];
+        if (Number.isFinite(v)) { sum += v; n++; }
+      }
+      out[j] = Math.min(sum / n, src[j] * 1.12);
+    }
+    for (let j = 0; j < band.length; j++) if (Number.isFinite(out[j])) band[j][key] = out[j];
+  };
+  smoothCol('ep');
+  smoothCol('en');
+
   // --- the helical rim ------------------------------------------------
   // A shell laid flush on the plate is a decal: it can shade a bowl but it
   // cannot BE one, because nothing on it ever occludes anything else. The
@@ -243,17 +270,58 @@ function buildConchaFitted(probe, len, rows, cols, opts) {
     // there is no concha left between them to be a bowl.
     const tj = j / rows;
     const rimJ = (1 - smoothstep01(0.62, 0.98, tj)) * smoothstep01(0.0, 0.18, tj);
-    for (let i = 0; i <= cols; i++) {
+    // Walk each half of the row OUTWARD from the axis, and when a probe
+    // finally misses, hold the last point that hit for the rest of that half.
+    //
+    // The previous version fell back to the row's AXIS point for any column
+    // whose probe missed — so a single failed column mid-row snapped to the
+    // centre while its neighbours stayed at full width, and the shell's
+    // boundary came out as a row of sharp teeth across the concha. (Alpha used
+    // to start fading at |u| = 0.55 and hid them; widening alpha out to the
+    // margin, which the rim roll needs, made them visible. Confirmed by
+    // toggling the two concha meshes with the coat hidden: the teeth are ours,
+    // and with the shell off the pinna is a blank plate.) Holding the last
+    // good point instead keeps every row monotone, so the boundary is smooth
+    // whatever the SDF does, and the held columns pile up into a degenerate
+    // strip that draws nothing.
+    const row = new Array(cols + 1);
+    const held = new THREE.Vector3();
+    const mid = cols / 2;
+    // CONTINUITY. probe() accepts any hit within 20 mm of the ideal grid
+    // point along the plate normal, which is wide enough to swallow the
+    // SKULL behind the ear when a ray slips past the pinna's margin. Those
+    // vertices land centimetres away from their neighbours and the shell
+    // folds back on itself; as a transparent, depth-write-off overlay the
+    // folds composite twice and render as a torn dark patch across the
+    // concha. Walking outward from the axis and rejecting any hit that jumps
+    // more than 4 mm from the last accepted one removes them without
+    // tightening probe()'s window, which would shrink the shell.
+    const JUMP = 0.004;
+    const at = (i, have) => {
       const u = (i / cols) * 2 - 1;
       const s = u >= 0 ? u * r.ep : u * r.en;
-      // A row that missed collapses to zero width: its quads degenerate and
-      // draw nothing, which is what we want at the rounded tip.
-      if (r.ok && probe(r.t, s, h)) { /* h holds the fitted point */ }
-      else if (probe(r.t, 0, h)) { /* fall back to the axis */ }
-      else probe(T0, 0, h);
-      if (lift && RIM > 0) h.addScaledVector(lift, RIM * rimAt(u) * rimJ);
-      pos.push(h.x, h.y, h.z);
-      uvs.push(u, (j / rows) * 2 - 1);
+      if (r.ok && probe(r.t, s, h) && (!have || h.distanceTo(held) < JUMP)) {
+        held.copy(h); return [u, true];
+      }
+      return [u, false];
+    };
+    for (const dir of [1, -1]) {
+      let have = false;
+      const i0 = dir > 0 ? Math.ceil(mid) : Math.floor(mid);
+      for (let i = i0; i >= 0 && i <= cols; i += dir) {
+        const [u, ok] = at(i, have);
+        if (ok) { have = true; } else if (have) { h.copy(held); }
+        else if (!probe(r.t, 0, h)) probe(T0, 0, h);
+        if (lift && RIM > 0) h.addScaledVector(lift, RIM * rimAt(u) * rimJ);
+        row[i] = [h.x, h.y, h.z, u];
+      }
+    }
+    for (let i = 0; i <= cols; i++) {
+      const v = row[i];
+      pos.push(v[0], v[1], v[2]);
+      // A row that could not be measured at all is pushed outside the [-1,1]
+      // v range, where the shader's own base/tip fades take it to zero alpha.
+      uvs.push(v[3], r.ok ? (j / rows) * 2 - 1 : (j / rows < 0.5 ? -2.2 : 2.2));
     }
   }
   for (let j = 0; j < rows; j++) {
@@ -914,11 +982,44 @@ export class FaceDetail {
       if (!inv) { g.dispose(); continue; }
       g.applyMatrix4(inv);
       g.computeVertexNormals();
+      // FACE-AVERAGED NORMALS ARE WRONG HERE. The shell is fitted by raycast,
+      // so its rows are not evenly spaced and some quads are near-degenerate;
+      // the cross products those produce swing wildly and the concha rendered
+      // a torn, saw-toothed light/dark boundary across its middle that looked
+      // for all the world like a geometry or shadow bug. It is neither: the
+      // POSITIONS are fine (verified by holding columns and by a 4 mm
+      // continuity test, neither of which changed the image) and so is the
+      // uv (verified: 27 clean rows, v in [-1,1]). It is the normals.
+      //
+      // The pinna is a thin plate, so its true normal is `face` almost
+      // everywhere. Blend the triangle normals most of the way onto it: the
+      // rolled rim keeps its shading gradient, the garbage averages out.
+      {
+        const fn = face.clone().transformDirection(inv).normalize();
+        const na = g.attributes.normal;
+        const t = new THREE.Vector3();
+        for (let i = 0; i < na.count; i++) {
+          t.set(na.getX(i), na.getY(i), na.getZ(i)).multiplyScalar(0.25)
+            .addScaledVector(fn, 0.75);
+          if (t.lengthSq() < 1e-10) t.copy(fn);
+          t.normalize();
+          na.setXYZ(i, t.x, t.y, t.z);
+        }
+        na.needsUpdate = true;
+      }
 
       const cup = new THREE.Mesh(g, this._earMaterial());
       cup.name = `foxConcha${side}`;
       cup.castShadow = false;
-      cup.receiveShadow = true;
+      // NOT receiveShadow. The shell floats a fifth of a millimetre off the
+      // pinna it is fitted to, and the pinna casts. At that separation the
+      // shadow-map comparison is inside its own bias and the shell samples
+      // itself: it rendered a torn, saw-toothed dark patch across the middle
+      // of the concha, which three passes of geometry work did not touch
+      // because it was never geometry. The pinna underneath still receives
+      // shadow correctly and shows through this shell's alpha, so nothing is
+      // lost — a soft overlay does not need its own shadow term.
+      cup.receiveShadow = false;
       b1.add(cup);
       this.parts.push(cup);
     }
@@ -1012,7 +1113,7 @@ export class FaceDetail {
   // draws a boundary of its own. This used to start fading at |x| = 0.55,
   // which is inboard of the margin — the pinna's whole outer third was being
   // composited away, so there was nothing there to be a rim.
-  float fdEdge = 1.0 - smoothstep(0.86, 0.995, fdAx);
+  float fdEdge = 1.0 - smoothstep(0.55, 0.96, fdAx);
   diffuseColor.a = fdEdge * (0.34 + 0.52 * fdDeep + 0.40 * fdRim) *
     smoothstep(1.0, 0.72, vEarUv.y) * smoothstep(-1.0, -0.78, vEarUv.y);
 `)

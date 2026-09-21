@@ -752,22 +752,54 @@ const results = await page.evaluate(async () => {
           while (x + run < W - 2 && mask[y * W + x + run]) run++;
           if (run < 6) continue;
           const probe = Math.min(20, Math.max(4, Math.round(run * 0.6)));
-          const deep = covAt(Math.min(W - 2, x + probe), y);
-          if (deep < 40) continue;
-          // Start OUTSIDE the mask: the ramp begins before coverage reaches
-          // the mask's own 25/765 threshold, and that leading shoulder is
-          // exactly the part a bare mesh edge does not have.
-          let worst = 0;
-          for (let k = -6; k < probe; k++) {
-            const a = covAt(Math.max(1, Math.min(W - 2, x + k)), y);
-            const b = covAt(Math.max(1, Math.min(W - 2, x + k + 1)), y);
-            worst = Math.max(worst, (b - a) / deep);
-          }
-          steps.push(worst);
+          // Sample the whole transition, starting OUTSIDE the mask: the ramp
+          // begins before coverage reaches the mask's 25/765 threshold, and
+          // that leading shoulder is exactly what a bare mesh edge lacks.
+          const prof = [];
+          for (let k = -6; k <= probe; k++)
+            prof.push(covAt(Math.max(1, Math.min(W - 2, x + k)), y));
+          // Normalise by the ROW'S OWN amplitude, not by coverage at a fixed
+          // probe depth.
+          //
+          // Dividing by `deep` assumed the interior is the brightest part of
+          // the transition. At `silhouette` the animal is backlit: the edge is
+          // rim-lit and the interior is in shadow, so steps routinely exceeded
+          // `deep` and the metric reported values above 1.0 -- up to 2.9 -- for
+          // a ratio that is supposed to be a FRACTION of the transition. Two
+          // agents independently found the head arm reading ~2.0 with the coat
+          // hidden entirely, against this check's own stated expectation that a
+          // bare mesh edge approaches 0.5. Amplitude-normalised, the value is
+          // bounded in [0,1] by construction and means what it says.
+          const lo = Math.min(...prof), hi = Math.max(...prof);
+          if (hi - lo < 40) continue;                 // no transition to measure
+
+          // TOTAL VARIATION over NET CHANGE -- not the largest step.
+          //
+          // Largest-step was the wrong idea and the fur-off control proved it:
+          // once real hair resolves, an individual guard hair is 1-2 px wide
+          // and produces a full-amplitude single-pixel step against the sky
+          // all by itself. So a hairy edge and a bare mesh edge both scored
+          // ~0.68 and the control could not tell them apart -- the metric was
+          // blind in exactly the way it was built to detect.
+          //
+          // What actually separates them is not step SIZE but STRUCTURE. A
+          // bare mesh edge crosses from background to animal exactly once and
+          // monotonically, so its total variation equals its net change and
+          // the ratio is 1. A furred edge alternates hair, gap, hair, gap
+          // before it saturates, so the path length exceeds the displacement
+          // and the ratio climbs above 1. That is the same quantity §4f's
+          // prose is describing -- "a broken, hairy outline rather than a
+          // smooth curve" -- and it is bounded below by 1 by construction.
+          let tv = 0;
+          for (let k = 0; k < prof.length - 1; k++) tv += Math.abs(prof[k + 1] - prof[k]);
+          const net = Math.abs(prof[prof.length - 1] - prof[0]);
+          if (net < 30) continue;
+          steps.push(tv / net);
         }
         steps.sort((a, b) => a - b);
         res[name] = steps.length >= 6
           ? { median: +steps[steps.length >> 1].toFixed(3),
+              p10: +steps[Math.floor(steps.length * 0.1)].toFixed(3),
               p90: +steps[Math.min(steps.length - 1, Math.floor(steps.length * 0.9))].toFixed(3),
               n: steps.length }
           : null;
@@ -775,7 +807,18 @@ const results = await page.evaluate(async () => {
       return res;
     };
 
-    out.edgeHardness = profileOf(maskedFrame('silhouette', true));
+    // Measured at `frontal`, NOT at `silhouette`.
+    //
+    // `silhouette` is the artistically important framing and the obvious place
+    // to test an outline, but it is unmeasurable by pixel difference: a white
+    // animal backlit against bright snow peaks at 261/765 of coverage, so
+    // there is barely a signal to find a contour in. Measured both ways, the
+    // coat raises the body's structure ratio 1.43x over a fur-off control at
+    // `frontal` (2.116 vs 1.476) and 0.99x at `silhouette` (1.071 vs 1.086) --
+    // i.e. at `silhouette` the metric cannot tell a full winter coat from bare
+    // mesh. The anatomy agent reached the same conclusion independently while
+    // trying to build its own furred-silhouette metric.
+    out.edgeHardness = profileOf(maskedFrame('frontal', true));
 
     // POSITIVE CONTROL. A new gate that has never been shown to fail on a
     // KNOWN defect is not a gate, it is a number -- that mistake has been made
@@ -787,7 +830,7 @@ const results = await page.evaluate(async () => {
       const vis = coat.map((o) => o.visible);
       coat.forEach((o) => { o.visible = false; });
       atTime();
-      out.edgeHardnessNoFur = profileOf(maskedFrame('silhouette', true));
+      out.edgeHardnessNoFur = profileOf(maskedFrame('frontal', true));
       coat.forEach((o, i) => { o.visible = vis[i]; });
     } else {
       out.edgeHardnessNoFur = null;
@@ -973,26 +1016,39 @@ for (const [region, v] of Object.entries(sbr)) {
 // Silhouette HARDNESS, validated against a fur-off control in the same frame.
 const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
 {
-  const ctl = ehn.head || ehn.body;
-  const sub = eh.head || eh.body;
+  // The BODY band is the one that means something. The head band spans the
+  // notch between the ears, so its contour crosses background several times
+  // by construction -- bare mesh already reads a 3.9 ratio there against the
+  // body's 1.5, and the coat only lifts it to 4.5. Reported, not asserted.
+  const ctl = ehn.body, sub = eh.body;
   if (!sub || !ctl) {
     record('silhouette hardness probe is measurable', false,
       `coat ${sub ? 'ok' : 'null'}, fur-off control ${ctl ? 'ok' : 'null'} — ` +
       `an unvalidated hardness number is not evidence`);
-  } else if (!(ctl.median > sub.median * 1.25)) {
-    // The control is the whole point. If stripping the coat does not make the
-    // edge measurably harder, this scan is not reading the coat at all.
-    record('silhouette hardness probe detects a known-bare edge', false,
-      `fur-off control median step ${ctl.median} vs coated ${sub.median} — ` +
-      `the control must be at least 1.25x harder or the metric is blind`);
+  } else if (!(sub.median > ctl.median * 1.25)) {
+    // The control is the whole point. A bare mesh edge crosses once and
+    // monotonically, so it sits near 1.0; if the coat does not raise the
+    // ratio well above that, this scan is not reading the coat at all.
+    record('silhouette structure probe detects a known-bare edge', false,
+      `coated ${sub.median} vs fur-off control ${ctl.median} — the coat must ` +
+      `raise the ratio at least 1.25x above bare mesh or the metric is blind`);
   } else {
-    for (const [name, v] of Object.entries(eh)) {
-      if (!v) continue;
-      record(`silhouette is hair, not a curve: ${name}`, v.p90 <= 0.25,
-        `largest single-pixel coverage step, 90th percentile ${v.p90} ` +
-        `(median ${v.median}) over ${v.n} rows — want <= 0.25; the fur-off ` +
-        `control on the same frame reads ${ctl.median}, which is what a bare ` +
-        `mesh edge looks like`);
+    // Floor of 1.15 is derived, not tuned to pass: the fur-off control's own
+    // 10th percentile is 1.054, and 1.15 sits clearly above a single monotonic
+    // crossing while staying well under the coated reading. It is asserted on
+    // the 10th percentile rather than the median because §4f's test is about
+    // the WORST stretch of contour, not the typical one.
+    record('silhouette is hair, not a curve: body', sub.p10 >= 1.15,
+      `outline path length over net crossing, 10th percentile ${sub.p10} ` +
+      `(median ${sub.median}) over ${sub.n} rows — want >= 1.15. 1.0 is a ` +
+      `single monotonic crossing, i.e. bare mesh; the fur-off control on the ` +
+      `same frame reads p10 ${ctl.p10} / median ${ctl.median}`);
+    if (eh.head) {
+      record('[reported, not asserted] head outline structure', true,
+        `head ratio median ${eh.head.median} (p10 ${eh.head.p10}) over ` +
+        `${eh.head.n} rows, against a fur-off control of ${ehn.head?.median} — ` +
+        `the band spans the notch between the ears, so multiple crossings are ` +
+        `inherent and the absolute value is not comparable to the body's`);
     }
   }
 }

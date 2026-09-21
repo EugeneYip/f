@@ -224,6 +224,29 @@ back on the skull and a clear taper base-to-tip on the ear.
 
 ## 8b. Motion should not read as lag
 
+> **The 18 % overshoot figure this section used to specify was wrong, and has
+> been struck.** It was measured without a no-step control, so it was reading
+> the intentional idle-life fbm rather than the spring. Reconstructing the
+> exact tail chain from the commit that wrote this section: the base joint at
+> ζ = 0.95 has a linear step overshoot of **0.007 %**, and measures 0.00 % with
+> the control subtracted, at every step size from 0.08 to 3.0 rad/s. 18 % is
+> not reachable by that spring under any input. The uncontrolled reading scales
+> as 1/step, because an additive noise floor is a larger fraction of a smaller
+> step — 0.7 % at 3.0 rad/s rising to 8.9 % at 0.08, and ~18 % extrapolates to
+> a step of about 0.036 rad/s. So the figure was an artefact of the test, not a
+> property of the animal.
+>
+> **Specify settling time instead.** It is what a reviewer can actually see: a
+> 5 % overshoot that is gone in a tenth of a second reads as mass, while a slow
+> return reads as lag no matter how small the overshoot. Current tuning,
+> controlled: base 0.9 % / 33 ms to 50 % / 75 ms settled; tip 5.0 % / 50 ms /
+> 225 ms. A previous tuning whose tip reached 50 % at 1033 ms and settled at
+> 2883 ms is what "noticeable lag" actually looked like.
+>
+> Everything else in this section — phase delay down the chain, prefer stiff to
+> loose, the distinction between mass and lag — stands. Only the number was bad.
+
+
 The secondary dynamics are currently visible **as lag** — the viewer notices
 the tail, ears and head trailing rather than reading them as mass. That is the
 failure mode of an under-damped or over-delayed spring chain, and it is worse

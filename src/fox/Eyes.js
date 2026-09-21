@@ -803,7 +803,14 @@ export class Eyes {
       uIrisOuter: { value: new THREE.Color(0x9c6f2e) },
       uLimbal: { value: new THREE.Color(0x1a1206) },
       uPupilCol: { value: new THREE.Color(0x05040a) },
-      uSclera: { value: new THREE.Color(0x2a231d) },
+      // A fox's exposed sclera is pigmented, but "pigmented" is not "black".
+      // The one primary description of a wild canid's (Cerdocyon thous,
+      // PLOS ONE 2019) reports "minimal exposure of the SLIGHTLY pigmented
+      // bulbar conjunctiva at the lateral canthus" — a brown-grey, not a
+      // void. Near-black mattered less when the globe sat flush; now that it
+      // is seated 2.2 mm proud, an oblique framing sees the globe's scleral
+      // FLANK, and at 0x2a231d that read as a black cylinder around the iris.
+      uSclera: { value: new THREE.Color(0x453c34) },
 
       uMarginCol: { value: new THREE.Color(0x0d0b0c) },
       uLidSkin: { value: new THREE.Color(0x8d8076) },
@@ -899,7 +906,7 @@ export class Eyes {
   // A fox's visible sclera is pigmented, not white. Keeping it dark means any
   // sliver that escapes the lid reads as shadow rather than as a googly eye,
   // and it deepens the dark ring §4b is asking for.
-  vec3 eyScl = uSclera * mix(1.0, 0.38, smoothstep(0.55, 0.95, eyRho / max(uR, 1e-6)));
+  vec3 eyScl = uSclera * mix(1.0, 0.52, smoothstep(0.55, 0.95, eyRho / max(uR, 1e-6)));
   float eyOnCornea = 1.0 - smoothstep(uLimbusR * 0.94, uLimbusR * 1.03, eyRho);
   vec3 eyCol = mix(eyScl, eyIris, eyOnCornea);
 
@@ -1125,7 +1132,7 @@ void main(){
   // canthus and a 0.55 mm smudge under the brow. At frontal framing the whole
   // ring was sub-pixel and the eye reduced to a grey dot.
   float feMargin = 1.0 - smoothstep(0.00030, 0.00085, vArc);
-  float feRing   = 1.0 - smoothstep(0.00085, 0.00170, vArc);
+  float feRing   = 1.0 - smoothstep(0.00085, 0.00155, vArc);
   float feFurry  = smoothstep(0.00170, 0.00450, vArc);
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
@@ -1135,7 +1142,7 @@ void main(){
   // The periocular ring is the margin colour lifted toward skin, NOT skin
   // darkened — keeping it on the same hue is what stops the ring reading as
   // a separate painted band with its own edge.
-  vec3 feRingCol = mix(uLidSkin, uMarginCol, 0.45);
+  vec3 feRingCol = mix(uLidSkin, uMarginCol, 0.38);
   vec3 feCol = mix(uLidSkin, feRingCol, feRing);
   feCol = mix(feCol, feFur, feFurry);
   // Keep the extreme margin genuinely dark — this is the line that makes the
