@@ -153,8 +153,8 @@ export const FUR_DEFAULTS = {
   // shellFill unjittered, which at grazing incidence is a smooth opaque sheet
   // over the inner half of the coat -- the coat's outline was that sheet's
   // edge rather than hair.
-  fillTop: 0.92,
-  fillJitter: 0.34,
+  fillTop: 1.12,
+  fillJitter: 0.30,
   cardTip: 0.45,
   coatVarFreq: 15,
 

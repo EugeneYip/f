@@ -156,9 +156,14 @@ for (const key of Object.keys(LANDMARKS)) {
  * of the side of the skull instead of forward. A canid's eyes face forward
  * with roughly 35 degrees of divergence, which is what `look` encodes.
  *
- * Inter-pupil distance here is 45.6 mm — an arctic fox's eyes really are that
- * close together; the impression of width comes from the cheek ruff, not the
- * skull.
+ * Inter-pupil distance: MEASURE IT, do not trust a number written here. The
+ * eye centre is raycast against the live field, so it moves whenever the
+ * skull primitives move, and this docstring's old claim of 45.6 mm had been
+ * wrong for at least two rounds — the rig measured 61.4 mm before the §4f
+ * slimming and 54.3 mm after. src/core/Debug.js's landmark block carries the
+ * same stale 46 mm. No published inter-pupillary figure exists for this
+ * species either (REFERENCE-FOX.md §3d is a clean GAP), so there is nothing
+ * to target; the impression of width comes from the cheek ruff, not the skull.
  */
 export const EYE = {
   // A point well inside the skull that the eye's optical axis passes through.
@@ -187,6 +192,40 @@ export const EAR_SPAN = { baseY: LANDMARKS.earR01[1], tipY: LANDMARKS.earR_tip[1
 // outermost shell should sit off the skin along the normal — not the length of
 // an individual guard hair. Tail: 46 mm skin diameter + 2x54 mm gives the
 // bible's ~100 mm brush once the outer shells fade out.
+//
+// ## What is sourced here and what is not  (REFERENCE-FOX.md)
+//
+// Almost none of these millimetre figures have a literature source, and the
+// research pass that went looking says so explicitly: §2c is a flat GAP for
+// muzzle, forehead, skull, cheek, throat, ruff, shoulder, haunch, upper leg,
+// paw and both ear surfaces. Do not add zoology-flavoured precision to them —
+// that is the mechanism that produced the bear (§4b) and the rabbit (§4c).
+//
+// Three constraints ARE real, and this table is built to satisfy them:
+//
+//  1. ORDERING [MEASURED, Underwood & Reynolds 1980 via Prestrud 1991].
+//     Deepest and most seasonal: foot pads, posterior-medial lower leg,
+//     LATERAL TRUNK. Also deep: dorsal trunk. Shallowest in every season:
+//     HEAD, distal legs, VENTRAL trunk. So `flank` is the deepest coat on the
+//     body, every head region sits below it, and `belly` sits below `flank`
+//     too — which is why belly is 39 mm and not the 49 mm it used to be. The
+//     old table had the belly as the deepest region on the animal, which
+//     inverts the one ranking anybody has actually measured.
+//     (§4b's "belly fur hangs low enough to obscure the leg" is not in
+//     conflict: the ASM #2 specimen measures 80-85 mm belly GUARD HAIRS lying
+//     nearly flat, which is long hair at low standing depth. Length and loft
+//     are different quantities and only loft belongs in this table.)
+//  2. FLANK ABSOLUTE ~40-60 mm [INFERRED from Scholander et al. 1950 Fig. 1
+//     clustering]. 48 mm sits mid-band. An earlier revision of §4f claimed
+//     50-70 mm and this table briefly carried 61 mm on the strength of it;
+//     that figure was withdrawn as unsourced. Do not deepen the flank again
+//     without a source.
+//  3. THE HEAD'S DEPTH IS A RENDERING REQUIREMENT, NOT AN ANATOMICAL ONE.
+//     There is no mm datum for any head region and there probably never will
+//     be. The binding constraint is §4f.3 — no bare skin visible, and a
+//     silhouette that is hair everywhere — measured by the "silhouette is
+//     hair, not a curve" check in tools/spec.mjs. Deep enough to pass that,
+//     shallower than the flank, and no deeper. That is the whole rule.
 export const FUR = {
   [R.nose]: [0.0006, 1.00],
   [R.muzzle]: [0.0034, 0.90],
@@ -194,18 +233,18 @@ export const FUR = {
   [R.cheek]: [0.0380, 0.28],
   [R.forehead]: [0.0175, 0.82],
   [R.skull]: [0.0260, 0.74],
-  [R.earOuter]: [0.0185, 0.70],
-  [R.earInner]: [0.0095, 0.44],
-  [R.throat]: [0.0400, 0.28],
-  [R.neck]: [0.0520, 0.58],
-  [R.ruff]: [0.0630, 0.50],
-  [R.chest]: [0.0535, 0.46],
-  [R.shoulder]: [0.0505, 0.66],
-  [R.back]: [0.0585, 0.86],
-  [R.flank]: [0.0610, 0.62],
-  [R.belly]: [0.0620, 0.22],
-  [R.croup]: [0.0580, 0.80],
-  [R.haunch]: [0.0430, 0.66],
+  [R.earOuter]: [0.0155, 0.70],
+  [R.earInner]: [0.0080, 0.44],
+  [R.throat]: [0.0310, 0.28],
+  [R.neck]: [0.0455, 0.58],
+  [R.ruff]: [0.0580, 0.50],
+  [R.chest]: [0.0410, 0.46],
+  [R.shoulder]: [0.0395, 0.66],
+  [R.back]: [0.0440, 0.86],
+  [R.flank]: [0.0480, 0.62],
+  [R.belly]: [0.0390, 0.22],
+  [R.croup]: [0.0460, 0.80],
+  [R.haunch]: [0.0415, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
   [R.legFrontLower]: [0.0205, 0.66],
   [R.pawFront]: [0.0090, 0.86],
@@ -437,8 +476,8 @@ export function buildField() {
   const earA = L.earR01;
   const earB = L.earR_tip;
   f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0160), rb: sr(0.0062),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.70, 1.02, 1.0],
+    name: 'earR', a: earA, b: earB, ra: sr(0.0188), rb: sr(0.0072),
+    frame: 'axis', normal: EAR_NORMAL, squash: [0.76, 1.02, 1.0],
     k: 0.015, ...furOf(R.earOuter),
     flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
   });
@@ -452,9 +491,9 @@ export function buildField() {
   // radius is what sets the depth: 16.5 mm of offset against a 16.5 mm radius
   // only kissed the surface. 11.4 mm digs ~6 mm, against a 9.5 mm inner coat.
   const conchaC = [
-    earMid[0] + EAR_NORMAL[0] * sr(0.0114),
-    earMid[1] + EAR_NORMAL[1] * sr(0.0114),
-    earMid[2] + EAR_NORMAL[2] * sr(0.0114),
+    earMid[0] + EAR_NORMAL[0] * sr(0.0132),
+    earMid[1] + EAR_NORMAL[1] * sr(0.0132),
+    earMid[2] + EAR_NORMAL[2] * sr(0.0132),
   ];
   f.addMirrored({
     name: 'conchaR', a: conchaC,
