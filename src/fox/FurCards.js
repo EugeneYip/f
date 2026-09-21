@@ -25,6 +25,53 @@ import { CARD_SHAPE } from '../shaders/fur.glsl.js';
 /** Segments along a card. 3 is enough for the tuft to curve under gravity. */
 const SEGMENTS = 3;
 
+/* ----------------------------------------------------------------- clumps --
+ * A card's LOCK: the nearest Worley site on a `CARD_SHAPE.clumpCell` lattice
+ * in bind space. Cards sharing a site share a heading, a wind phase and half
+ * their length draw, and lean their tips toward it — so several cards read as
+ * one tuft with mass instead of as several separate hairs.
+ *
+ * Bind space, on the CPU, once at build time: the lock a hair belongs to is a
+ * property of where it grows, not of the frame, so it must not be re-derived
+ * per draw and must not move when the animal does.
+ */
+
+/** Deterministic integer hash -> [0,1). Not Math.random; not seeded state. */
+function ihash(x, y, z, k) {
+  let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)
+        + Math.imul(z | 0, 1442695041) + Math.imul(k | 0, 1274126177);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * Exact Worley F1 over the 3x3x3 neighbourhood. Sites are unconstrained
+ * within their cell, so 27 cells — not 8 — is what makes it exact; at 19k
+ * cards that is half a million distance tests, once, at init.
+ *
+ * Writes [siteX, siteY, siteZ, siteRandom] into `out`.
+ */
+function clumpSite(px, py, pz, cell, out) {
+  const cx = Math.floor(px / cell), cy = Math.floor(py / cell), cz = Math.floor(pz / cell);
+  let best = Infinity;
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      for (let k = -1; k <= 1; k++) {
+        const gx = cx + i, gy = cy + j, gz = cz + k;
+        const sx = (gx + ihash(gx, gy, gz, 1)) * cell;
+        const sy = (gy + ihash(gx, gy, gz, 2)) * cell;
+        const sz = (gz + ihash(gx, gy, gz, 3)) * cell;
+        const dx = sx - px, dy = sy - py, dz = sz - pz;
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d < best) {
+          best = d;
+          out[0] = sx; out[1] = sy; out[2] = sz; out[3] = ihash(gx, gy, gz, 7);
+        }
+      }
+    }
+  }
+}
+
 /**
  * @param {THREE.BufferGeometry} src  the fox body geometry
  * @param {Float32Array} occlusion    per-vertex baked occlusion (0 open, 1 closed)
@@ -89,9 +136,13 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
   const aSI = new Uint16Array(nVert * 4);
   const aSW = new Float32Array(nVert * 4);
   const aCard = new Float32Array(nVert * 4);
+  const aClump = new Float32Array(nVert * 4);
   const index = (nVert > 65535 ? new Uint32Array(nIndex) : new Uint16Array(nIndex));
 
   const nrm = new THREE.Vector3(), tg = new THREE.Vector3();
+  const site = [0, 0, 0, 0];
+  const cell = CARD_SHAPE.clumpCell;
+  const lockIds = new Set();
   let w = 0, wi = 0;
 
   for (let cI = 0; cI < count; cI++) {
@@ -135,6 +186,11 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
     const cReg = reg[dom];
 
     const cRand = rand();
+
+    // Which lock this hair belongs to.
+    clumpSite(px, py, pz, cell, site);
+    lockIds.add(site[3]);
+
     // Per-card length spread, deliberately narrow.
     //
     // Perpendicular reach past the skin is uCardLength * lenMul * rise, and
@@ -142,7 +198,12 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
     // MEAN in band while the top third sits far outside it and reads as
     // separate spikes — that is what produced the dorsal crest. 1.20:1 keeps
     // the whole distribution inside the band.
-    const lenMul = CARD_SHAPE.lenMulMin + CARD_SHAPE.lenMulSpread * rand() * rand();
+    //
+    // ONE of the two factors is the lock's, so a tuft is long or short as a
+    // unit. Two independent draws per card give the same distribution and no
+    // structure: at any distance where the individual hairs are not resolved
+    // they average to a flat fringe, which is the "even spray" §5 forbids.
+    const lenMul = CARD_SHAPE.lenMulMin + CARD_SHAPE.lenMulSpread * site[3] * rand();
 
     const base = cI * vPer;
     for (let s = 0; s <= SEGMENTS; s++) {
@@ -161,6 +222,8 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
         aCard[o * 4 + 1] = side === 0 ? -1 : 1;
         aCard[o * 4 + 2] = cRand;
         aCard[o * 4 + 3] = lenMul;
+        aClump[o * 4] = site[0]; aClump[o * 4 + 1] = site[1];
+        aClump[o * 4 + 2] = site[2]; aClump[o * 4 + 3] = site[3];
       }
     }
     for (let s = 0; s < SEGMENTS; s++) {
@@ -182,6 +245,7 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
   g.setAttribute('skinIndex', new THREE.BufferAttribute(aSI, 4));
   g.setAttribute('skinWeight', new THREE.BufferAttribute(aSW, 4));
   g.setAttribute('aCard', new THREE.BufferAttribute(aCard, 4));
+  g.setAttribute('aClump', new THREE.BufferAttribute(aClump, 4));
   g.setIndex(new THREE.BufferAttribute(index, 1));
 
   // Cards extend well past the skin and then get skinned; give the culler room.
@@ -189,7 +253,12 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
   g.boundingSphere.radius *= 1.9;
   g.computeBoundingBox();
 
-  return { geometry: g, cards: w, vertices: nVert, triangles: nIndex / 3 };
+  return {
+    geometry: g, cards: w, vertices: nVert, triangles: nIndex / 3,
+    // Cards per lock. Below ~2 there is nothing to gather and the clump term
+    // is dead weight; the number is reported so that stays visible.
+    locks: lockIds.size, cardsPerLock: +(w / Math.max(1, lockIds.size)).toFixed(2),
+  };
 }
 
 function cardWeight(regionId) {

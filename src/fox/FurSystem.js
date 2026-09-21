@@ -227,6 +227,7 @@ export class FurSystem {
     console.info(
       `[fur] ${this.shellCount} shells (instanced, 1 draw) · ` +
       `${this.stats.cards} cards / ${this.stats.cardTris} tris · ` +
+      `${this.cardStats?.locks ?? 0} locks (${this.cardStats?.cardsPerLock ?? 0} cards each) · ` +
       `aniso ${this.uniforms.uAniso.value ? 'on' : 'off'} · ` +
       `eye globe ${((this.eyeGlobeR ?? 0) * 1000).toFixed(1)} mm → coat clears ` +
       `${(this.uniforms.uEyeFade.value.x * 1000).toFixed(1)} mm · ` +
@@ -405,12 +406,15 @@ export class FurSystem {
   reachReport() {
     const u = this.uniforms;
     if (!u) return { ok: false, reason: 'fur not initialised' };
-    const { lenMulMin: lo, lenMulSpread: sp, rise, droopBoost, reachBand } = CARD_SHAPE;
+    const { lenMulMin: lo, lenMulSpread: sp, lenMulMean: mid,
+            rise, droopBoost, reachBand } = CARD_SHAPE;
     const cardLen = u.uCardLength.value;
     const droop = u.uDroop.value;
     const rc = u.uRegionC.value;
 
-    // lenMul = lo + sp*r^2 with r uniform, so E[r^2] = 1/3.
+    // lenMul = lo + sp * rClump * rCard, a product of two uniforms, so E = 1/4.
+    // CARD_SHAPE.lenMulMean carries that so the builder and the guard cannot
+    // disagree; the old `lo + sp/3` here assumed E[r^2] for a single uniform.
     const reach = (lm, s) => s * cardLen * lm * rise;
 
     // Gravity acts in world space and adds to reach wherever the surface faces
@@ -422,9 +426,9 @@ export class FurSystem {
     for (let i = 0; i < rc.length; i++) {
       const s = rc[i].x > 0 ? rc[i].x : 1;
       const shell = rc[i].z > 0 ? rc[i].z : 1;
-      const rMin = reach(lo, s), rMean = reach(lo + sp / 3, s), rMax = reach(lo + sp, s);
+      const rMin = reach(lo, s), rMean = reach(mid, s), rMax = reach(lo + sp, s);
       const soft = 1 - (STIFF[i] ?? 0.62);
-      const extra = droop * (s * cardLen * (lo + sp / 3)) * (0.30 + soft) * droopBoost;
+      const extra = droop * (s * cardLen * mid) * (0.30 + soft) * droopBoost;
       min = Math.min(min, rMin); max = Math.max(max, rMax);
       meanSum += rMean;
       worstDroop = Math.max(worstDroop, rMean + extra);

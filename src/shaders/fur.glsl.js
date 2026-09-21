@@ -42,10 +42,33 @@ export const REGION_COUNT = 27;
  */
 export const CARD_SHAPE = {
   lenMulMin: 0.92,
-  lenMulSpread: 0.18,   // lenMul = min + spread * r*r,  r uniform in [0,1)
+  // lenMul = min + spread * rClump * rCard, both uniform in [0,1). It is a
+  // PRODUCT of two uniforms, so E = 1/4 — not E[r^2] = 1/3, which is what the
+  // reach arithmetic used to assume. One of the two factors is shared across a
+  // clump, so a lock is long or short as a unit instead of every hair in it
+  // drawing independently from the same distribution (which averages out to a
+  // flat fringe at any distance where the hairs are not separately resolved).
+  lenMulSpread: 0.18,
+  lenMulMean: 0.92 + 0.18 * 0.25,
   rise: 0.95,           // fraction of card length spent along the normal
   droopBoost: 0.40,     // gravity multiplier for cards (guard hair is stiff)
   reachBand: [1.10, 1.25],
+
+  /**
+   * Clumping — bible §5, "fur must clump, not distribute evenly".
+   *
+   * Cards were placed independently and then FANNED APART by uCardJitter, so
+   * nothing gathered: the coat was an even spray of separate hairs, which is
+   * what "individually resolved" means. Each card now snaps to a Worley site
+   * in bind space (CPU side, in FurCards) and every card sharing a site shares
+   * its heading, its wind phase and half its length draw, and leans its tip
+   * toward the site. That is a lock.
+   *
+   * 16 mm is a real arctic-fox lock and lands at 46 CSS px at `frontal` /
+   * 57 px at `portrait` — big enough to read as mass, small enough that the
+   * ruff carries several across its width.
+   */
+  clumpCell: 0.016,
 };
 
 /* ------------------------------------------------------------------ uniforms */
@@ -918,6 +941,7 @@ ${SKIN_FN}
 uniform float uCardWidth;
 uniform float uCardLength;
 uniform float uCardJitter;
+uniform float uCardClump;
 
 attribute float furLength;
 attribute float furStiffness;
@@ -925,6 +949,7 @@ attribute vec3  furTangent;
 attribute float region;
 attribute float aFurAO;
 attribute vec4  aCard;   // x v along card · y side -1/+1 · z rand · w lengthMul
+attribute vec4  aClump;  // xyz bind-space lock site · w lock random
 ${COATLEN_FN}
 ${DYNAMICS_FN}
 
@@ -939,6 +964,7 @@ void main(){
   float v    = aCard.x;
   float side = aCard.y;
   float rnd  = aCard.z;
+  float lrnd = aClump.w;            // shared by every card in this lock
   float soft = 1.0 - furStiffness;
   vec4  rc   = uRegionC[ri];
   float L    = furCoatLength(position, ra.y) * rc.x * uCardLength * aCard.w;
@@ -946,10 +972,15 @@ void main(){
   vec3  nb   = normalize(normal);
   vec3  tb   = furTangent;
 
-  // Fan each tuft off the flow direction. Without this every card on the
+  // Fan each LOCK off the flow direction. Without this every card on the
   // dorsal line sweeps back on exactly the same heading and the topline reads
   // as a combed mane rather than as separate locks.
-  float ja = (rnd - 0.5) * uCardJitter;
+  //
+  // The angle is the LOCK's, not the card's. Per-card it was an anti-clump:
+  // neighbouring hairs pointed up to uCardJitter radians apart, which is
+  // exactly how you make a coat read as separate needles rather than as
+  // tufts. Same spread between locks, none inside one.
+  float ja = (lrnd - 0.5) * uCardJitter;
   tb = normalize(tb * cos(ja) + cross(nb, tb) * sin(ja));
 
   // Cards fold over harder than the shells do — a tuft standing perpendicular
@@ -958,10 +989,31 @@ void main(){
   // outermost shell the cards are buried inside the coat and contribute
   // nothing to the outline. uCardLength is sized so the mean tip clears the
   // shells by ~25% and the longest by ~2x.
-  float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * (1.10 + 0.85 * hash11(rnd * 37.1));
+  float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * (1.10 + 0.85 * hash11(lrnd * 37.1));
   float rise = ${CARD_SHAPE.rise};
   vec3  offB = nb * (L * v * rise) + tb * (L * lay * v * (0.42 + 0.58 * v));
   vec3  hdir = normalize(nb * rise + tb * (lay * (0.42 + 1.16 * v)));
+
+  // --- the lock ------------------------------------------------------------
+  // Lean the tip toward the lock's own site. This is what gives a tuft MASS:
+  // the several cards sharing a site stop being parallel neighbours and become
+  // one gathered bundle with a waist and a tip, which is what an arctic fox's
+  // winter coat separates into.
+  //
+  // Only the LATERAL component is used. The site is a point in space near the
+  // surface, so the raw offset carries a normal component of up to half a cell
+  // — following it would drive tips into the skin on one side and lift them
+  // off it on the other, and across a thin plate like the ear pinna the cards
+  // on the far face would converge THROUGH it. Projected onto each card's own
+  // tangent plane, the pull can only ever comb sideways.
+  vec3 toSite = aClump.xyz - position;
+  toSite -= nb * dot(toSite, nb);
+  float sl = length(toSite);
+  // A card at a cell corner is ~0.87 cells from its site; cap the lever so a
+  // handful of outliers cannot swing further than the lock is wide.
+  float slMax = ${(CARD_SHAPE.clumpCell * 0.6).toFixed(5)};
+  if (sl > slMax) toSite *= slMax / sl;
+  offB += toSite * (uCardClump * v * v);
 
   mat4 sk  = furSkinMatrix();
   mat3 sk3 = mat3(sk);
@@ -976,7 +1028,10 @@ void main(){
   vec3 wh = normalize(m3 * hO);
 
   vec3 rootW = (modelMatrix * vec4(rootO, 1.0)).xyz;
-  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), rnd, ${CARD_SHAPE.droopBoost});
+  // Wind phase is the LOCK's: a tuft is a bundle of hairs that have matted
+  // together, so it swings as one body. Per-card phase shears the bundle
+  // apart on every gust and undoes the clumping in motion.
+  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), lrnd, ${CARD_SHAPE.droopBoost});
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
 

@@ -269,6 +269,10 @@ export const FUR_DEFAULTS = {
   cardInner: 0.17,
   cardJitter: 1.05,
   cardOpacity: 1.0,
+  // Fraction of a card's lateral distance to its lock's site taken out by the
+  // tip. 0 restores the pre-clump coat (an even spray of independent hairs);
+  // much above 0.7 the locks pinch to points and the coat reads wet.
+  cardClump: 0.55,
 };
 
 /**
@@ -278,7 +282,7 @@ export const FUR_DEFAULTS = {
  * about the arithmetic again.
  */
 export function cardReachFor(scale, cardLength = FUR_DEFAULTS.cardLength,
-                             lenMul = CARD_SHAPE.lenMulMin + CARD_SHAPE.lenMulSpread / 3) {
+                             lenMul = CARD_SHAPE.lenMulMean) {
   return scale * cardLength * lenMul * CARD_SHAPE.rise;
 }
 export function cardScaleForReach(reach, cardLength = FUR_DEFAULTS.cardLength) {
@@ -418,6 +422,7 @@ export function buildFurUniforms(ctx) {
     uCardLength: { value: d.cardLength },
     uCardInner: { value: d.cardInner },
     uCardJitter: { value: d.cardJitter },
+    uCardClump: { value: d.cardClump },
     uCardOpacity: { value: d.cardOpacity },
   };
 }
