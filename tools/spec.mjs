@@ -42,20 +42,35 @@ const OUT = flag('--json', 'shots/spec/spec.json');
  * me, a critic and two agents real time, each of us reading a moving target as
  * nondeterminism. Cheap to detect, so detect it.
  */
+/**
+ * Per-file stamps for the source tree.
+ *
+ * This used to return one hash for all of `src/`, so a drift report said only
+ * that SOMETHING changed. Under five concurrent agents that is nearly useless:
+ * an edit to `src/fx/Bloom.js` invalidates a post-side measurement but has
+ * nothing to do with a fur silhouette number, and being told to discard both
+ * teaches everyone to ignore the warning. Name the files and let the reader
+ * judge.
+ */
 async function fingerprint(dir) {
-  let h = 0;
+  const out = new Map();
   const walk = async (d) => {
     for (const e of await readdir(d, { withFileTypes: true })) {
       const full = path.join(d, e.name);
       if (e.isDirectory()) { await walk(full); continue; }
       if (!/\.(js|glsl|mjs)$/.test(e.name)) continue;
       const st = await stat(full);
-      const key = `${full}:${st.size}:${st.mtimeMs}`;
-      for (let i = 0; i < key.length; i++) h = (Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0);
+      out.set(path.relative(ROOT, full), `${st.size}:${st.mtimeMs}`);
     }
   };
   await walk(dir);
-  return h.toString(16);
+  return out;
+}
+
+/** Files whose stamp differs between two fingerprints. */
+function driftedFiles(a, b) {
+  const names = new Set([...a.keys(), ...b.keys()]);
+  return [...names].filter((n) => a.get(n) !== b.get(n)).sort();
 }
 
 const checks = [];
@@ -997,10 +1012,14 @@ record('[reported, not asserted] whole-frame silhouette ramp', true,
      : 'could not locate the animal against the sky');
 
 const srcAfter = await fingerprint(path.join(ROOT, 'src'));
-if (srcAfter !== srcBefore) {
+const drifted = driftedFiles(srcBefore, srcAfter);
+if (drifted.length) {
   record('source tree stable during the run', false,
-    `src/ changed while measuring (${srcBefore} -> ${srcAfter}). Another agent is ` +
-    'editing; these numbers describe two different builds and are not comparable.');
+    `${drifted.length} file(s) changed while measuring: ${drifted.slice(0, 8).join(', ')}` +
+    (drifted.length > 8 ? `, +${drifted.length - 8} more` : '') +
+    '. Another agent is editing. Numbers above that depend on these files ' +
+    'describe two different builds; judge per check rather than discarding ' +
+    'the whole run.');
 }
 
 await mkdir(path.resolve(ROOT, path.dirname(OUT)), { recursive: true });
