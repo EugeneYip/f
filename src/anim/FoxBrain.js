@@ -438,6 +438,43 @@ export class FoxBrain {
 
   fixed(h, ctx) {
     if (!this.fox) return;
+    /**
+     * Resynchronise the animation clocks to `ctx.time`.
+     *
+     * AGENTS.md rule 6: "Given the same ctx.time, your system must produce
+     * the same image." Four clocks in this subsystem broke that, and they
+     * broke it invisibly. `FoxBrain.t`, `IdleLife.t`, `SecondaryDynamics.t`
+     * and `Locomotion.t` are all private accumulators that only ever go up,
+     * and every fbm-driven micro-motion on the animal — head drift, breath,
+     * blink schedule, tail life, weight shift — is a function of one of
+     * them rather than of `ctx.time`.
+     *
+     * The review harness reaches a known instant by setting `ctx.time = 0`
+     * and re-settling (`spec.mjs`'s `atTime`, written precisely to kill this
+     * class of drift). That rewinds `ctx.time` and nothing else, so the
+     * animal at "t = 2.5 s" was in a different micro-pose every time,
+     * depending only on how much settling had happened earlier in the run.
+     *
+     * MEASURED, three repeats at an identical reported sim time of 2.5 s
+     * with blink = 0 in all three: the `macro_eye` iris-warmth argmax landed
+     * at (−9,+27), (0,−57) and (−90,+15) px from the eye anchor, raw R−B
+     * read 40.0 / 35.6 / 33.4, and the count of pixels over L=200 in the eye
+     * region went 14 / 662 / 989. That is the "raw side is unstable across
+     * runs" the postfx brief flagged, and it is ours, not the probe's.
+     */
+    // Tolerance, not equality: within a step `ctx.time` has already advanced
+    // and `this.t` has not, so they normally differ by one fixed step. 50 ms
+    // is six of those — loose enough never to fire in normal running, tight
+    // enough that a rewind, or the 8-substep cap dropping simulation after a
+    // hitch, snaps every clock back into agreement.
+    if (Math.abs(this.t - ctx.time) > 0.05) {
+      const slew = this.t - ctx.time;
+      this.t = ctx.time;
+      this.nextDecision -= slew;
+      this.life.t = ctx.time;
+      this.sec.t = ctx.time;
+      this.loco.t = ctx.time;
+    }
     this.t += h;
     this.h = h;
     const loco = this.loco;
