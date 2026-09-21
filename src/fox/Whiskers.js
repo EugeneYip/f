@@ -147,18 +147,26 @@ export class Whiskers {
     const tmp = new THREE.Vector3();
 
     // --- eyeball exclusion volumes, in field space ----------------------
+    // The centres anatomy carved are where the socket is, NOT where the globe
+    // ended up: Eyes.js seats the eye forward along the optical axis so the
+    // cornea clears the coat, and on this build that is +2.6 mm. Guarding the
+    // un-seated centre leaves the whole protruding corneal cap unprotected —
+    // exactly the part a whisker crosses on camera. Read the seat back off the
+    // eyes system and move the exclusion volume with it.
+    const eyeSeat = Math.max(0, ctx.eyes?.eyes?.[0]?.seat ?? 0);
     const eyeBalls = [];
-    for (const k of ['L', 'R']) {
-      const c = fox.eyes?.[k]?.centre;
-      if (c) eyeBalls.push(new THREE.Vector3().fromArray(c));
-    }
-    const eyeR = (ctx.eyes?.eyes?.[0]?.R ?? 0.0110) + 0.0022;   // globe + lashes
-    // Optical axes, so we can also keep the eye's LINE OF SIGHT clear.
     const eyeAxis = [];
     for (const k of ['L', 'R']) {
+      const c = fox.eyes?.[k]?.centre;
       const lk = fox.eyes?.[k]?.look;
-      if (lk) eyeAxis.push(new THREE.Vector3().fromArray(lk).normalize());
+      if (!c) continue;
+      const ax = lk ? new THREE.Vector3().fromArray(lk).normalize() : null;
+      const p = new THREE.Vector3().fromArray(c);
+      if (ax) p.addScaledVector(ax, eyeSeat);
+      eyeBalls.push(p);
+      eyeAxis.push(ax);
     }
+    const eyeR = (ctx.eyes?.eyes?.[0]?.R ?? 0.0110) + 0.0022;   // globe + lashes
     const SIGHT_R = eyeR * 1.15;      // aperture cone radius
     const SIGHT_D = 0.038;            // how far in front of the eye to keep clear
     const probe = new THREE.Vector3();

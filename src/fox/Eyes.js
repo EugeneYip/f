@@ -54,14 +54,36 @@ import { clamp, saturate, lerp, TAU } from '../util/math.js';
 import { HASH, SIMPLEX3, WORLEY3, UTIL } from '../shaders/noise.glsl.js';
 
 // --- proportions, as fractions of the measured globe radius ----------------
-// CORNEA_R was 0.685, which puts the limbus at 0.49 x the globe radius — the
-// HUMAN ratio (11.7 mm cornea on a 24 mm globe). Carnivores are not built that
-// way: a cat or a fox carries a very large cornea on a similar-sized globe,
-// roughly 0.65-0.72 of the globe radius, and that is most of why their eyes
-// read as "all iris" while ours read as an amber bead in a black ring. With
-// the rounder aperture below, the old iris left a wide annulus of dark sclera
-// showing all round it, which is the doll's-eye failure §4b warns about.
-const CORNEA_R = 0.845;     // corneal cap radius / globe radius
+//
+// SOURCED, and it closes REFERENCE-FOX.md §3d's "clean, complete gap". §3d
+// suggested chasing comparative canid ophthalmology, and that works: there is
+// no ocular measurement for either Vulpes, but there is for a wild fox of
+// almost exactly our animal's build.
+//
+//   Cerdocyon thous, 5.1-5.6 kg, n = 5 animals / 8 eyes, callipers on
+//   enucleated globes (PLOS ONE 2019, e0224245, open access):
+//     globe diameter          15.8 - 16.3 mm  (median)
+//     CORNEAL DIAMETER        13.52 mm horizontal, 13.53 vertical
+//     palpebral fissure       17.32 mm  (and 17.45 +- 1.55 mm live, in a
+//                             second independent study, PMID 31961037)
+//   Small domestic dog, 4.2-8.6 kg, same paper, n = 10 eyes:
+//     globe 19.4-19.9 mm, cornea 14.32 mm horizontal
+//
+// The load-bearing result is that GLOBE size differs significantly between
+// the two (p < 0.0155) and CORNEAL diameter does not (p > 0.122). A canid
+// carries a nearly size-invariant cornea on a globe that does scale — so a
+// small fox is, proportionally, almost all cornea. 13-14 mm is well supported
+// for a 3.0-4.5 kg arctic fox.
+//
+// CORNEA_R was 0.685, which puts the limbus at 0.49 R — the HUMAN ratio
+// (11.7 mm cornea on a 24 mm globe), and 10.4 mm of cornea on our globe. That
+// is the single measurable reason the eye read as an amber bead in a black
+// ring. 0.815 lands the limbus near 0.65 R = 13.6 mm of cornea.
+//
+// Our globe is 21.1 mm across, which is a 20-35 kg dog's eye rather than a
+// fox's — but it is set by the socket the anatomy agent carved, not by us, so
+// it is reported rather than fought. See the note on the fissure below.
+const CORNEA_R = 0.815;     // corneal cap radius / globe radius
 const CORNEA_BULGE = 0.075; // apex stands this much proud of the scleral sphere
 const BLEND_K = 0.055;      // limbal smooth-max blend width
 const IRIS_DEPTH = 0.295;   // anterior chamber: apex -> iris plane
@@ -70,19 +92,32 @@ const IRIS_R = 0.90;        // iris radius / limbus radius (cornea magnifies it 
 // --- palpebral aperture, in gnomonic tangent units on the globe ------------
 // (x, y) here are tan(angle) from the optical axis, so 0.70 ~ 35 degrees.
 //
-// ROUNDNESS. The aperture used to be 0.620 x (0.330 + 0.280) = 2.03 : 1, which
-// is a dog's almond. Every arctic fox reference photograph shows a distinctly
-// ROUNDER fissure than a red fox's or a dog's — the fox-wedge of §4c lives in
-// the muzzle and the ear, not in the eye. A rounder aperture is also the one
-// change on this file that REFERENCE-FOX.md §6 predicts on its own: the eye's
-// share of the face is the single strongest cuteness cue in the literature it
-// cites (Frontiers in Psych. 2021, eta^2 = 0.48), and the same paper notes
-// that +-15% of eye scale is already near the edge of anatomical plausibility
-// — so this is deliberately a bit more than 15% on the short axis and much
-// less on the long one, which widens the *iris* rather than the slit.
-const AP_W = 0.646;         // angular half-width  (canthus to canthus)
-const AP_UP = 0.424;        // upper margin height at u = 0
-const AP_DN = 0.372;        // lower margin depth  at u = 0
+// The fissure is WIDE relative to the cornea, and ours was narrower than it.
+// Measured (same two sources as above): palpebral fissure 17.3-17.5 mm over a
+// 13.5 mm cornea, i.e. FISSURE / CORNEA = 1.28. Ours was 11.9 mm of fissure
+// over 14.5 mm of cornea — 0.82, the wrong side of 1. That is what made the
+// eye read as a slit: not that the cornea was covered top and bottom (it
+// should be) but that the fissure did not reach the corners of it.
+//
+// Aperture HEIGHT has no measured value for any canid — that search came back
+// a clean GAP — so it is derived instead: at 17.3 mm long and the old 2.03:1
+// the height would be 8.5 mm, covering ~37% of a 13.5 mm cornea, which is
+// plausible for a canid at rest. Height is therefore held near 0.63 x corneal
+// diameter and only the WIDTH is opened up. That also keeps faith with
+// REFERENCE-FOX.md §6's warning: the cuteness literature it cites measures
+// eye AREA relative to the face, and widening a real dimension toward a
+// measured target is a different act from rounding a slit into a circle
+// because circles look cuter.
+//
+// AP_W is capped by the skull, not by this file. The anatomy agent's socket
+// lets the globe out of the skin only ~23 degrees off axis on the NASAL side
+// (37 degrees once Eyes.js seats the globe forward), so a canthus beyond
+// AP_W ~ 0.80 is buried in the muzzle. 0.780 gives a 13.0 mm fissure against
+// the measured 17.3: still short, and short for a reason that belongs to the
+// socket.
+const AP_W = 0.780;         // angular half-width  (canthus to canthus)
+const AP_UP = 0.477;        // upper margin height at u = 0
+const AP_DN = 0.413;        // lower margin depth  at u = 0
 const AP_TILT = 0.045;      // canthal tilt — outer corner rides higher
 
 // How far proud of the *surrounding skin* the corneal apex is seated. The
@@ -106,6 +141,23 @@ const MAX_SEAT_PULL = -0.0022;  // ...nor sink it
 const FIT_ANGLE = 50 * Math.PI / 180;
 const FIT_MARGIN = 0.97;
 
+// ORBITAL AXIS vs VISUAL AXIS. `fox.eyes[side].look` is the socket's surface
+// normal — the ORBITAL axis — and on this skull it diverges 35.9 degrees from
+// the midline. No canid's eye points there. The orbital rims of a fox face far
+// out to the side while the globes sit rotated forward inside them, which is
+// what "forward-set" in §4b actually describes and why a fox can look at you
+// at all. Pointing the globe down the socket normal means that at `frontal`
+// framing the camera sees each eye from 36 degrees off its own axis, so the
+// iris foreshortens to a sliver, the lid margin crosses in front of it, and
+// the eye reads as a dark bead however bright the iris is.
+//
+// So: the SOCKET (lids, seat, fit, spread) is still built on the measured
+// normal, and only the globe is converged. The lids therefore still fit the
+// skull exactly, and the iris sits slightly nasal inside the fissure — which
+// is precisely what an animal looking at the lens looks like.
+const EYE_CONVERGE = 0.30;   // share of the lateral splay taken out
+const EYE_LEVEL = 0.50;      // ...and of the upward tilt
+
 // How far the lid band sweeps outward over the globe, in radians of arc from
 // its own margin. It has to reach from the aperture edge to wherever the skin
 // starts covering the globe (about 50 degrees off axis) with room to spare,
@@ -114,6 +166,9 @@ const LID_SPREAD = 0.62;         // fallback when the SDF is unavailable
 const LID_SLACK = 0.10;          // tuck this much further under the skin
 const LID_SPREAD_MIN = 0.17;     // always enough band for a margin + a blend
 const LID_SPREAD_MAX = 0.95;
+
+/** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
+const chord = (t) => t / Math.sqrt(1 + t * t);
 
 const smoothstep01 = (a, b, x) => {
   const t = clamp((x - a) / (b - a || 1e-9), 0, 1);
@@ -420,9 +475,16 @@ export class Eyes {
       `[eyes] globe r ${(e.R * 1000).toFixed(2)} mm · cornea r ${(e.Rc * 1000).toFixed(2)} mm · ` +
       `apex ${(e.apexZ * 1000).toFixed(2)} mm · skin ${(e.skin * 1000).toFixed(2)} mm · ` +
       `coat ${(e.coat * 1000).toFixed(2)} mm · seated ${(e.seat * 1000).toFixed(2)} mm · ` +
-      `iris plane ${(e.irisZ * 1000).toFixed(2)} mm · iris ø ${(2 * e.irisR * 1000).toFixed(1)} mm · ` +
-      `aperture ${(2 * e.R * AP_W * 1000).toFixed(1)}x${(e.R * (AP_UP + AP_DN) * 1000).toFixed(1)} mm ` +
-      `(${((2 * AP_W) / (AP_UP + AP_DN)).toFixed(2)}:1)`,
+      `iris ø ${(2 * e.irisR * 1000).toFixed(1)} mm · cornea ø ${(2 * e.limbusR * 1000).toFixed(1)} mm · ` +
+      // CHORD, not tangent-plane. The margin at u = 1 sits at angle atan(AP_W)
+      // off the optical axis, so its half-width on the globe is
+      // R*sin(atan(AP_W)), not R*AP_W. Reporting the tangent value overstated
+      // the fissure by 21% and is why it took a measured comparison to notice
+      // ours was too narrow.
+      `fissure ${(2 * e.R * chord(AP_W) * 1000).toFixed(1)}x` +
+      `${(e.R * (chord(AP_UP) + chord(AP_DN)) * 1000).toFixed(1)} mm ` +
+      `(${(2 * chord(AP_W) / (chord(AP_UP) + chord(AP_DN))).toFixed(2)}:1, ` +
+      `fissure/cornea ${(e.R * chord(AP_W) / e.limbusR).toFixed(2)})`,
     );
   }
 
@@ -498,6 +560,15 @@ export class Eyes {
     const qLocal = qBind.clone().multiply(qField);
     const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(qLocal).normalize();
 
+    // The globe's rest rotation inside that socket (see EYE_CONVERGE above).
+    // Expressed as a yaw/pitch in the socket's own frame so it simply adds to
+    // whatever gaze the animation agent hands us.
+    const conv = new THREE.Vector3(
+      look.x * (1 - EYE_CONVERGE), look.y * (1 - EYE_LEVEL), look.z).normalize()
+      .applyQuaternion(qField.clone().invert());
+    const restYaw = clamp(Math.atan2(conv.x, Math.max(conv.z, 1e-3)), -0.55, 0.55);
+    const restPitch = clamp(Math.asin(clamp(conv.y, -1, 1)), -0.35, 0.35);
+
     // --- seat the eye so the cornea clears the coat ------------------------
     // March out along the optical axis and find the skin. The fur agent fades
     // the coat to roughly a quarter of its length at the aperture, so aim the
@@ -552,6 +623,7 @@ export class Eyes {
     return {
       side, anchor, root, ball, globe, cornea, lids, u, axis,
       R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat, coat, skin: meas,
+      restYaw, restPitch,
       blink: 0, gazeYaw: 0, gazePitch: 0,
     };
   }
@@ -693,12 +765,18 @@ export class Eyes {
     const pos = geo?.attributes?.position;
     if (!len || !pos || !meta?.centre) return 0;
     const c = meta.centre;
-    const reach = R * 1.75;                 // the ring that overhangs the lids
-    const reach2 = reach * reach;
+    // A RING, 0.95 R to 1.9 R from the eyeball centre — the orbital rim, not
+    // the socket floor. The fur shader already shaves the floor (its own eye
+    // mask ramps length in from ~0.45 of its clearance radius), so including
+    // those vertices would measure hair that is never drawn and understate the
+    // canopy that actually leans over the fissure.
+    const r0 = R * 0.95, r1 = R * 1.90;
+    const r02 = r0 * r0, r12 = r1 * r1;
     const vals = [];
     for (let i = 0; i < pos.count; i++) {
       const dx = pos.getX(i) - c[0], dy = pos.getY(i) - c[1], dz = pos.getZ(i) - c[2];
-      if (dx * dx + dy * dy + dz * dz <= reach2) vals.push(len.getX(i));
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= r02 && d2 <= r12) vals.push(len.getX(i));
     }
     if (!vals.length) return 0;
     vals.sort((a, b) => a - b);
@@ -821,7 +899,7 @@ export class Eyes {
   // A fox's visible sclera is pigmented, not white. Keeping it dark means any
   // sliver that escapes the lid reads as shadow rather than as a googly eye,
   // and it deepens the dark ring §4b is asking for.
-  vec3 eyScl = uSclera * mix(1.0, 0.22, smoothstep(0.55, 0.95, eyRho / max(uR, 1e-6)));
+  vec3 eyScl = uSclera * mix(1.0, 0.38, smoothstep(0.55, 0.95, eyRho / max(uR, 1e-6)));
   float eyOnCornea = 1.0 - smoothstep(uLimbusR * 0.94, uLimbusR * 1.03, eyRho);
   vec3 eyCol = mix(eyScl, eyIris, eyOnCornea);
 
@@ -1138,7 +1216,7 @@ void main(){
       pitch = clamp(pitch, -0.30, 0.30);
       e.gazeYaw += (yaw - e.gazeYaw) * (1 - Math.exp(-16 * dt));
       e.gazePitch += (pitch - e.gazePitch) * (1 - Math.exp(-16 * dt));
-      e.ball.rotation.set(e.gazePitch, e.gazeYaw, 0, 'YXZ');
+      e.ball.rotation.set(e.restPitch + e.gazePitch, e.restYaw + e.gazeYaw, 0, 'YXZ');
 
       // Lids follow the eye a little, as real lids do.
       e.lids.rotation.x = e.gazePitch * 0.22;
