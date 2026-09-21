@@ -54,24 +54,52 @@ import { clamp, saturate, lerp, TAU } from '../util/math.js';
 import { HASH, SIMPLEX3, WORLEY3, UTIL } from '../shaders/noise.glsl.js';
 
 // --- proportions, as fractions of the measured globe radius ----------------
-const CORNEA_R = 0.685;     // corneal cap radius / globe radius
+// CORNEA_R was 0.685, which puts the limbus at 0.49 x the globe radius — the
+// HUMAN ratio (11.7 mm cornea on a 24 mm globe). Carnivores are not built that
+// way: a cat or a fox carries a very large cornea on a similar-sized globe,
+// roughly 0.65-0.72 of the globe radius, and that is most of why their eyes
+// read as "all iris" while ours read as an amber bead in a black ring. With
+// the rounder aperture below, the old iris left a wide annulus of dark sclera
+// showing all round it, which is the doll's-eye failure §4b warns about.
+const CORNEA_R = 0.845;     // corneal cap radius / globe radius
 const CORNEA_BULGE = 0.075; // apex stands this much proud of the scleral sphere
 const BLEND_K = 0.055;      // limbal smooth-max blend width
 const IRIS_DEPTH = 0.295;   // anterior chamber: apex -> iris plane
-const IRIS_R = 0.86;        // iris radius / limbus radius (cornea magnifies it back)
+const IRIS_R = 0.90;        // iris radius / limbus radius (cornea magnifies it back)
 
 // --- palpebral aperture, in gnomonic tangent units on the globe ------------
 // (x, y) here are tan(angle) from the optical axis, so 0.70 ~ 35 degrees.
-const AP_W = 0.620;         // angular half-width  (canthus to canthus)
-const AP_UP = 0.330;        // upper margin height at u = 0
-const AP_DN = 0.280;        // lower margin depth  at u = 0
+//
+// ROUNDNESS. The aperture used to be 0.620 x (0.330 + 0.280) = 2.03 : 1, which
+// is a dog's almond. Every arctic fox reference photograph shows a distinctly
+// ROUNDER fissure than a red fox's or a dog's — the fox-wedge of §4c lives in
+// the muzzle and the ear, not in the eye. A rounder aperture is also the one
+// change on this file that REFERENCE-FOX.md §6 predicts on its own: the eye's
+// share of the face is the single strongest cuteness cue in the literature it
+// cites (Frontiers in Psych. 2021, eta^2 = 0.48), and the same paper notes
+// that +-15% of eye scale is already near the edge of anatomical plausibility
+// — so this is deliberately a bit more than 15% on the short axis and much
+// less on the long one, which widens the *iris* rather than the slit.
+const AP_W = 0.646;         // angular half-width  (canthus to canthus)
+const AP_UP = 0.424;        // upper margin height at u = 0
+const AP_DN = 0.372;        // lower margin depth  at u = 0
 const AP_TILT = 0.045;      // canthal tilt — outer corner rides higher
 
 // How far proud of the *surrounding skin* the corneal apex is seated. The
 // socket the anatomy agent carves is a shallow dish and the fur agent only
 // fades the coat to ~25% at the aperture, so a flush eye is a buried eye.
+//
+// SKIN IS NO LONGER THE RIGHT DATUM. §4f moved the bulk into the coat and the
+// skull coat went 7.5 -> 26 mm; measured off `furLength`, the orbital rim now
+// authors 8-14 mm of hair within 16 mm of the eyeball centre, and the socket
+// FLOOR itself authors 8.3 mm. 1.8 mm of clearance over the skin is 1.8 mm
+// under six millimetres of hair. So the clearance is the skin clearance PLUS a
+// bounded share of the coat actually measured at the socket — bounded, because
+// an eye pushed out far enough to clear every hair is a marble on a stick.
 const APEX_CLEARANCE = 0.0018;
-const MAX_SEAT_PUSH = 0.0045;   // never shove the eye more than this far out
+const COAT_CLEAR_SHARE = 0.55;  // of the locally authored coat depth...
+const COAT_CLEAR_MAX = 0.0036;  // ...up to this much extra push
+const MAX_SEAT_PUSH = 0.0058;   // never shove the eye more than this far out
 const MAX_SEAT_PULL = -0.0022;  // ...nor sink it
 
 // Globe-to-socket fit. Past the aperture the globe must sit inside the skin.
@@ -390,9 +418,11 @@ export class Eyes {
     const e = this.eyes[0];
     console.info(
       `[eyes] globe r ${(e.R * 1000).toFixed(2)} mm · cornea r ${(e.Rc * 1000).toFixed(2)} mm · ` +
-      `apex ${(e.apexZ * 1000).toFixed(2)} mm · seated +${(e.seat * 1000).toFixed(2)} mm · ` +
-      `iris plane ${(e.irisZ * 1000).toFixed(2)} mm · aperture ` +
-      `${(2 * e.R * AP_W * 1000).toFixed(1)}x${(e.R * (AP_UP + AP_DN) * 1000).toFixed(1)} mm`,
+      `apex ${(e.apexZ * 1000).toFixed(2)} mm · skin ${(e.skin * 1000).toFixed(2)} mm · ` +
+      `coat ${(e.coat * 1000).toFixed(2)} mm · seated ${(e.seat * 1000).toFixed(2)} mm · ` +
+      `iris plane ${(e.irisZ * 1000).toFixed(2)} mm · iris ø ${(2 * e.irisR * 1000).toFixed(1)} mm · ` +
+      `aperture ${(2 * e.R * AP_W * 1000).toFixed(1)}x${(e.R * (AP_UP + AP_DN) * 1000).toFixed(1)} mm ` +
+      `(${((2 * AP_W) / (AP_UP + AP_DN)).toFixed(2)}:1)`,
     );
   }
 
@@ -475,7 +505,9 @@ export class Eyes {
     // push so a bad measurement can never eject the eyeball out of the head.
     let seat = 0;
     const meas = this._measureSkin(fox, meta, R);
-    if (meas > 0) seat = clamp(meas + APEX_CLEARANCE - apexZ, MAX_SEAT_PULL, MAX_SEAT_PUSH);
+    const coat = this._measureCoat(fox, meta, R);
+    const clear = APEX_CLEARANCE + Math.min(COAT_CLEAR_SHARE * Math.max(coat, 0), COAT_CLEAR_MAX);
+    if (meas > 0) seat = clamp(meas + clear - apexZ, MAX_SEAT_PULL, MAX_SEAT_PUSH);
 
     // --- assemble ----------------------------------------------------------
     const root = new THREE.Group();
@@ -509,7 +541,7 @@ export class Eyes {
     cornea.castShadow = false;
     ball.add(cornea);
 
-    const spreadAt = this._lidSpreadSampler(fox, meta, R);
+    const spreadAt = this._lidSpreadSampler(fox, meta, R, seat);
     const lids = new THREE.Mesh(buildLids(R, segs.LU, segs.LS, spreadAt), this._lidMaterial(u));
     lids.name = `eyeLids${side}`;
     lids.castShadow = false;
@@ -519,7 +551,7 @@ export class Eyes {
 
     return {
       side, anchor, root, ball, globe, cornea, lids, u, axis,
-      R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat,
+      R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat, coat, skin: meas,
       blink: 0, gazeYaw: 0, gazePitch: 0,
     };
   }
@@ -537,7 +569,7 @@ export class Eyes {
    * smoothly enough around one socket that more would be wasted raycasts.
    * Falls back to a constant if the SDF is not available.
    */
-  _lidSpreadSampler(fox, meta, R) {
+  _lidSpreadSampler(fox, meta, R, seat = 0) {
     const COLS = 15;
     const f = fox.field;
     const flat = () => LID_SPREAD;
@@ -547,7 +579,11 @@ export class Eyes {
     const q = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(meta.look).normalize());
     const d = new THREE.Vector3();
-    const need = R + 0.0009;          // globe + the lid's own thickness
+    // The lid rides the globe, and the globe is seated `seat` further out
+    // along the optical axis than the socket centre these rays start from. A
+    // sampler that ignores the seat stops the band exactly one seat-length
+    // short of the skin and leaves a ring of bare sclera all the way round.
+    const need = R + Math.max(seat, 0) + 0.0009;   // globe + lid thickness
 
     // Distance to the skin along a direction given in EYE-LOCAL coordinates.
     const skinAt = (lx, ly, lz) => {
@@ -636,6 +672,39 @@ export class Eyes {
     return t > 0 ? t0 + t : -1;
   }
 
+  /**
+   * How deep is the coat right at the socket, in metres.
+   *
+   * `furLength` is a published cross-system attribute (AGENTS.md: `ctx.fox
+   * .attributes -> { furLength, … }`), authored per skin vertex by the anatomy
+   * agent and consumed by fur. We read it for the same reason fur does: the
+   * eye has to be seated relative to the hair canopy, not relative to the bare
+   * skin under it, and the canopy is theirs to author.
+   *
+   * MEDIAN, not max, over the vertices nearest the eyeball centre. The socket
+   * rim carries the long cheek hair and one outlier there would eject the
+   * eyeball; the median of the ring that actually overhangs the aperture is
+   * the number that decides whether the cornea is visible. Returns 0 when the
+   * attribute is absent, which reduces this to the old skin-only behaviour.
+   */
+  _measureCoat(fox, meta, R) {
+    const geo = fox.skinnedMesh?.geometry;
+    const len = fox.attributes?.furLength ?? geo?.attributes?.furLength;
+    const pos = geo?.attributes?.position;
+    if (!len || !pos || !meta?.centre) return 0;
+    const c = meta.centre;
+    const reach = R * 1.75;                 // the ring that overhangs the lids
+    const reach2 = reach * reach;
+    const vals = [];
+    for (let i = 0; i < pos.count; i++) {
+      const dx = pos.getX(i) - c[0], dy = pos.getY(i) - c[1], dz = pos.getZ(i) - c[2];
+      if (dx * dx + dy * dy + dz * dz <= reach2) vals.push(len.getX(i));
+    }
+    if (!vals.length) return 0;
+    vals.sort((a, b) => a - b);
+    return vals[vals.length >> 1];
+  }
+
   // -------------------------------------------------------------- uniforms --
   _makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR) {
     return {
@@ -645,9 +714,15 @@ export class Eyes {
       uFibreN: { value: 118.0 }, uCollarette: { value: 0.41 },
       uCaustic: { value: 1.0 }, uWetness: { value: 1.0 },
 
-      uIrisInner: { value: new THREE.Color(0xe8ae59) },
-      uIrisMid: { value: new THREE.Color(0xba8334) },
-      uIrisOuter: { value: new THREE.Color(0x8a6028) },
+      // §4b: "amber / golden-brown, noticeably warm". These were authored a
+      // stop and a half darker than that and the eye graded out to a brown
+      // bead: the scene is a polar TWILIGHT with the key behind the animal,
+      // so whatever the iris reflects is already being multiplied by a dim,
+      // cold fill before tonemapping. An iris that is "correct" under a studio
+      // key is a black hole here.
+      uIrisInner: { value: new THREE.Color(0xf6c874) },
+      uIrisMid: { value: new THREE.Color(0xd39a44) },
+      uIrisOuter: { value: new THREE.Color(0x9c6f2e) },
       uLimbal: { value: new THREE.Color(0x1a1206) },
       uPupilCol: { value: new THREE.Color(0x05040a) },
       uSclera: { value: new THREE.Color(0x2a231d) },
@@ -759,7 +834,7 @@ export class Eyes {
   float eyGy = eyD.y / eyDz;
   float eyShU = smoothstep(-0.30, 0.02, eyGy - feLidUpY(eyGu));
   float eyShD = smoothstep(-0.22, 0.02, feLidDnY(eyGu) - eyGy);
-  eyCol *= mix(1.0, 0.30, max(eyShU, eyShD * 0.55));
+  eyCol *= mix(1.0, 0.48, max(eyShU, eyShD * 0.55));
 
   diffuseColor.rgb = eyCol;
 `)
@@ -877,6 +952,7 @@ void main(){
         'attribute float aU; attribute float aS; attribute float aLid;\n' +
         'attribute float aSpread;\n' +
         'varying float vU; varying float vS; varying float vLid; varying vec3 vLP;\n' +
+        'varying float vArc;\n' +
         EYE_UNIFORMS + APERTURE_GLSL + GLOBE_GLSL +
         sh.vertexShader
           // beginnormal_vertex runs first, so the direction is solved there
@@ -926,6 +1002,14 @@ void main(){
 `)
           .replace('#include <begin_vertex>', /* glsl */ `
   vU = aU; vS = aS; vLid = aLid;
+  // Distance from the free edge in METRES of arc, not in band fractions. The
+  // band's angular length is measured per column against the live skin and
+  // varies 3:1 around one socket, so a rim authored as "the first 5% of the
+  // band" is three times wider under the brow than at the canthus — and it
+  // rescales every time the anatomy agent changes the coat depth. §4b calls
+  // this line the single most important detail on the face; it should be one
+  // width, in millimetres, everywhere.
+  vArc = aS * aSpread * uR;
   // Sit on the real globe surface — the corneal dome stands proud of the
   // scleral sphere and a closing lid sweeps straight across it — plus a lid
   // thickness that is proud enough at the margin to cast a real edge, swells
@@ -938,36 +1022,54 @@ void main(){
 
       sh.fragmentShader =
         'varying float vU; varying float vS; varying float vLid; varying vec3 vLP;\n' +
+        'varying float vArc;\n' +
         EYE_UNIFORMS + HASH + SIMPLEX3 + UTIL + sh.fragmentShader
           .replace('#include <map_fragment>', /* glsl */ `
-  // s = 0 is the free edge of the lid. The dark rim §4b demands lives here.
+  // vArc = 0 is the free edge of the lid. The dark rim §4b demands lives here,
+  // and it is authored in METRES so it is the same line all the way round the
+  // fissure and does not rescale when the coat does.
   //
-  // The band sweeps ~35 degrees but the fox's own skin closes over it from
-  // about 40 degrees off axis, so only the first QUARTER of it is ever seen.
-  // Spreading the ramp across the whole band therefore painted the entire
-  // visible lid near-black and the eye read as a hole. These numbers are
-  // tuned to the visible slice: a crisp ~0.4 mm margin, then fur by the time
-  // the skin takes over, so the join is invisible.
-  float feMargin = 1.0 - smoothstep(0.008, 0.055, vS);
-  float feSkin   = smoothstep(0.030, 0.120, vS);
-  float feFurry  = smoothstep(0.100, 0.260, vS);
+  //   0.00 -> 0.85 mm   near-black tarsal margin (the line itself)
+  //   0.85 -> 1.70 mm   dark periocular skin, which every reference photo
+  //                     shows as a distinct ring darker than the coat
+  //   1.70 -> 4.50 mm   short lid fur taking over
+  //
+  // Widths matter in both directions. A first pass at 1.05 / 2.60 / 6.20 mm
+  // put a black donut as wide as the iris around the eye and the socket read
+  // as a hole in the face — the exact failure the fraction-based version was
+  // written to avoid, arrived at from the other side. On the real animal the
+  // black is a LINE, and the periocular skin merely a shade darker than the
+  // coat over it.
+  //
+  // The previous version authored these as fractions of the band (0.008-0.055
+  // of vS) and the band is 1.8-10 mm long depending on the column, so the
+  // "single most important detail on the face" was a 0.1 mm hairline at the
+  // canthus and a 0.55 mm smudge under the brow. At frontal framing the whole
+  // ring was sub-pixel and the eye reduced to a grey dot.
+  float feMargin = 1.0 - smoothstep(0.00030, 0.00085, vArc);
+  float feRing   = 1.0 - smoothstep(0.00085, 0.00170, vArc);
+  float feFurry  = smoothstep(0.00170, 0.00450, vArc);
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
   float feHair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
   vec3 feFur = uLidFur * mix(0.80, 1.06, feHair);
 
-  vec3 feCol = mix(uMarginCol, uLidSkin, feSkin);
+  // The periocular ring is the margin colour lifted toward skin, NOT skin
+  // darkened — keeping it on the same hue is what stops the ring reading as
+  // a separate painted band with its own edge.
+  vec3 feRingCol = mix(uLidSkin, uMarginCol, 0.45);
+  vec3 feCol = mix(uLidSkin, feRingCol, feRing);
   feCol = mix(feCol, feFur, feFurry);
   // Keep the extreme margin genuinely dark — this is the line that makes the
   // eye read from across the frame.
-  feCol = mix(feCol, uMarginCol, feMargin * 0.94);
+  feCol = mix(feCol, uMarginCol, feMargin * 0.96);
   diffuseColor.rgb = feCol;
 `)
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
   // Wet meniscus: the tear strip where lid meets globe is the glossiest thing
   // on the face. It dries out quickly into ordinary skin and then into fur.
-  float feWet = 1.0 - smoothstep(0.003, 0.038, vS);
-  float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.10, 0.30, vS)), 0.09, feWet);
+  float feWet = 1.0 - smoothstep(0.00012, 0.00075, vArc);
+  float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.0025, 0.0060, vArc)), 0.09, feWet);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeLid';
@@ -1012,7 +1114,12 @@ void main(){
       // at b = 1 so the aperture shuts exactly.
       e.u.uBlinkU.value = Math.pow(b, 0.82);
       e.u.uBlinkD.value = Math.pow(b, 1.70);
-      e.u.uPupilR.value = lerp(0.50, 0.24, this._pupilNow);
+      // Dilated / contracted, as a fraction of the iris radius. Narrower than
+      // it was: the cornea magnifies the iris by ~1.25x and the outer edge is
+      // then clipped at the limbus, so the pupil grows on screen while the
+      // amber does not. 0.50 dilated measured out at nearly 60% of the
+      // VISIBLE iris and ate the colour §4b is asking for.
+      e.u.uPupilR.value = lerp(0.42, 0.22, this._pupilNow);
 
       // --- gaze ---------------------------------------------------------
       let yaw = 0, pitch = 0;
