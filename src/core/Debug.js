@@ -62,11 +62,11 @@ export const POSES = {
 
   // Dead front-on, eye level. The user's own screenshots were taken here and
   // here is where the ear interiors and the skin/fur silhouette edge show.
-  frontal:     { anchor: 'head', dir: [0.020, 0.100, 1.000], dist: 0.55, fov: 30 },
+  frontal:     { anchor: 'head', dir: [0.020, 0.100, 1.000], dist: 0.55, fov: 30, local: true },
 
   // Low and close, looking up under the chin. Reproduces the framing where
   // the animal's INTERIOR became visible.
-  chin:        { anchor: 'head', dir: [0.060, -0.300, 0.952], dist: 0.20, fov: 24 },
+  chin:        { anchor: 'head', dir: [0.060, -0.300, 0.952], dist: 0.20, fov: 24, local: true },
 };
 
 /**
@@ -118,6 +118,22 @@ function resolvePose(pose, ctx) {
   if (pose.offset) t.add(new THREE.Vector3().fromArray(pose.offset));
 
   const dir = new THREE.Vector3().fromArray(pose.dir).normalize();
+
+  // `local: true` interprets `dir` in the ANCHOR'S OWN FRAME rather than in
+  // world axes. A head framing authored as "straight in front of the face"
+  // stops being that the moment anything yaws the head -- and the animation
+  // agent's new per-gait carriage does exactly that, which silently turned
+  // `frontal` and `chin` into three-quarter shots and stopped them
+  // reproducing the screenshots they exist to reproduce. Anchored poses
+  // already survive the skull MOVING; this makes them survive it TURNING.
+  if (pose.local) {
+    const a = fox?.anchors?.[pose.anchor] || fox?.bone?.(pose.anchor);
+    if (a) {
+      const q = new THREE.Quaternion();
+      a.matrixWorld.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+      dir.applyQuaternion(q).normalize();
+    }
+  }
 
   // On a narrow viewport, DOLLY BACK rather than widen the lens.
   //
