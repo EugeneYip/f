@@ -111,6 +111,73 @@ Then **look at the PNGs with the Read tool.** Do not declare success on a green
 exit code alone — a black frame also exits 0. Read `shots/<you>/report.json` for
 draw calls, triangle counts and per-tier frame times.
 
+## Measuring anything: verify the instrument first
+
+Twenty-six instruments have given false readings on this project. Roughly half
+were written by the orchestrator, several were gates that passed while the
+defect they existed to catch was plainly visible in the render, and one was an
+A/B variant that had never done anything at all. This is not incidental to the
+work — it is the single largest consumer of effort here. Treat every
+measurement as guilty until it has been shown to move when the thing it
+measures moves.
+
+**Before you trust a number:**
+
+1. **Validate against a known defect.** A gate that has never been shown to
+   FAIL on something known-bad is a number, not a gate. Build the positive
+   control in the same frame — hide the coat, hide the skin, disable the pass —
+   and confirm the metric separates them. Two silhouette gates and a macro fur
+   gate shipped without this and all three were blind.
+2. **Check the probe landed on its subject.** Rig anchors are bone centres, and
+   the visible feature usually is not there: the eye anchor is the eyeball's
+   centre while the iris sits forward on the cornea, and the nose anchor sits
+   5.8 mm inside a pad that stands proud of it. Both probes spent rounds
+   measuring eyelids and coat respectively. Search for the feature; do not
+   assume its position.
+3. **Scale the sample to the feature.** A fixed box around a 12 px nose
+   averages it with bright surroundings. If widening the box moves the number
+   monotonically, the box is measuring the surroundings.
+4. **Make an unmeasurable probe a hard failure.** A null probe once deleted two
+   checks silently and the report came back with 22 instead of 24.
+5. **Report the raw measurement next to the verdict**, and record what the
+   instrument saw when it fails. "Probe returned no samples" is the least
+   useful thing an instrument can say.
+
+**Traps specific to this harness, each of which has already cost a round:**
+
+- **`renderPose(..., settle)` advances the simulation.** An A/B where only one
+  arm settles compares frames 0.3 s apart in animation. Both `shoot.mjs` and
+  `ab.mjs` had accumulating settles; both now render every arm and every pose
+  at one instant and abort if the animal moves between them.
+- **Deterministic can still be deterministically wrong.** A fixed sim time
+  landed mid-blink for several rounds.
+- **A private clock is not `ctx.time`.** Four animation systems accumulated
+  their own `t`, so `spec.mjs`'s time rewind moved `ctx.time` and nothing else,
+  and the eye probe read three different values at one "identical" sim time.
+  AGENTS.md rule 6 exists for this.
+- **Post is not neutral.** A gate measuring the post-processed frame graded a
+  depth-of-field artefact as coat quality for three rounds. But measuring with
+  post OFF also removes TAA, and TAA is what resolves the fur's stochastic
+  alpha — so a raw frame makes every edge read as hard. Know which you want.
+- **Backlit framings are nearly unmeasurable.** At `silhouette` a white animal
+  against bright snow peaks at 261/765 of coverage; the same metric separates
+  coat from bare mesh 1.43x at `frontal` and 0.99x there. Two agents
+  independently failed to build a pixel metric at that framing.
+- **Concurrent agents change the source mid-run.** `spec.mjs` names the files
+  that changed so you can judge per check instead of discarding the run.
+
+**And the rule that matters most:** if you are handed a diagnosis and the data
+disagrees with it, say so. Agents on this project have disproved a handed-down
+diagnosis at least eleven times and have been right **every single time** —
+including the orchestrator's confident "the skin is visible through the coat",
+which a transmittance probe measured at exactly 0.000 before finding the real
+cause in depth of field. Disproving the brief is a success, not a failure.
+
+**Never satisfy a gate by damaging the product.** An agent once cleared a bad
+horizon check by cutting art-bible snow sparkle 71%. If you believe a threshold
+is wrong, report it with the measurement and leave it failing — the
+orchestrator owns `tools/**` and will change it.
+
 ## Scratch files: namespace them
 
 The scratchpad directory is **shared between all agents**. One agent's probe
