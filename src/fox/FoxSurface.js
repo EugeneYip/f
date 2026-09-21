@@ -109,7 +109,16 @@ export async function buildFoxSurface(skeleton, {
   // 45 mm neck bleed onto the muzzle and forehead, which must stay at 2-6 mm
   // per the bible. 12 mm keeps the gradients smooth without crossing a whole
   // anatomical zone.
-  const sigma = 0.0105;
+  //
+  // §4f tightened it again, to 8.5 mm. Once the skull coat went from 7.5 mm to
+  // 22 mm, a 10.5 mm softmax smeared the skull/muzzle step across ~30 mm of a
+  // 110 mm head — and that step IS the face: "the contrast between a deep
+  // skull coat and a short muzzle coat is what makes the face read pointy".
+  // Measured on the jaw line, the muzzle's 3.4 mm was still dragging the local
+  // coat down to 14.8 mm where the cheek authors 38 mm. The log-space Laplacian
+  // below still smooths the result over the mesh, so this does not produce a
+  // visible coat-depth edge.
+  const sigma = 0.0085;
 
   for (let v = 0; v < nv; v++) {
     const o = v * 3;

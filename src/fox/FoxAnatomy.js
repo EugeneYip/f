@@ -189,23 +189,23 @@ export const EAR_SPAN = { baseY: LANDMARKS.earR01[1], tipY: LANDMARKS.earR_tip[1
 // bible's ~100 mm brush once the outer shells fade out.
 export const FUR = {
   [R.nose]: [0.0006, 1.00],
-  [R.muzzle]: [0.0030, 0.90],
-  [R.jawLower]: [0.0048, 0.72],
-  [R.cheek]: [0.0320, 0.28],
-  [R.forehead]: [0.0038, 0.82],
-  [R.skull]: [0.0075, 0.74],
-  [R.earOuter]: [0.0110, 0.70],
-  [R.earInner]: [0.0100, 0.44],
-  [R.throat]: [0.0300, 0.28],
-  [R.neck]: [0.0455, 0.58],
-  [R.ruff]: [0.0580, 0.50],
-  [R.chest]: [0.0405, 0.46],
-  [R.shoulder]: [0.0385, 0.66],
-  [R.back]: [0.0425, 0.86],
-  [R.flank]: [0.0480, 0.62],
-  [R.belly]: [0.0490, 0.22],
-  [R.croup]: [0.0450, 0.80],
-  [R.haunch]: [0.0410, 0.66],
+  [R.muzzle]: [0.0034, 0.90],
+  [R.jawLower]: [0.0140, 0.72],
+  [R.cheek]: [0.0380, 0.28],
+  [R.forehead]: [0.0175, 0.82],
+  [R.skull]: [0.0260, 0.74],
+  [R.earOuter]: [0.0205, 0.70],
+  [R.earInner]: [0.0130, 0.44],
+  [R.throat]: [0.0400, 0.28],
+  [R.neck]: [0.0520, 0.58],
+  [R.ruff]: [0.0630, 0.50],
+  [R.chest]: [0.0535, 0.46],
+  [R.shoulder]: [0.0505, 0.66],
+  [R.back]: [0.0585, 0.86],
+  [R.flank]: [0.0610, 0.62],
+  [R.belly]: [0.0620, 0.22],
+  [R.croup]: [0.0580, 0.80],
+  [R.haunch]: [0.0430, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
   [R.legFrontLower]: [0.0145, 0.66],
   [R.pawFront]: [0.0038, 0.86],
@@ -231,23 +231,41 @@ const mirrorX = (p) => [-p[0], p[1], p[2]];
  * a per-axis squash. Consecutive entries are unioned as round cones, so the
  * trunk is watertight and gap-free by construction.
  *
- * Reading the resulting profile: level topline 0.264-0.269, deepest chest at
- * z = 0 (0.145 m deep), a slight belly tuck over the loin, then the neck crest
- * rising to the poll. That is a stocky canid, not a tube.
+ * Reading the resulting profile: level topline 0.256-0.269, deepest chest at
+ * z = 0 (0.134 m deep), a slight belly tuck over the loin, then the neck crest
+ * rising to the poll. That is a lean canid, not a tube and not a barrel.
+ *
+ * ## §4f — the bulk belongs in the COAT, not the body
+ *
+ * This table used to describe a *fat animal with a thin coat*: 80 mm of skin
+ * radius at mid-torso under 48 mm of coat, so the coat carried 37 % of the
+ * silhouette where a real winter fox carries ~48 %. Every symptom of that is
+ * the same symptom — solid geometry reads as inert mass, and a mesh edge with
+ * only 48 mm of coat behind it still shows as a hard line.
+ *
+ * So radius moved OUT of here and INTO `FUR` below, in equal measure. The
+ * rules that constrain the edit:
+ *   - the furred silhouette must not shrink (§4f.4) — every millimetre taken
+ *     off a station is put back on that station's coat;
+ *   - the BELLY comes up, the TOPLINE barely moves. Slimming is ventral on a
+ *     real animal, and the spine bones sit ~10 mm under the topline: dropping
+ *     TOP by the full 13 mm would have pushed spine03/spine04 out through the
+ *     skin. TOP falls ~4 mm, BOTTOM rises ~22 mm, so the radius still drops
+ *     13 mm while the section centre rises 9 mm.
  */
 // z, TOP, BOTTOM, sqx, region  — silhouette-first authoring; see below.
 const TRUNK_PROFILE = [
-  [-0.1880, 0.2270, 0.1930, 0.90, R.croup],
-  [-0.1700, 0.2420, 0.1740, 0.92, R.croup],
-  [-0.1420, 0.2620, 0.1340, 0.95, R.croup],
-  [-0.1000, 0.2720, 0.1170, 0.95, R.flank],
-  [-0.0520, 0.2690, 0.1050, 0.94, R.flank],
-  [0.0000, 0.2600, 0.0995, 0.93, R.flank],
-  [0.0500, 0.2605, 0.1020, 0.91, R.chest],
-  [0.0860, 0.2720, 0.1210, 0.89, R.chest],
-  [0.1110, 0.2790, 0.1510, 0.89, R.ruff],
-  [0.1300, 0.2930, 0.1730, 0.91, R.neck],
-  [0.1450, 0.3035, 0.1925, 0.93, R.neck],
+  [-0.1880, 0.2260, 0.1960, 0.90, R.croup],
+  [-0.1700, 0.2395, 0.1815, 0.92, R.croup],
+  [-0.1420, 0.2580, 0.1490, 0.95, R.croup],
+  [-0.1000, 0.2683, 0.1387, 0.95, R.flank],
+  [-0.0520, 0.2648, 0.1272, 0.94, R.flank],
+  [0.0000, 0.2560, 0.1215, 0.93, R.flank],
+  [0.0500, 0.2565, 0.1235, 0.91, R.chest],
+  [0.0860, 0.2685, 0.1405, 0.89, R.chest],
+  [0.1110, 0.2754, 0.1650, 0.89, R.ruff],
+  [0.1300, 0.2895, 0.1835, 0.91, R.neck],
+  [0.1450, 0.3010, 0.2005, 0.93, R.neck],
 ];
 // (z, centre-y, radius, squash-x, region) — what the field builder consumes.
 const TRUNK = TRUNK_PROFILE.map(([z, top, bot, sx, reg]) =>
@@ -329,7 +347,7 @@ export function buildField() {
   });
   // Prosternum — the chest points forward between the shoulders.
   f.add({
-    name: 'prosternum', a: [0, 0.1730, 0.1010], ra: 0.0525,
+    name: 'prosternum', a: [0, 0.1870, 0.1010], ra: 0.0425,
     squash: [0.80, 0.94, 0.78], k: 0.021, ...furOf(R.chest),
     flowDir: [0, -0.35, -0.90], flowRadial: 0.35, tint: TINT_FUR,
   });
@@ -339,23 +357,23 @@ export function buildField() {
   // top of this file for why the head moves as a unit.
   const H = skullXf;
   f.add({
-    name: 'braincase', a: H([0, 0.3140, 0.1985]), ra: sr(0.0412),
-    squash: [0.780, 0.880, 0.96], k: 0.017, ...furOf(R.skull),
+    name: 'braincase', a: H([0, 0.3140, 0.1985]), ra: sr(0.0216),
+    squash: [0.900, 0.880, 0.96], k: 0.019, ...furOf(R.skull),
     flowDir: [0, 0.16, -1], flowRadial: 0.22, tint: TINT_FUR,
   });
   f.add({
-    name: 'occiput', a: H([0, 0.3040, 0.1790]), ra: sr(0.0378),
-    squash: [0.780, 0.880, 0.78], k: 0.018, ...furOf(R.skull),
+    name: 'occiput', a: H([0, 0.3040, 0.1790]), ra: sr(0.0205),
+    squash: [0.900, 0.880, 0.78], k: 0.020, ...furOf(R.skull),
     flowDir: [0, 0.10, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Domed forehead with a gentle stop — arctic fox, not red fox.
   f.add({
-    name: 'forehead', a: H([0, 0.3175, 0.2145]), ra: sr(0.0288),
-    squash: [0.90, 0.84, 0.94], k: 0.017, ...furOf(R.forehead),
+    name: 'forehead', a: H([0, 0.3175, 0.2145]), ra: sr(0.0210),
+    squash: [0.90, 0.84, 0.94], k: 0.019, ...furOf(R.forehead),
     flowDir: [0, 0.22, -1], flowRadial: 0.20, tint: TINT_FUR,
   });
   f.addMirrored({
-    name: 'brow', a: H([0.0252, 0.3318, 0.2160]), ra: sr(0.0118),
+    name: 'brow', a: H([0.0252, 0.3318, 0.2160]), ra: sr(0.0092),
     squash: [0.90, 0.74, 0.96], k: 0.016, ...furOf(R.forehead),
     flowDir: [0.15, 0.20, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
@@ -374,7 +392,7 @@ export function buildField() {
   });
   f.add({
     name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2895, 0.2385]),
-    ra: sr(0.0212), rb: sr(0.0126),
+    ra: sr(0.0178), rb: sr(0.0110),
     squash: [0.95, 0.86, 1.0], k: 0.016, ...furOf(R.jawLower),
     flowDir: [0, -0.30, -1], flowRadial: 0.35, tint: TINT_FUR,
   });
@@ -387,7 +405,7 @@ export function buildField() {
   });
   f.addMirrored({
     name: 'cheek', a: H([0.0228, 0.2990, 0.2120]), b: H([0.0246, 0.2958, 0.1940]),
-    ra: sr(0.0238), rb: sr(0.0236),
+    ra: sr(0.0208), rb: sr(0.0206),
     squash: [0.87, 0.90, 1.02], k: 0.021, ...furOf(R.cheek),
     flowDir: [0.55, -0.25, -0.55], flowRadial: 0.90, tint: TINT_FUR,
   });
