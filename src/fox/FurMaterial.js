@@ -407,18 +407,20 @@ export function buildFurUniforms(ctx) {
     // self-defeating -- the clearance grew as fast as the thing it was meant to
     // clear -- and it went from harmless to fatal purely because the head coat
     // got deeper underneath it. See furSkinMask2 in fur.glsl.js.
-    uEyeFade: { value: new THREE.Vector3(0.0131, 0.0151, 0.0249) },
+    uEyeFade: { value: new THREE.Vector3(0.0104, 0.0117, 0.0320) },
     // Bind-space optical axes, overwritten at init from fox.eyes[side].look.
     // Default points straight ahead so a rig with no eye metadata still gets
     // a sane (if unrotated) slot rather than a NaN.
     uEyeAxisL: { value: new THREE.Vector3(-0.58, 0.15, 0.80).normalize() },
     uEyeAxisR: { value: new THREE.Vector3(0.58, 0.15, 0.80).normalize() },
-    // The fissure is about twice as wide as it is tall, so the parting has to
-    // be too: a disc wide enough to clear the lid margin shaves the brow.
+    // The fissure is about 1.75x as wide as it is tall, so the parting is
+    // too: a ROUND parting big enough to expose the eye must shave past the
+    // lids, because the globe is 22.5 mm across and the fissure 13.8 mm.
     // x scales the along-fissure component before the radius test, so < 1
     // reaches FURTHER temporally and nasally; y > 1 pulls the parting in
     // above and below, which is what keeps coat on the brow and the cheek.
-    uEyeSlot: { value: new THREE.Vector2(1 / 1.55, 1.50) },
+    // Overwritten at init from the cornea Eyes.js drew; see eyeAperture().
+    uEyeSlot: { value: new THREE.Vector2(1 / 1.32288, 1.32288) },
     // Cards are cut where their own length would sweep across the cornea —
     // see the card vertex shader. Kept as a uniform so it can be A/B'd at
     // runtime; there is no reason to author it below 1.
