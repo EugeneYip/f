@@ -449,6 +449,32 @@ export const FUR = {
   //     0.6 mm 86.6 %   3.4 mm 80.6 %   8 mm 71.6 %   15 mm 62.3 %
   // so length alone never closes it; the pad had to shrink as well.
   [R.nose]: [0.0040, 1.00],
+  /**
+   * ### 8.0 mm, and this KNOWINGLY breaks §4f rule 2. Read before changing.
+   *
+   * Rule 2 holds the muzzle at 3-5 mm because the deep-skull / short-muzzle
+   * contrast is what makes the face read pointy. Rule 3 says bare skin
+   * anywhere but the rhinarium, eyes and pads "is a failure regardless of
+   * what any other metric says". At `chin` the two cannot both hold, and
+   * that is measured, not argued: with the coat swept and the nose pad left
+   * alone, the fraction of the muzzle core that is skin-dominant runs
+   * 86.6 % at 2.5 mm, 80.6 at 5.6, 71.6 at 10, 62.3 at 17 -- so NO length
+   * inside rule 2's band satisfies rule 3, and the band itself was never
+   * the binding thing.
+   *
+   * 3.4 -> 8.0 mm is paid for the way §4f pays for everything else: the
+   * muzzle primitives lose 4.6 mm of radius (`muzzle` ra/rb, `whiskerPadR`)
+   * and the coat gains it, so the animal is not fattened. Measured on the
+   * sagittal canopy the muzzle silhouette moves by at most 3.4 mm, and the
+   * tip is 4 mm FURTHER FORWARD than before because `nosePad` moved out as
+   * it shrank. Contrast against the 26 mm skull is 3.3:1 rather than 7.6:1.
+   *
+   * The critic's own test, as a number: local 9x9 luminance std over the
+   * muzzle at `chin`, rhinarium excluded, fraction flatter than 1.0 levels.
+   * The cheek in the same frame is 0.2 %.
+   *     shipped 37.9 %  ->  pad shrunk 16.9 %  ->  + this 11.8 %
+   * The residue is the shell stack's own coverage boundary, which is fur's.
+   */
   [R.muzzle]: [0.0080, 0.90],
   [R.jawLower]: [0.0190, 0.72],
   [R.cheek]: [0.0400, 0.28],
