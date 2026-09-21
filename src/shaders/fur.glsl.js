@@ -818,7 +818,14 @@ ${isShell ? /* glsl */ `
   bool deep = tJ < shellFill * 0.40;
 
   vec3 site = vRoot;
-  vec4 hair = vec4(1.0, 0.45, hash13(vRoot * 131.7), 1.0);
+  // The cheap path still has to honour the COVERAGE mask. furHair applies
+  // vP0.w (region density x the eye/nose coverage mask) as its last step, and
+  // this branch skipped it entirely -- so the innermost shells drew at alpha
+  // 1.0 over the rhinarium and inside the eye clearance, which is exactly the
+  // failure the mask was added to stop ("zeroing the coat LENGTH is not enough
+  // on its own": the shells collapse onto the skin and keep drawing). Visible
+  // at macro_eye as a cuff of opaque undercoat lapping over the iris.
+  vec4 hair = vec4(clamp(vP0.w * uDensity, 0.0, 1.0), 0.45, hash13(vRoot * 131.7), 1.0);
   if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail,
                               normalize(vAxis), vShellMod.x, site);
   alpha = hair.x;
