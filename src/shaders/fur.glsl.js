@@ -72,9 +72,10 @@ uniform vec3  uGravity;        // world down
 // --- coat shape ------------------------------------------------------------
 uniform vec3  uEyeL;           // bind-space eyeball centres: the coat has to
 uniform vec3  uEyeR;           // part around the eye or it buries the face
-// x base clearance (m) · y extra per metre of local coat · z HARD CAP on the
-// result · w how much tighter COVERAGE clears than LENGTH does
-uniform vec4  uEyeFade;
+// x lid-margin clearance RADIUS in metres, sized off the measured eyeball and
+// NOT off the local coat (see furSkinMask2 for why that mattered) · y inner
+// radius as a fraction of x · z how much tighter COVERAGE clears than LENGTH
+uniform vec3  uEyeFade;
 uniform vec3  uNose;           // nose pad centre, bind space
 uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
@@ -212,39 +213,47 @@ const COATLEN_FN = /* glsl */ `
  * bible 4f rule 3 allows bare skin only on the rhinarium, the eyes and the paw
  * pads, and a single clearance radius shaved a disc ~45 mm across centred on
  * each eye -- which on a 90 mm head is the entire brow. Coverage therefore
- * clears over a disc uEyeFade.w times the radius that length clears over, so
+ * clears over a disc uEyeFade.z times the radius that length clears over, so
  * the lid margin is bare and everything past it is short fur rather than skin.
  *
- * The radius is also CAPPED. It was a linear function of the local coat depth,
- * which was safe while the head carried 4 mm of coat and is not safe now that
- * it carries 17-33 mm: the same expression returns 25 mm of bald skin around
- * an 8 mm eye. The cap is the only part of this that has to survive the coat
- * getting deeper again.
+ * THE RADIUS MUST NOT SCALE WITH THE LOCAL COAT. It used to:
+ *
+ *     r = base + perMetre * localCoat        (capped)
+ *
+ * which is self-defeating by construction, because the clearance grows as fast
+ * as the thing it is meant to clear. Authored at a 4 mm head coat it looked
+ * harmless and measured clean -- the fur agent predicted the failure, anatomy
+ * DISPROVED it by measurement, and both were right at the time. At 17-33 mm it
+ * returned 23-37 mm of bald skin around an 8 mm eye and shaved the brow; at a
+ * 40 mm face coat the two discs met across the bridge of the nose, 58.3 mm
+ * apart, and shaved the whole face. A hard cap papered over it twice and
+ * anatomy had to cap the coat at the orbit from its own file to get the head
+ * gate green. The cap was never the fix. The coat term is the bug.
+ *
+ * What the clearance is FOR is the lid margin, and a lid margin is a property
+ * of the eyeball, not of fur growing 30 mm away from it. uEyeFade.x is
+ * therefore a plain radius in metres, derived by FurSystem from the same
+ * measured globe that Eyes.js sizes the eyeball from, and there is no coat
+ * term left for a deeper coat to detonate.
+ *
+ *   x  lid-margin clearance radius, metres (from the globe; see FurSystem)
+ *   y  inner radius as a fraction of x -- fully bare inside it
+ *   z  coverage clears over z * the radius that length clears over
  */
-vec2 furSkinMask2(vec3 p, float rawCoat){
-  // Clearance around the eye scales with how DEEP the local coat is.
-  //
-  // A fixed radius cannot be right for both ends: 19 mm was needed to stop the
-  // 30 mm cheek ruff burying the eye at portrait, but at the macro framing the
-  // whole view is only 41 mm tall, so that same disc shaved the brow and
-  // muzzle down to bare skin and the face read as porcelain. A 4 mm brow coat
-  // needs almost no clearance; the ruff needs a lot.
-  float r1 = min(uEyeFade.x + rawCoat * uEyeFade.y, uEyeFade.z);
-  float r0 = r1 * 0.45;
+vec2 furSkinMask2(vec3 p){
+  float r1 = uEyeFade.x;
+  float r0 = r1 * uEyeFade.y;
   float d  = min(distance(p, uEyeL), distance(p, uEyeR));
   float eyeL = smoothstep(r0, r1, d);
-  float k    = max(uEyeFade.w, 0.05);
+  float k    = max(uEyeFade.z, 0.05);
   float eyeD = smoothstep(r0 * k, r1 * k, d);
   // The rhinarium is genuinely bare skin, so it gates both.
   float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
   return vec2(eyeL * nose, eyeD * nose);
 }
 
-float furSkinMask(vec3 p, float rawCoat){ return furSkinMask2(p, rawCoat).x; }
-
 float furCoatLength(vec3 p, float lengthScale){
-  float raw = furLength * uCoatScale * lengthScale;
-  return raw * furSkinMask2(p, raw).x;
+  return furLength * uCoatScale * lengthScale * furSkinMask2(p).x;
 }
 `;
 
@@ -702,7 +711,7 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
-  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask2(position, furLength * uCoatScale * ra.y).y);
+  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask2(position).y);
   vP1   = vec4(rb.x, rb.y, ra.w, L);
 
   vec4 mvPosition = viewMatrix * wp;
@@ -987,7 +996,7 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
-  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask2(position, furLength * uCoatScale * ra.y).y);
+  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask2(position).y);
   vP1   = vec4(rb.x, rb.y, ra.w, L);
   vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));

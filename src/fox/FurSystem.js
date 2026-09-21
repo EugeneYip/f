@@ -34,6 +34,47 @@ const MAX_SHELLS = 26;
  */
 const CARD_COUNT_FALLBACK = 13000;
 
+/**
+ * How far past the eyeball's own surface the coat is cleared, and the bounds
+ * that clearance is allowed to take.
+ *
+ * A canid is bald to the LID MARGIN, and the lid margin is a property of the
+ * globe — it sits a millimetre or two outside it, whatever the animal's coat
+ * is doing 30 mm away. The clearance used to be `base + perMetre * localCoat`,
+ * which is self-defeating: the bare disc grows as fast as the distance from
+ * the eye does, so on any region deep enough to need the coat parted, the
+ * parting eats the region. That expression was measured clean at a 4 mm head
+ * coat and shaved the entire face at 40 mm, with the two discs meeting across
+ * a 58.3 mm interpupillary gap. Capping it was a workaround, twice.
+ *
+ * 1.30 x the globe radius puts the fully-coated boundary just outside the
+ * lids; the bounds only guard against an eye measurement that has gone wrong.
+ */
+const EYE_CLEAR = 1.30;
+const EYE_CLEAR_MIN = 0.009;
+const EYE_CLEAR_MAX = 0.018;
+
+/**
+ * Radius of the measured eyeball, metres.
+ *
+ * Deliberately the SAME expression Eyes.js sizes the globe from — surface
+ * distance from the socket centre plus the corneal proudness, clamped to the
+ * same band — so the coat's parting and the eyeball it is parting for can
+ * never disagree about how big the eye is. 11.6 mm is the rig's nominal ball
+ * and is used only if the anatomy agent has published no metadata.
+ */
+function eyeGlobeRadius(eyes) {
+  let sum = 0, n = 0;
+  for (const side of ['L', 'R']) {
+    const e = eyes?.[side];
+    if (!e?.centre || !e?.surface) continue;
+    const c = e.centre, s = e.surface;
+    sum += Math.hypot(s[0] - c[0], s[1] - c[1], s[2] - c[2]) + (e.cornealProud ?? 0.003);
+    n++;
+  }
+  return n ? clamp(sum / n, 0.006, 0.020) : 0.0116;
+}
+
 export class FurSystem {
   name = 'fur';
   order = 200;
@@ -83,10 +124,17 @@ export class FurSystem {
     // socket, and 24 mm of cheek ruff 15 mm from the cornea buries the face.
     // Both eyeball centres were measured off the SDF during socket carving, in
     // the same bind space as `position`, so they drop straight into the shader.
+    //
+    // The clearance RADIUS comes from the same measurement — see
+    // eyeClearRadius. It used to be a function of the local coat depth, which
+    // is the one thing it must never be.
     const eyes = fox.eyes;
     if (eyes?.L?.centre && eyes?.R?.centre) {
       this.uniforms.uEyeL.value.fromArray(eyes.L.centre);
       this.uniforms.uEyeR.value.fromArray(eyes.R.centre);
+      this.eyeGlobeR = eyeGlobeRadius(eyes);
+      this.uniforms.uEyeFade.value.x =
+        clamp(this.eyeGlobeR * EYE_CLEAR, EYE_CLEAR_MIN, EYE_CLEAR_MAX);
     }
     // Same for the rhinarium — measured off the SDF by the anatomy agent.
     const noseAnchor = fox.anchors?.nose;
@@ -146,7 +194,10 @@ export class FurSystem {
     console.info(
       `[fur] ${this.shellCount} shells (instanced, 1 draw) · ` +
       `${this.stats.cards} cards / ${this.stats.cardTris} tris · ` +
-      `aniso ${this.uniforms.uAniso.value ? 'on' : 'off'} · init ${this.initMs.toFixed(0)} ms`,
+      `aniso ${this.uniforms.uAniso.value ? 'on' : 'off'} · ` +
+      `eye globe ${((this.eyeGlobeR ?? 0) * 1000).toFixed(1)} mm → coat clears ` +
+      `${(this.uniforms.uEyeFade.value.x * 1000).toFixed(1)} mm · ` +
+      `init ${this.initMs.toFixed(0)} ms`,
     );
   }
 
