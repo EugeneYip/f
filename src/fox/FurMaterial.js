@@ -148,6 +148,14 @@ export const FUR_DEFAULTS = {
   hairLenMin: 0.52,
   density: 1.0,
   fill: 1.0,
+  // Where the undercoat's felt stops, as a multiple of shellFill, and how far
+  // that boundary is jittered per clump/strand. It used to run to 1.18x
+  // shellFill unjittered, which at grazing incidence is a smooth opaque sheet
+  // over the inner half of the coat -- the coat's outline was that sheet's
+  // edge rather than hair.
+  fillTop: 0.92,
+  fillJitter: 0.34,
+  cardTip: 0.45,
   coatVarFreq: 15,
 
   // shading
@@ -220,8 +228,21 @@ export function buildFurUniforms(ctx) {
 
     uEyeL: { value: new THREE.Vector3(-0.027, 0.318, 0.222) },
     uEyeR: { value: new THREE.Vector3(0.027, 0.318, 0.222) },
-    // uEyeFade.x = base bare radius (m); .y = extra radius per metre of local coat
-    uEyeFade: { value: new THREE.Vector2(0.0098, 0.85) },
+    // The coat has to part around the eye, but the clearance must be BOUNDED
+    // and it must not strip coverage as far out as it strips length.
+    //
+    //   x  base clearance, metres
+    //   y  extra clearance per metre of local coat
+    //   z  HARD CAP on the result
+    //   w  coverage clears over w x the radius that length clears over
+    //
+    // x + y*coat was authored when the head carried 4 mm of coat. The anatomy
+    // agent has since taken the forehead to 17 mm and the skull to 33 mm, and
+    // the same expression then returns 23-37 mm of clearance around an 8 mm
+    // eye -- i.e. it shaves the whole brow. Measured: 8.6% of head vertices
+    // more than half masked, median radius 22.8 mm. The cap is the part of
+    // this that has to keep holding as the coat gets deeper again.
+    uEyeFade: { value: new THREE.Vector4(0.0088, 0.55, 0.0165, 0.52) },
     uNose: { value: new THREE.Vector3(0.001, 0.293, 0.274) },
     // the rhinarium is ~8-10 mm across, so ~4 mm of bare pad and full
     // coat by 7 mm; 18 mm was clearing the entire muzzle
@@ -243,6 +264,9 @@ export function buildFurUniforms(ctx) {
     uHairLenMin: { value: d.hairLenMin },
     uDensity: { value: d.density },
     uFill: { value: d.fill },
+    uFillTop: { value: d.fillTop },
+    uFillJitter: { value: d.fillJitter },
+    uCardTip: { value: d.cardTip },
     uCoatVarFreq: { value: d.coatVarFreq },
 
     uFurLit: { value: c(0xfdfcfa) },

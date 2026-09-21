@@ -194,8 +194,8 @@ export const FUR = {
   [R.cheek]: [0.0380, 0.28],
   [R.forehead]: [0.0175, 0.82],
   [R.skull]: [0.0260, 0.74],
-  [R.earOuter]: [0.0205, 0.70],
-  [R.earInner]: [0.0130, 0.44],
+  [R.earOuter]: [0.0185, 0.70],
+  [R.earInner]: [0.0095, 0.44],
   [R.throat]: [0.0400, 0.28],
   [R.neck]: [0.0520, 0.58],
   [R.ruff]: [0.0630, 0.50],
@@ -207,11 +207,11 @@ export const FUR = {
   [R.croup]: [0.0580, 0.80],
   [R.haunch]: [0.0430, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
-  [R.legFrontLower]: [0.0145, 0.66],
-  [R.pawFront]: [0.0038, 0.86],
+  [R.legFrontLower]: [0.0205, 0.66],
+  [R.pawFront]: [0.0090, 0.86],
   [R.legHindUpper]: [0.0380, 0.60],
-  [R.hock]: [0.0120, 0.52],
-  [R.pawHind]: [0.0038, 0.86],
+  [R.hock]: [0.0175, 0.52],
+  [R.pawHind]: [0.0090, 0.86],
   [R.tailBase]: [0.0480, 0.78],
   [R.tailMid]: [0.0540, 0.80],
   [R.tailTip]: [0.0420, 0.72],
@@ -411,15 +411,34 @@ export function buildField() {
   });
 
   // ------------------------------------------------------------------ ears ---
-  // §4b: small, WIDE APART and LOW on the skull, thickly furred, and rounded
-  // almost to a semicircle — so the pinna is a short wide paddle (60 mm across
-  // by ~27 mm proud of the dome), not the tall tapering blade it was. Most of
-  // its length is buried inside the cranium, which is what anchors it.
+  // §4b: small, WIDE APART and LOW on the skull, thickly furred. §4c corrects
+  // "semicircular paddle" to ROUNDED TRIANGLE — clearly wider at the base,
+  // tapering to a soft point, judged by VISIBLE SILHOUETTE height rather than
+  // height above the dome. Most of the pinna's length is buried inside the
+  // cranium, which is what anchors it.
+  //
+  // §4f: the pinna was the worst coat-share offender on the head after the
+  // skull — 26 mm of skin carrying 11 mm of coat — and the user's 2x crop
+  // shows exactly what that produces: a flat blue-grey cutout with a hard,
+  // faintly stair-stepped outline and no interior form at all. What renders
+  // there is the SKIN, because there is no coat in front of it.
+  //
+  // So the same trade as the trunk: skin 26.4 -> 18.9 mm, coat 11 -> 18.5 mm.
+  // Furred base half-width lands at 37.4 mm and the furred tip at 13.9 mm,
+  // both within a millimetre of what they were, so the §4c taper (2.7:1
+  // base-to-tip, preserved by the tip-ward coat taper in FoxSurface) is
+  // untouched while the coat now carries 49 % of the pinna instead of 29 %.
+  //
+  // squash.x 0.60 -> 0.70 because §4c warns that thinning the pinna
+  // re-introduces the rim stair-stepping of review blocker 5: a thinner
+  // pinna has sub-cell rim curvature at the 6 mm mesh cell. Slimming the
+  // radius without widening the squash would have made the cross-section
+  // 11 mm thinner; this keeps it at 26 mm, four cells across.
   const earA = L.earR01;
   const earB = L.earR_tip;
   f.addMirrored({
-    name: 'earR', a: earA, b: earB, ra: sr(0.0224), rb: sr(0.0083),
-    frame: 'axis', normal: EAR_NORMAL, squash: [0.60, 1.02, 1.0],
+    name: 'earR', a: earA, b: earB, ra: sr(0.0160), rb: sr(0.0062),
+    frame: 'axis', normal: EAR_NORMAL, squash: [0.70, 1.02, 1.0],
     k: 0.015, ...furOf(R.earOuter),
     flowDir: sub(earB, earA), flowRadial: 0.30, tint: TINT_FUR,
   });
@@ -427,10 +446,15 @@ export function buildField() {
   const earMid = lerp3(earA, earB, 0.34);
   const earAxis = sub(earB, earA);
   const eal = Math.hypot(earAxis[0], earAxis[1], earAxis[2]);
+  // The bowl has to be deeper than the coat that sits in it, or the shells
+  // simply fill it and the ear reads as a flat plate — which is what the
+  // user's crop shows. Offsetting the carving sphere by less than its own
+  // radius is what sets the depth: 16.5 mm of offset against a 16.5 mm radius
+  // only kissed the surface. 11.4 mm digs ~6 mm, against a 9.5 mm inner coat.
   const conchaC = [
-    earMid[0] + EAR_NORMAL[0] * sr(0.0165),
-    earMid[1] + EAR_NORMAL[1] * sr(0.0165),
-    earMid[2] + EAR_NORMAL[2] * sr(0.0165),
+    earMid[0] + EAR_NORMAL[0] * sr(0.0114),
+    earMid[1] + EAR_NORMAL[1] * sr(0.0114),
+    earMid[2] + EAR_NORMAL[2] * sr(0.0114),
   ];
   f.addMirrored({
     name: 'conchaR', a: conchaC,

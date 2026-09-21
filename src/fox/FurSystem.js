@@ -345,7 +345,7 @@ export class FurSystem {
     const target = u[name] ?? u[key];
     if (!target) return false;
     if (target.value?.isColor) target.value.set(value);
-    else if (target.value?.isVector3) target.value.fromArray(value);
+    else if (typeof target.value?.fromArray === 'function') target.value.fromArray(value);
     else target.value = value;
     return true;
   }

@@ -324,16 +324,33 @@ Three rounds of head work have chased "chunky" as a *shape* problem. Measuring
 the rig says it is a *distribution* problem, and it explains the body, the
 head, the visible skin and the hard silhouette all at once.
 
+> **Corrected against sources.** The table below originally carried a "real
+> winter fox" column that I derived by reasoning rather than from any source.
+> `REFERENCE-FOX.md` went looking for those numbers and could not confirm
+> them — and warned, correctly, that inventing zoology-flavoured numbers "is
+> exactly the mechanism that produced the bear and the rabbit". The column is
+> now split into what is sourced and what is not.
+
 Measured, current rig, mid-torso:
 
-| | ours | real winter fox |
+| | ours | evidence |
 |---|---|---|
-| body radius (skin, no fur) | **80 mm** | ~60 mm |
-| coat depth, flank | 48 mm | 50–70 mm |
-| coat as share of silhouette radius | **37 %** | **~48 %** |
-| forehead coat | **3.8 mm** | 15–25 mm |
-| skull coat | **7.5 mm** | 20–30 mm |
-| jaw / chin coat | **4.8 mm** | 10–15 mm |
+| body radius (skin, no fur) | **80 mm** | the only real datum is a **150 mm diameter at the hip** of an explicitly *obese* outlier carcass carrying 30–40 mm of subcutaneous fat, >50 % body fat against a population mean of 22 % (Prestrud 1991, Fig. 5, read in full). Our typical animal's mid-torso is **wider than that obese outlier's hip.** [MEASURED, outlier] |
+| coat depth, flank | 48 mm | arctic fox winter fur clusters with reindeer, wolf and grizzly in Scholander et al. 1950, plausibly a **40–60 mm** band. **48 mm is already correct — do not deepen it.** [INFERRED from a figure, not a printed digit] |
+| coat as share of silhouette radius | 37 % | no source reports this ratio; zoologists publish fur depth and body size separately. My ~48 % target is [ESTIMATED — unverified, plausible, not contradicted]. Do not treat it as a specification. |
+| forehead / skull / jaw coat | 3.8 / 7.5 / 4.8 mm | **[GAP]** — no mm data exists for muzzle, forehead, skull, cheek, throat, ruff, shoulder, haunch, leg, paw or either ear surface. My "15–25 mm" was invented. What *is* sourced is the ordering (below). |
+
+The one thing about regional depth that is properly sourced is a **ranking**,
+from Underwood & Reynolds via Prestrud 1991: deepest and most seasonal are the
+foot pads, posterior-medial lower leg and lateral trunk; also deep are the
+dorsal and lateral trunk; and **shallowest in all seasons are the head, the
+distal legs and the belly.** So head coat *must* stay shallower than flank
+coat. Our current ordering is right; the question is only how shallow.
+
+Which means the head's coat depth is not an anatomical number we can look up.
+**It is set by a rendering requirement**: deep enough that no bare skin shows
+and the outline is hair everywhere, and no deeper. Tune it against
+`tools/spec.mjs`'s silhouette-hardness gate, not against an invented mm figure.
 
 We built a fat animal and put a thin coat on it. The real animal is a slight
 animal — the torso of a large domestic cat — inside an enormous coat. Every
@@ -357,8 +374,11 @@ symptom follows from getting that backwards:
 
 ### The standard
 
-1. **Coat carries 45–50 % of the silhouette radius on the trunk**, and never
-   less than 30 % anywhere except the muzzle, nose, paw pads and lower legs.
+1. **The trunk slims; the flank coat does not deepen.** 48 mm of flank coat is
+   already inside the only sourced band. The silhouette-share figure (~48 %)
+   is an unverified estimate and is a *direction*, not a target to hit — the
+   evidence that actually bites is that our mid-torso is wider than an obese
+   outlier's hip.
 2. **The muzzle stays short-coated (3–5 mm) and the nose bare.** This is not
    an exception to the rule, it is the point of it: the contrast between a
    deep skull coat and a short muzzle coat is what makes the face read as

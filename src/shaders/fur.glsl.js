@@ -72,7 +72,9 @@ uniform vec3  uGravity;        // world down
 // --- coat shape ------------------------------------------------------------
 uniform vec3  uEyeL;           // bind-space eyeball centres: the coat has to
 uniform vec3  uEyeR;           // part around the eye or it buries the face
-uniform vec2  uEyeFade;        // x inner radius (bald), y outer radius
+// x base clearance (m) · y extra per metre of local coat · z HARD CAP on the
+// result · w how much tighter COVERAGE clears than LENGTH does
+uniform vec4  uEyeFade;
 uniform vec3  uNose;           // nose pad centre, bind space
 uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
@@ -93,6 +95,9 @@ uniform float uStrandTip;
 uniform float uHairLenMin;
 uniform float uDensity;
 uniform float uFill;
+uniform float uFillTop;        // where the undercoat stops, x shellFill
+uniform float uFillJitter;     // +/- fraction, per clump/strand
+uniform float uCardTip;        // v past which a card stops being edge-gated
 uniform float uCoatVarFreq;
 
 // --- shading ---------------------------------------------------------------
@@ -195,7 +200,24 @@ const COATLEN_FN = /* glsl */ `
  * (23,26,32) spec, which is very close to the undercoat colour #dcd3c6. The
  * mask has to gate coverage as well as offset.
  */
-float furSkinMask(vec3 p, float rawCoat){
+/**
+ * Returns .x = LENGTH mask, .y = COVERAGE mask. They are not the same thing.
+ *
+ * Zeroing both over one disc is what produced a bald brow. The coat must get
+ * SHORTER toward the lid margin, but it must not get THINNER at the same rate:
+ * bible 4f rule 3 allows bare skin only on the rhinarium, the eyes and the paw
+ * pads, and a single clearance radius shaved a disc ~45 mm across centred on
+ * each eye -- which on a 90 mm head is the entire brow. Coverage therefore
+ * clears over a disc uEyeFade.w times the radius that length clears over, so
+ * the lid margin is bare and everything past it is short fur rather than skin.
+ *
+ * The radius is also CAPPED. It was a linear function of the local coat depth,
+ * which was safe while the head carried 4 mm of coat and is not safe now that
+ * it carries 17-33 mm: the same expression returns 25 mm of bald skin around
+ * an 8 mm eye. The cap is the only part of this that has to survive the coat
+ * getting deeper again.
+ */
+vec2 furSkinMask2(vec3 p, float rawCoat){
   // Clearance around the eye scales with how DEEP the local coat is.
   //
   // A fixed radius cannot be right for both ends: 19 mm was needed to stop the
@@ -203,16 +225,22 @@ float furSkinMask(vec3 p, float rawCoat){
   // whole view is only 41 mm tall, so that same disc shaved the brow and
   // muzzle down to bare skin and the face read as porcelain. A 4 mm brow coat
   // needs almost no clearance; the ruff needs a lot.
-  float r1 = uEyeFade.x + rawCoat * uEyeFade.y;
+  float r1 = min(uEyeFade.x + rawCoat * uEyeFade.y, uEyeFade.z);
   float r0 = r1 * 0.45;
-  float eye = smoothstep(r0, r1, min(distance(p, uEyeL), distance(p, uEyeR)));
+  float d  = min(distance(p, uEyeL), distance(p, uEyeR));
+  float eyeL = smoothstep(r0, r1, d);
+  float k    = max(uEyeFade.w, 0.05);
+  float eyeD = smoothstep(r0 * k, r1 * k, d);
+  // The rhinarium is genuinely bare skin, so it gates both.
   float nose = smoothstep(uNoseFade.x, uNoseFade.y, distance(p, uNose));
-  return eye * nose;
+  return vec2(eyeL * nose, eyeD * nose);
 }
+
+float furSkinMask(vec3 p, float rawCoat){ return furSkinMask2(p, rawCoat).x; }
 
 float furCoatLength(vec3 p, float lengthScale){
   float raw = furLength * uCoatScale * lengthScale;
-  return raw * furSkinMask(p, raw);
+  return raw * furSkinMask2(p, raw).x;
 }
 `;
 
@@ -412,7 +440,19 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // coat; it must not touch the undercoat fill, which is what covers the
   // SURFACE. Scaling the fill too removed the muzzle and brow coat entirely
   // and left pale porcelain skin at macro range.
-  float fill = 1.0 - smoothstep(shellFill * 0.42, shellFill * 1.18, t);
+  //
+  // WHERE the undercoat stops is the coat's second silhouette, and it was a
+  // smooth analytic one. `a = max(a, under)` means this term overwrites the
+  // hair field wherever it is the larger of the two, and the Beer-Lambert
+  // path factor below drives it to ~1 over the inner HALF of the coat at
+  // grazing incidence — so the outline the eye actually read was the offset
+  // surface where that sheet ended, not hair. Two changes: the envelope stops
+  // well inside the guard hairs, and where it stops is jittered per clump and
+  // per strand, so its boundary is ragged at tuft scale instead of being a
+  // parallel copy of the mesh.
+  float fillTop = shellFill * uFillTop *
+                  (1.0 - uFillJitter + 2.0 * uFillJitter * mix(cRand, sRand, 0.42));
+  float fill = 1.0 - smoothstep(fillTop * 0.38, fillTop, t);
 
   // ---- the tuft --------------------------------------------------------
   // Each clump is a CONE: wide enough at the root to cover the skin, narrowing
@@ -653,7 +693,7 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
-  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask(position, furLength * uCoatScale * ra.y));
+  vP0   = vec4(t, rb.z, aFurAO, ra.x * furSkinMask2(position, furLength * uCoatScale * ra.y).y);
   vP1   = vec4(rb.x, rb.y, ra.w, L);
 
   vec4 mvPosition = viewMatrix * wp;
@@ -692,7 +732,23 @@ void main(){
 
 ${isShell ? /* glsl */ `
   // Bind-space pixel footprint — the LOD signal for every noise scale.
-  float px = max(length(fwidth(vRoot)), 1e-7);
+  //
+  // MINOR axis of the screen-space Jacobian, not its length. fwidth() measures
+  // the footprint ALONG THE SURFACE, which diverges at grazing incidence: at
+  // the silhouette one pixel covers centimetres of skin, so every octaveFade()
+  // in the hair field returned 0 and `a = mix(mean, a, sLod)` replaced the
+  // strands with their analytic mean coverage — pi*r*r — a smooth function of
+  // depth alone. The clump `tuft` term collapsed to 1.0 for the same reason.
+  // The shells' outline was therefore an offset surface with no hair in it:
+  // measured on a coat-alpha coverage pass, the shells alone rendered the
+  // silhouette as a graded smear (the user's "milky translucent sheet with
+  // hair streaks"), while the cards alone rendered individual hairs.
+  //
+  // The hair field is a VOLUME, so the filter width that matters is the
+  // pixel's own size, not the surface's foreshortening of it. The minor axis
+  // is that size: identical face-on, and it no longer blows up edge-on.
+  vec3  ddx = dFdx(vRoot), ddy = dFdy(vRoot);
+  float px = max(min(length(ddx), length(ddy)), 1e-7);
   float shellFill = clamp(0.34 + 3.6 / max(uShellCount, 1.0), 0.34, 0.80);
 
   // Per-fragment shell-depth dither.
@@ -922,7 +978,7 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
-  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask(position, furLength * uCoatScale * ra.y));
+  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask2(position, furLength * uCoatScale * ra.y).y);
   vP1   = vec4(rb.x, rb.y, ra.w, L);
   vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));
@@ -987,8 +1043,22 @@ void main(){
   // almost everywhere, including the rim we need broken up. The global floor
   // of 0.17 therefore hides the ear fringe at exactly the framing that scans
   // it. Flat, thin parts get their own higher floor.
+  //
+  // Gate the card's ROOT, not its TIP. vEdge is 1 - |dot(surfaceNormal, view)|,
+  // so on a flat plate seen face-on — the ear pinna at every head-on framing —
+  // it is low over the whole plate INCLUDING the rim, and the gate was hiding
+  // exactly the fringe that has to break that outline. Measured on a coverage
+  // pass, the frontal ear silhouette was a bare, facetted mesh triangle.
+  //
+  // The fix is not a higher floor. That was tried, it makes cards ~70% opaque
+  // face-on, and it lays a solid mat over the pinna which reads HARDER than
+  // the shells did. Instead, soften the falloff toward the tip: a card's root
+  // is buried in the shells and contributes nothing but cost, while its tip is
+  // the only part that can ever be over sky.
   float innerFloor = max(uCardInner, vCard.w);
-  float edge = mix(innerFloor, 1.0, pow(clamp(vEdge, 0.0, 1.0), 2.6));
+  float tipOut = smoothstep(uCardTip, 1.0, v);
+  float edge = mix(innerFloor, 1.0,
+                   pow(clamp(vEdge, 0.0, 1.0), mix(2.6, 0.60, tipOut)));
   a *= edge * uCardOpacity * vP0.w;
   if (a < 0.004) discard;
 

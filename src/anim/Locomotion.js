@@ -41,7 +41,7 @@
  */
 import * as THREE from 'three';
 import {
-  clamp, saturate, lerp, smoothstep, smootherstep, damp, wrapPi, TAU, fbm1, hash11,
+  clamp, saturate, lerp, smoothstep, smootherstep, damp, spring, wrapPi, TAU, fbm1, hash11,
 } from '../util/math.js';
 
 /** Height at which horizontal swing motion is permitted (audit band is 22 mm). */
@@ -76,24 +76,42 @@ export const GAITS = {
     speed: 0, cycle: 1.0, duty: 1.0,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
     lift: 0.030, drop: 0.018, track: 1.02, sink: 0.017, uLift: 0.17, uPlant: 0.74,
-    press: 0.13, bob: 0.0, bobBeats: 2, sway: 0.0, pitch: 0,
+    press: 0.13, bob: 0.0, bobBeats: 2, sway: 0.0, swayBeat: 0, pitch: 0,
     scapula: 0, spineFlex: 0, yawSway: 0,
+    flight: 0, impact: 0.0,
   },
   // Lateral-sequence walk: LH → LF → RH → RF, evenly spaced.
+  //
+  // MEASURED, and the reason the animal read as bulky: the commanded bob was
+  // 5.5 mm peak-to-peak and the damper below delivered 46% of it, so a
+  // walking fox's centre of mass rose and fell ONE MILLIMETRE per stride.
+  // `audit.mjs` cannot see this — every one of its 98 assertions is about
+  // where the FEET are, and the feet were always right. Mass that never
+  // leaves the ground is exactly what "heavy and inert" looks like.
   walk: {
-    speed: 0.70, cycle: 0.520, duty: 0.610,
+    speed: 0.70, cycle: 0.520, duty: 0.640,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.048, drop: 0.030, track: 0.97, sink: 0.018, uLift: 0.17, uPlant: 0.74,
-    press: 0.17, bob: 0.0055, bobBeats: 2, sway: 0.0075, pitch: -0.9,
+    lift: 0.048, drop: 0.024, track: 0.97, sink: 0.018, uLift: 0.17, uPlant: 0.74,
+    press: 0.17, bob: 0.0130, bobBeats: 2, sway: 0.0092, swayBeat: 0.0016, pitch: -0.2,
+    vault: true,
     scapula: 11, spineFlex: 5.0, yawSway: 1.6,
+    flight: 0, impact: 0.0055,
   },
-  // Trot: diagonal pairs, brief suspension between them.
+  // Trot: diagonal pairs, brief suspension between them. A trot is the
+  // PROUDEST gait a canid has — level topline, head up, brisk. It was the
+  // second-lowest carriage here (withers 197 mm against 219 at a walk),
+  // which is what made all three moving states read as one crouched slink.
   trot: {
-    speed: 1.60, cycle: 0.400, duty: 0.360,
+    // Stance excursion is speed×cycle×duty = 236 mm (±118) and the forelimb
+    // has sqrt(192² − 138²) = 134 mm of horizontal reach at this ride
+    // height, so the 22 mm of body lift below is paid for out of duty and
+    // speed rather than out of the foot lock.
+    speed: 1.55, cycle: 0.400, duty: 0.380,
     offsets: { RL: 0, FR: 0, RR: 0.5, FL: 0.5 },
-    lift: 0.062, drop: 0.046, track: 0.96, sink: 0.019, uLift: 0.12, uPlant: 0.88,
-    press: 0.22, bob: 0.0125, bobBeats: 2, sway: 0.0045, pitch: -1.6,
+    lift: 0.062, drop: 0.024, track: 0.96, sink: 0.019, uLift: 0.12, uPlant: 0.88,
+    press: 0.22, bob: 0.0255, bobBeats: 2, sway: 0.0050, swayBeat: 0.0042, pitch: 0.4,
     scapula: 15, spineFlex: 7.0, yawSway: 0.8,
+    flight: 0.7, impact: 0.0115,
   },
   // Rotary gallop: LH → RH → RF → LF, with a gathered and an extended
   // suspension. The one canids actually use at speed.
@@ -103,11 +121,25 @@ export const GAITS = {
     // this planner is ~1.8 m/s: above it the reach backstop saturates its cap
     // and the forelimb starts missing targets, which is sliding. See the
     // note on `plantBias` for what was tried and rejected.
-    speed: 2.00, cycle: 0.320, duty: 0.315,
-    offsets: { RL: 0, RR: 0.135, FR: 0.45, FL: 0.585 },
-    lift: 0.075, drop: 0.052, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
-    press: 0.30, bob: 0.015, bobBeats: 1, sway: 0.004, pitch: -2.6,
-    scapula: 24, spineFlex: 10.0, yawSway: 0.5,
+    //
+    // `flight` is what lifts the cap. The limiting quantity is not speed, it
+    // is STRIDE: reach runs out because `speed × cycle × duty` of stance
+    // excursion has to fit inside a 192 mm forelimb. A genuine suspension
+    // phase buys distance the legs never have to reach for — the body flies
+    // it — so the same limb covers a longer stride at a higher speed.
+    // Re-timed for a real extended suspension. Support windows at these
+    // offsets are RL[0,.25] RR[.10,.35] FR[.42,.67] FL[.52,.77], leaving a
+    // gathered gap of 0.07 and an EXTENDED gap of 0.23 — 78 ms with nothing
+    // on the ground, against 34 ms before. Stance excursion is
+    // speed×cycle×duty = 221 mm (±110), a hair over the ±101 mm the old
+    // 2.0 m/s tune measured as its reach ceiling, and the lower duty is
+    // what pays for the extra speed.
+    speed: 2.60, cycle: 0.340, duty: 0.250,
+    offsets: { RL: 0, RR: 0.10, FR: 0.42, FL: 0.52 },
+    lift: 0.078, drop: 0.050, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
+    press: 0.30, bob: 0.030, bobBeats: 1, sway: 0.004, swayBeat: 0.0022, pitch: -3.4,
+    scapula: 24, spineFlex: 15.0, yawSway: 0.5,
+    flight: 1.0, impact: 0.0190,
   },
 };
 
@@ -211,6 +243,11 @@ export class Locomotion {
     // worse — the touchdown end is what saturates — and biasing back (0.34)
     // was worse again. Left as a knob, but do not re-litigate it blind.
     this.plantBias = 0.5;
+    this.gBob = 0;
+    this.gSway = 0;
+    this.gSwayBeat = 0;
+    this.gFlight = 0;
+    this.gImpact = 0;
 
     this.phase = 0;
     this.frozen = true;                  // phase clock stopped (standing)
@@ -234,7 +271,29 @@ export class Locomotion {
     // Body descriptors consumed by FoxBrain.
     this.bodyDrop = GAITS.idle.drop;
     this.bob = 0;
+    this.bobS = { v: 0 };
     this.sway = 0;
+    this.swayS = { v: 0 };
+    /**
+     * Ground reaction. Every footfall drives a velocity impulse into this
+     * spring: the trunk compresses onto the loaded limb and rebounds. It is
+     * the difference between a body that is *carried* over the legs and one
+     * that is *thrown* between them, and nothing in the rig expressed it
+     * before — `f.impact` existed but only ever reached the snow-press depth.
+     */
+    this.impactY = 0;
+    this.impactYs = { v: 0 };
+    this.impactRoll = 0;
+    this.impactRollS = { v: 0 };
+    /** Ballistic suspension lift (metres). Zero except mid-flight. */
+    this.flight = 0;
+    this.flightAmp = 0;
+    this.inFlight = false;
+    this.flightU = 0;
+    /** Post-halt settle: a short fore/aft weight rock as the animal arrives. */
+    this.settleT = -1;
+    this.settle = 0;
+    this.settlePitch = 0;
     this.bodyPitch = 0;
     this.bodyRoll = 0;
     this.pelvisYaw = 0;
@@ -316,6 +375,11 @@ export class Locomotion {
       this.uPlant = g.uPlant ?? U_PLANT;
       this.swingEase = g.swingEase ?? 0;
       this.plantBias = g.plantBias ?? 0.5;
+      this.gBob = g.bob ?? 0;
+      this.gSway = g.sway ?? 0;
+      this.gSwayBeat = g.swayBeat ?? 0;
+      this.gFlight = g.flight ?? 0;
+      this.gImpact = g.impact ?? 0;
       for (const f of this.feet) f.offset = f.offsetTarget;
     }
     if (g.speed > 0) this.frozen = false;
@@ -395,14 +459,29 @@ export class Locomotion {
     this.uPlant = damp(this.uPlant, g.uPlant ?? U_PLANT, r, h);
     this.swingEase = damp(this.swingEase, g.swingEase ?? 0, r, h);
     this.plantBias = damp(this.plantBias, g.plantBias ?? 0.5, r, h);
+    this.gBob = damp(this.gBob, g.bob ?? 0, r, h);
+    this.gSway = damp(this.gSway, g.sway ?? 0, r, h);
+    this.gSwayBeat = damp(this.gSwayBeat, g.swayBeat ?? 0, r, h);
+    this.gFlight = damp(this.gFlight, g.flight ?? 0, r, h);
+    this.gImpact = damp(this.gImpact, g.impact ?? 0, r, h);
     for (const f of this.feet) {
       f.offset = f.offset + wrapPi((f.offsetTarget - f.offset) * TAU) / TAU * (1 - Math.exp(-r * h));
       f.offset = f.offset - Math.floor(f.offset);
     }
 
     // --- speed / heading --------------------------------------------------
-    this.speed = damp(this.speed, this.speedTarget, 2.6, h);
+    // Asymmetric: an animal accelerates against its own inertia and stops
+    // against the ground, which is far more authoritative. A single rate made
+    // the halt a long coast with nothing to look at.
+    const prevSpeed = this.speed;
+    const accelRate = this.speedTarget > this.speed ? 2.6 : 5.2;
+    this.speed = damp(this.speed, this.speedTarget, accelRate, h);
     if (this.speed < 1e-4) this.speed = 0;
+    // Arrival: fire the settle exactly once, as the last stride is spent.
+    if (prevSpeed > 0.10 && this.speed <= 0.10 && this.speedTarget < 1e-4) {
+      this.settleT = 0;
+      this.settleAmp = clamp(prevSpeed * 0.55, 0.15, 1);
+    }
     const prevYaw = this.yaw;
     this.yaw = this.yaw + wrapPi(this.yawTarget - this.yaw) * (1 - Math.exp(-2.2 * h));
     this.yawRate = h > 0 ? wrapPi(this.yaw - prevYaw) / h : 0;
@@ -415,7 +494,14 @@ export class Locomotion {
     // --- phase clock ------------------------------------------------------
     // Keep cycling while anything is still in the air even after the brain
     // has asked for a halt, so a foot never "lands" mid-swing.
-    const wantMove = this.speedTarget > 1e-4;
+    // MEASURED DEFECT (nothing in audit.mjs samples a transition, so this had
+    // never been seen): freezing on `speedTarget` alone stopped the feet
+    // stepping 0.34 s after the halt command while the body coasted on until
+    // 1.63 s. For 1.3 s the animal slid forward with all four paws pinned —
+    // 146 mm of skid — and the reach backstop SATURATED at its 80 mm cap
+    // trying to keep the legs attached, flattening the fox into a squat.
+    // Keep the clock running until the animal has genuinely arrived.
+    const wantMove = this.speedTarget > 1e-4 || this.speed > 0.045;
     let anySwing = false;
     for (const f of this.feet) if (!f.stance && f.shuffleT < 0) anySwing = true;
     if (wantMove || anySwing) {
@@ -480,6 +566,12 @@ export class Locomotion {
         f.liftN.copy(f.normal);
         f.justLanded = true;
         f.impact = clamp(0.35 + this.speed * 0.55, 0.3, 1.3);
+        // Kick the trunk spring. Front feet take more of the landing than
+        // hinds, and the roll goes toward whichever side caught the weight.
+        const kick = this.gImpact * (0.45 + 0.55 * saturate(this.speed / 1.8))
+          * (f.limb.front ? 1.0 : 0.72);
+        this._impulseY = (this._impulseY || 0) + kick * 70;
+        this._impulseR = (this._impulseR || 0) + Math.sign(f.bodyX) * kick * 9;
         f.pressedDepth = 0;
         f.planted = true;
       } else if (!stance && f.stance) {
@@ -588,9 +680,68 @@ export class Locomotion {
     for (const f of this.feet) sum += f.loadRaw;
     for (const f of this.feet) f.load = sum > 1e-4 ? f.loadRaw / sum : 0.25;
     this.airborne = nAir / this.feet.length;
+    this._flightWindow(h);
+    // The paws go up with the body. Without this the trunk rises off a set of
+    // targets pinned to the snow, the hip→ankle distance grows by the whole
+    // arc, and the reach backstop immediately cancels the suspension it was
+    // asked to produce. `flight` is zero at both ends of the window, so the
+    // commanded touchdown profile is untouched.
+    if (this.flight > 1e-5) for (const f of this.feet) if (!f.stance) f.target.y += this.flight;
 
     this._pressSnow(ctx);
     this._bodyMotion(h, ctx);
+  }
+
+  // ------------------------------------------------------------ suspension --
+
+  /**
+   * Ballistic suspension. While nothing is on the ground the centre of mass
+   * has no choice about its trajectory, so this is derived, not authored:
+   * measure the length of the zero-support window in seconds and use the only
+   * arc that fits it, h = g·T²/8.
+   *
+   * That is deliberately a small number — 78 ms of flight is 7.5 mm of rise,
+   * and an authored 50 mm "suspension" would be a 3.5 g parabola, i.e. a
+   * twitch. The visible drama of a gallop is not the parabola; it is the
+   * spine gathering and extending around it and the limbs cycling under a
+   * body that is, briefly, unsupported. This term's job is to put the peak of
+   * the centre of mass at the right INSTANT, and to be honest about its size.
+   *
+   * The window end is found analytically from the touchdown offsets rather
+   * than by integrating, so `flight` is exactly zero at both ends: a foot
+   * never lands against a body that is still rising.
+   */
+  _flightWindow(h) {
+    const G = 9.81;
+    const flying = this.airborne >= 0.999 && !this.frozen && this.gFlight > 1e-3;
+    if (flying && !this.inFlight) {
+      // Phase distance to the next touchdown, over all four limbs.
+      let span = 1;
+      for (const f of this.feet) {
+        let d = f.offset - this.phase;
+        d -= Math.floor(d);
+        if (d > 1e-5 && d < span) span = d;
+      }
+      const T = span * Math.max(0.05, this.cycle);
+      this.flightSpan = Math.max(1e-3, span);
+      this.flightFrom = this.phase;
+      this.flightAmp = Math.min(0.045, G * T * T / 8) * this.gFlight;
+      this.inFlight = true;
+    } else if (!flying) {
+      this.inFlight = false;
+      this.flightAmp = 0;
+    }
+
+    if (this.inFlight) {
+      let d = this.phase - this.flightFrom;
+      d -= Math.floor(d);
+      this.flightU = clamp(d / this.flightSpan, 0, 1);
+      this.flight = this.flightAmp * Math.sin(Math.PI * this.flightU);
+    } else {
+      // Never snap: a gait blend can drop out of flight mid-arc.
+      this.flight = damp(this.flight, 0, 26, h);
+      this.flightU = 0;
+    }
   }
 
   // ------------------------------------------------------------ footprints --
@@ -623,6 +774,30 @@ export class Locomotion {
   // ----------------------------------------------------------- body motion --
 
   /**
+   * Peak-to-peak range of the support signal over one cycle, for the live
+   * duty and touchdown offsets. Sampled rather than derived so it stays right
+   * mid-blend between two gaits, when the duty is a real number and the
+   * offsets are all in motion.
+   */
+  _supportRange() {
+    const d = this.frozen ? 1 : this.duty;
+    let lo = 1, hi = 0;
+    for (let i = 0; i < 48; i++) {
+      const p = i / 48;
+      let n = 0;
+      for (const f of this.feet) {
+        let x = p - f.offset;
+        x -= Math.floor(x);
+        if (x < d) n++;
+      }
+      const sup = n / this.feet.length;
+      if (sup < lo) lo = sup;
+      if (sup > hi) hi = sup;
+    }
+    return { mid: (lo + hi) * 0.5, half: Math.max(0.06, (hi - lo) * 0.5) };
+  }
+
+  /**
    * Gait-driven trunk motion. The girdle counter-rotations are derived from
    * where the feet actually are rather than from authored phase offsets, so
    * they stay correct through gait blends and turns for free.
@@ -651,16 +826,65 @@ export class Locomotion {
     // target out of reach and made the reach backstop yank the whole body
     // down 33 mm every stride. Support-driven, it is in phase by
     // construction, for every gait, including mid-blend between two.
+    //
+    // TWO MEASURED BUGS LIVED HERE, and between them they are most of why the
+    // animal read as bulky rather than bouncy.
+    //
+    // 1. The raw support signal was normalised by `meanSupport`, which is not
+    //    its range — so the delivered amplitude was an arbitrary fraction of
+    //    the authored one (0.39× at a walk). `_supportRange` measures the
+    //    actual swing of the signal for the live duty and offsets, so `g.bob`
+    //    now means peak-to-peak millimetres and nothing else.
+    // 2. `damp(..., 14, h)` is a first-order lag with τ = 71 ms sitting on a
+    //    signal whose period is 200 ms at a trot. Measured attenuation was
+    //    0.458 / 0.471 / 0.412 at walk / trot / run: over half the commanded
+    //    bounce was being thrown away by the smoother, and what survived
+    //    arrived ~40 ms late. That is the mechanism behind BOTH complaints at
+    //    once — "not bouncy" is the lost amplitude and "noticeable lag" is
+    //    the phase. A second-order spring at ω = 108 tracks a 5 Hz drive at
+    //    ~0.95 with ~16 ms of lag, and its slight overshoot is the thing that
+    //    reads as springy in the first place.
     const support = 1 - this.airborne;
-    const meanSupport = clamp(this.duty, 0.15, 1);
-    const bobT = -g.bob * ((support - meanSupport) / meanSupport) * moving;
-    this.bob = damp(this.bob, bobT, 14, h);
+    const sr = this._supportRange();
+    const bobNorm = (support - sr.mid) / sr.half;
+    // Walks VAULT (the centre of mass rises over a planted limb); trots and
+    // gallops BOUNCE (it falls into stance and is thrown out of it). The old
+    // code applied the bouncing sign to all three.
+    const bobT = clamp((g.vault ? 1 : -1) * this.gBob * 0.5 * bobNorm * moving, -0.06, 0.06);
+    this.bobCmd = bobT;                  // published so a probe can measure the spring's loss
+    this.bob = clamp(spring(this.bob, bobT, this.bobS, 108, 0.86, h), -0.075, 0.075);
 
-    // Sway toward the supported side: positive bodyX-weighted load.
+    // --- ground reaction --------------------------------------------------
+    // Each footfall kicks the trunk spring. This is the only place in the rig
+    // where a contact event does anything to the BODY; before it, `f.impact`
+    // fed the snow-press depth and stopped there, so the animal absorbed
+    // every landing perfectly and therefore looked weightless AND inert.
+    const IMP_W = 44, IMP_Z = 0.52;
+    if (this._impulseY) { this.impactYs.v -= this._impulseY; this._impulseY = 0; }
+    if (this._impulseR) { this.impactRollS.v += this._impulseR; this._impulseR = 0; }
+    this.impactY = clamp(spring(this.impactY, 0, this.impactYs, IMP_W, IMP_Z, h), -0.040, 0.016);
+    this.impactRoll = clamp(spring(this.impactRoll, 0, this.impactRollS, 30, 0.58, h), -0.09, 0.09);
+
+    // --- arrival settle ---------------------------------------------------
+    // §8: a real animal does not simply stop — the mass it was carrying
+    // forward has to be put down. One damped fore/aft rock, ~0.7 s.
+    if (this.settleT >= 0) {
+      this.settleT += h;
+      const k = Math.exp(-5.4 * this.settleT) * (this.settleAmp ?? 0.5);
+      this.settle = k * Math.sin(TAU * 2.1 * this.settleT);
+      this.settlePitch = k * 0.055 * Math.cos(TAU * 2.1 * this.settleT - 0.5);
+      if (this.settleT > 1.1) { this.settleT = -1; this.settle = 0; this.settlePitch = 0; }
+    }
+
+    // Sway toward the supported side: positive bodyX-weighted load. In a
+    // SYMMETRIC gait the two sides cancel identically — measured sway at a
+    // trot was 0.00 mm — so the load split carries the asymmetric part and a
+    // stride-rate harmonic carries the symmetric one, exactly as `spineFlex`
+    // already does for the sagittal plane.
     let swayT = 0;
     for (const f of this.feet) swayT += f.load * Math.sign(f.bodyX);
-    swayT *= g.sway;
-    this.sway = damp(this.sway, swayT, 16, h);
+    swayT = swayT * this.gSway + Math.sin(TAU * this.phase) * this.gSwayBeat * moving;
+    this.sway = spring(this.sway, swayT, this.swayS, 74, 0.90, h);
 
     // --- girdle counter-rotation from real foot positions -----------------
     const hindAdv = RR.bodyZ - RL.bodyZ;          // >0: right hind protracted
@@ -700,13 +924,13 @@ export class Locomotion {
     // a damper at 16 was attenuating it to 45% before it ever reached a bone.
     this.spineFlex = damp(this.spineFlex, flexT, 30, h);
 
-    // Whole-body attitude: terrain + a nose-down lean with speed.
+    // Whole-body attitude: terrain + a per-gait lean, plus the arrival rock.
     const pitchT = -terrainPitch * 0.8 + (g.pitch * Math.PI / 180) * moving
       - clamp(this.speed - this.speedTarget, -0.6, 0.6) * 0.06;
-    this.bodyPitch = damp(this.bodyPitch, pitchT, 10, h);
+    this.bodyPitch = damp(this.bodyPitch, pitchT, 14, h) + this.settlePitch;
     // Bank into turns like an animal, not a vehicle: inside shoulder down.
     const rollT = terrainRoll * 0.85 + clamp(this.yawRate, -2.5, 2.5) * 0.085 * moving;
-    this.bodyRoll = damp(this.bodyRoll, rollT, 10, h);
+    this.bodyRoll = damp(this.bodyRoll, rollT, 14, h) + this.impactRoll;
 
     const yawSwayT = (g.yawSway * Math.PI / 180) * Math.sin(TAU * this.phase) * moving;
     this.yawSway = damp(this.yawSway, yawSwayT, 18, h);

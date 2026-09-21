@@ -139,26 +139,57 @@ const STATES = {
     drop: -0.005, look: 1.0, frontIK: 1, hindIK: 1,
     pose: { neck01: [-7, 0, 0], neck02: [-8.5, 0, 0], head: [-2, 0, 0], spine04: [-2, 0, 0], spine03: [-1, 0, 0] },
   },
+  // --- the three moving carriages ---------------------------------------
+  // REVIEW-2: "walk, trot and run share one body carriage: crouched, low,
+  // forward-leaning... run-profile reads as SLINKING." Measured, and true:
+  // withers sat at 219 / 197 / 192 mm and the withers-minus-hip topline at
+  // 13.5 / 18.4 / 18.6 mm, i.e. the animal simply got lower as it got
+  // faster and never changed its attitude. Height is bought in `GAITS.drop`
+  // (it trades against the foot lock, so it is bought carefully); ATTITUDE
+  // is bought here, and costs nothing.
+  //
+  // Sign convention, measured off `alert`: NEGATIVE neck X carries the head
+  // UP. Positive drops it.
+  //
+  // walk  ambling. Topline level, head carried easily, no urgency.
   walk: {
     gait: 'walk', alert: 0.50, exert: 0.17, settled: 0,
-    tailLift: 0.60, tailCurl: -0.30, tailStiff: 1.05,
+    tailLift: 0.60, tailCurl: -0.30, tailStiff: 0.92,
     ears: { x: -0.045, y: 0.100, z: 0.010 },
     drop: 0, look: 0.62, frontIK: 1, hindIK: 1,
-    pose: { neck01: [-2, 0, 0], neck02: [-2, 0, 0] },
+    pose: {
+      neck01: [-5.5, 0, 0], neck02: [-6, 0, 0], head: [1.5, 0, 0],
+      spine01: [-1.0, 0, 0], spine02: [-0.8, 0, 0],
+    },
   },
+  // trot  the PROUDEST gait a canid owns. Head and neck up, topline level
+  //       and carried, a brisk business-like attitude. This is the one that
+  //       was furthest from the truth.
   trot: {
     gait: 'trot', alert: 0.62, exert: 0.46, settled: 0,
-    tailLift: 0.82, tailCurl: -0.24, tailStiff: 1.25,
-    ears: { x: -0.075, y: 0.120, z: -0.030 },
-    drop: 0, look: 0.45, frontIK: 1, hindIK: 1,
-    pose: { neck01: [-3, 0, 0], neck02: [-3, 0, 0], head: [1, 0, 0] },
+    tailLift: 0.88, tailCurl: -0.20, tailStiff: 0.82,
+    ears: { x: -0.085, y: 0.130, z: -0.035 },
+    drop: -0.006, look: 0.45, frontIK: 1, hindIK: 1,
+    pose: {
+      neck01: [-13, 0, 0], neck02: [-13.5, 0, 0], head: [5, 0, 0],
+      spine01: [-2.2, 0, 0], spine02: [-1.8, 0, 0], spine03: [-1.0, 0, 0],
+      chest: [-1.6, 0, 0],
+    },
   },
+  // run   EXTENDED, not crouched. Head low and thrown forward on a long flat
+  //       neck, chest dropped between the shoulders, loin coiled. The
+  //       silhouette is a stretched line, which is the opposite reading from
+  //       the compressed one a slink has.
   run: {
     gait: 'run', alert: 0.88, exert: 1.00, settled: 0,
-    tailLift: 1.15, tailCurl: -0.27, tailStiff: 1.55,
+    tailLift: 1.05, tailCurl: -0.42, tailStiff: 0.70,
     ears: { x: 0.060, y: 0.060, z: -0.140 },
     drop: 0, look: 0.28, frontIK: 1, hindIK: 1,
-    pose: { neck01: [7, 0, 0], neck02: [5, 0, 0], head: [-7, 0, 0], jaw: [7, 0, 0] },
+    pose: {
+      neck01: [10, 0, 0], neck02: [7.5, 0, 0], head: [-9, 0, 0], jaw: [7, 0, 0],
+      spine01: [2.5, 0, 0], spine02: [1.5, 0, 0], spine04: [-2.5, 0, 0],
+      chest: [-3.5, 0, 0], hips: [3.0, 0, 0],
+    },
   },
   sit: {
     gait: 'idle', alert: 0.45, exert: 0.02, settled: 1,
@@ -686,7 +717,9 @@ export class FoxBrain {
     // --------------------------------------------------------- root motion --
     const drop = loco.bodyDrop + this.stateDrop + (this.pounceCrouch || 0) * 0.052;
     const sway = loco.sway;
-    const fwd = 0;
+    // The arrival rock: the mass the animal was carrying forward gets put
+    // down over about 0.7 s instead of simply ceasing to exist.
+    const fwd = loco.settle * 0.014;
     // Idle weight transfer moves the ROOT TRANSFORM, not the root bone.
     // Putting it on the bone meant the animal's centre of mass never
     // translated: a 3 s idle probe measured root displacement of exactly
@@ -699,7 +732,11 @@ export class FoxBrain {
     const shakeYaw = life.shake * 0.11 * Math.sin(this.t * 43);
     const shakeRoll = life.shake * 0.16 * Math.sin(this.t * 43 + 1.2);
 
-    rig.offset('root', sway, loco.bob - drop + (loco.airLift || 0) * 0, fwd);
+    // bob      gait bounce (vault at a walk, spring-mass at trot/gallop)
+    // flight    ballistic rise while nothing is on the ground
+    // impactY   ground reaction: compression on each footfall, then rebound
+    rig.offset('root', sway,
+      loco.bob + loco.flight + loco.impactY - drop + (loco.airLift || 0) * 0, fwd);
     rig.add('root', loco.bodyPitch, loco.yawSway + shakeYaw, loco.bodyRoll + shakeRoll);
 
     // Rotating the root bone about the ground would swing the whole animal

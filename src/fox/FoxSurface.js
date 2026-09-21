@@ -162,6 +162,7 @@ export async function buildFoxSurface(skeleton, {
     // The concha is carved by a subtraction, and subtractions own no surface,
     // so `earInner` would never be assigned from primitives alone. Split the
     // pinna by which way the surface faces instead.
+    let earRim = 0;
     if (reg === R.earOuter) {
       const sx = x >= 0 ? 1 : -1;
       const dot = nx * EAR_NORMAL[0] * sx + ny * EAR_NORMAL[1] + nz * EAR_NORMAL[2];
@@ -171,6 +172,15 @@ export async function buildFoxSurface(skeleton, {
         stiff = stiff + (FUR[R.earInner][1] - stiff) * w;
         if (w > 0.5) reg = R.earInner;
       }
+      // The RIM is where the pinna faces edge-on: neither the outer face nor
+      // the concha, but the band between them, and it is precisely the band
+      // that draws the ear's outline. A per-region coat length cannot single
+      // it out because it is not a region — it is an orientation. Left at the
+      // pinna's average depth it renders as the hardest line on the animal
+      // (user 2x crop: a stair-stepped blue-grey cutout). A real winter fox
+      // carries a heavy fringe here, sweeping up the leading edge, and that
+      // fringe is the thing that breaks the ear silhouette.
+      earRim = 1 - smoothstep(0.04, 0.42, Math.abs(dot));
     }
 
     // --- pinna coat shortens toward the tip --------------------------------
@@ -181,6 +191,14 @@ export async function buildFoxSurface(skeleton, {
     if (reg === R.earOuter || reg === R.earInner) {
       const t = saturate((y - EAR_SPAN.baseY) / (EAR_SPAN.tipY - EAR_SPAN.baseY));
       len *= 1.0 - 0.64 * t;
+      // Rim fringe, applied AFTER the tip taper so the fringe tapers with the
+      // pinna and the §4c wedge survives. Softer than the pinna face too: a
+      // stiff fringe reads as bristle, and on the reference animal this hair
+      // is long, fine and combed along the edge.
+      if (earRim > 0) {
+        len *= 1 + 1.55 * earRim;
+        stiff -= 0.22 * earRim;
+      }
     }
 
     // --- throat ------------------------------------------------------------
@@ -202,7 +220,7 @@ export async function buildFoxSurface(skeleton, {
     // which is about the leg TOP, not the joint.
     if (reg === R.legHindUpper || reg === R.hock ||
         reg === R.legFrontUpper || reg === R.legFrontLower) {
-      len *= 0.55 + 0.45 * smoothstep(0.055, 0.150, y);
+      len *= 0.68 + 0.32 * smoothstep(0.055, 0.150, y);
     }
 
     // Never let a hair point into the body.
