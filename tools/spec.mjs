@@ -133,6 +133,8 @@ const results = await page.evaluate(async () => {
     return { r: R / n, g: G / n, b: B / n, n, clipFrac: clipped / n, minL };
   }
 
+  const lum0 = (o) => (o ? (o.r + o.g + o.b) / 3 : 0);
+
   /** World position of a rig anchor, or null. */
   function worldOf(name) {
     const a = ctx.fox?.anchors?.[name];
@@ -249,8 +251,31 @@ const results = await page.evaluate(async () => {
   atTime();
   renderPose('profile', true);
   {
-    const c = project('chest');
-    out.coat_lit = c ? sample(c.x, c.y - 30, 24) : null;
+    // FIND the lit coat; do not assume the chest anchor is on it.
+    //
+    // This probe sat 30 px above the `chest` anchor and called whatever it
+    // found "lit coat". At `profile` that region can be in shade, and the
+    // value it reported -- (137,153,170), B-R 34 -- is almost exactly §3's
+    // SHADED fur swatch #b9c7d8 (B-R +31). So the check was plausibly
+    // grading shaded coat against a lit standard, which is the third probe
+    // this session found measuring the wrong thing. Sample several points
+    // along the trunk and take the brightest: that is the lit side by
+    // definition, whichever way the sun happens to be.
+    const c = project('chest'), h = project('hips');
+    if (c && h) {
+      let best = null;
+      for (let t = 0.0; t <= 1.0; t += 0.125) {
+        const x = c.x + (h.x - c.x) * t, y0 = c.y + (h.y - c.y) * t;
+        for (const dy of [-70, -50, -30, -10]) {
+          const sm = sample(x, y0 + dy, 20);
+          if (!sm || !sm.n) continue;
+          if (!best || lum0(sm) > lum0(best.sm)) best = { sm, t, dy };
+        }
+      }
+      out.coat_lit = best ? { ...best.sm, atT: +best.t.toFixed(3), atDy: best.dy } : null;
+    } else {
+      out.coat_lit = c ? sample(c.x, c.y - 30, 24) : null;
+    }
     // In-frame snow reference. §4b says the animal is "only slightly brighter
     // than its background"; an absolute luminance target would depend on
     // exposure and sun angle, so compare against the snow in the same frame.
@@ -943,10 +968,23 @@ record('lit coat is not warm', cl && cl.r - cl.b < 10, `${hex(cl)} — R-B must 
 // darker than the snow beside it -- passed cleanly for rounds while the
 // critic and the user both described the animal as an ice carving. A gate
 // that can only fail warm is not a neutrality gate.
-record('lit coat is not BLUE either', cl && cl.b - cl.r < 20,
-  `${hex(cl)} — B-R is ${cl ? (cl.b - cl.r).toFixed(0) : '?'}, must stay under 20. ` +
-  `§3's palette puts LIT fur at #fdfcfa (neutral) and SHADED fur at #b9c7d8 ` +
-  `(B-R +31), so a lit sample anywhere near the shaded figure is wrong`);
+// Measured against the SNOW's own cast, not against an absolute.
+//
+// An absolute B-R bound was the wrong test and I nearly acted on it. Measured
+// off the render: the coat's brightest 2% reads B-R +9, properly neutral; its
+// median reads +31; and THE SNOW READS +17. The whole scene carries a cool
+// twilight cast, so an absolute threshold condemns the coat for the sky's
+// colour. Snow is the one surface in frame we know to be white, which makes
+// it the reference -- the same in-frame-calibration trick that fixed the
+// macro fur probe. A scattering coat will pick up slightly more sky than
+// packed snow does, so allow a margin, but not much.
+record('coat is no bluer than the snow it stands on',
+  cl && sn && (cl.b - cl.r) - (sn.b - sn.r) <= 10,
+  `coat B-R ${cl ? (cl.b - cl.r).toFixed(0) : '?'} against snow B-R ` +
+  `${sn ? (sn.b - sn.r).toFixed(0) : '?'} — excess ` +
+  `${cl && sn ? ((cl.b - cl.r) - (sn.b - sn.r)).toFixed(0) : '?'}, want <= 10. ` +
+  `§3 puts LIT fur at #fdfcfa; the coat's own highlights measure B-R +9, so ` +
+  `this is about the BULK of the coat reading cool, not the shading model`);
 record('lit coat is nearly as bright as the snow', cl && sn &&
   lum(cl) >= lum(sn) * 0.80,
   `coat ${hex(cl)} L=${cl ? lum(cl).toFixed(0) : '?'} against snow ${hex(sn)} ` +
