@@ -909,27 +909,77 @@ const results = await page.evaluate(async () => {
     }
   }
 
-  // 11. AURORA STRUCTURE — §7 asks for vertical filaments. Restraint achieved
-  //     by fading the aurora to nothing also passes a brightness test, so
-  //     measure the RATIO of horizontal to vertical gradient energy in the sky.
-  //     Vertical filaments produce strong horizontal gradients.
+  // 11. AURORA STRUCTURE — §7 asks for vertical filaments.
+  //
+  //     Measured on GREEN EXCESS, not luminance, and only where the aurora
+  //     actually is.
+  //
+  //     The first version took horizontal-over-vertical gradient energy of
+  //     LUMINANCE over the top 45% of the frame, and the critic showed it
+  //     passing at 1.039 on an aurora that is unambiguously three horizontal
+  //     smears. Of course it did: that region contains the sun disc, its glow
+  //     column, the stars, and the sky's own strong vertical ramp. The aurora
+  //     contributed a small fraction of the gradient energy being divided.
+  //
+  //     The aurora is the only green thing in the sky, so `G - (R+B)/2`
+  //     isolates it almost perfectly, and thresholding that also gives a mask
+  //     of where it is. Validated with a positive control: hiding the aurora
+  //     group must collapse the mask, or the mask is not finding the aurora.
   {
   atTime();
-    renderPose('aurora', false);
-    const g = grab();
-    const d = c2.getImageData(0, 0, g.w, Math.round(g.h * 0.45)).data;
-    const W = g.w, H = Math.round(g.h * 0.45);
-    let gx = 0, gy = 0, n = 0;
-    for (let y = 1; y < H - 1; y++) {
-      for (let x = 1; x < W - 1; x++) {
-        const i = y * W + x;
-        const c = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3;
-        const r = (d[(i + 1) * 4] + d[(i + 1) * 4 + 1] + d[(i + 1) * 4 + 2]) / 3;
-        const b2 = (d[(i + W) * 4] + d[(i + W) * 4 + 1] + d[(i + W) * 4 + 2]) / 3;
-        gx += Math.abs(r - c); gy += Math.abs(b2 - c); n++;
+    const greenField = () => {
+      const g = grab();
+      const H = Math.round(g.h * 0.45), W = g.w;
+      const d = c2.getImageData(0, 0, W, H).data;
+      const a = new Float32Array(W * H);
+      for (let i = 0; i < W * H; i++) {
+        const r = d[i * 4], gr = d[i * 4 + 1], b = d[i * 4 + 2];
+        a[i] = gr - (r + b) * 0.5;
       }
+      return { a, W, H };
+    };
+    const structure = ({ a, W, H }) => {
+      let gx = 0, gy = 0, n = 0;
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          const i = y * W + x;
+          if (a[i] < 3) continue;                    // not aurora
+          gx += Math.abs(a[i + 1] - a[i]);
+          gy += Math.abs(a[i + W] - a[i]);
+          n++;
+        }
+      }
+      return n ? { gx: gx / n, gy: gy / n, ratio: (gx / n) / Math.max(gy / n, 1e-4),
+                   px: n, frac: n / (W * H) } : { px: 0, frac: 0 };
+    };
+
+    // Test the aurora at a sun elevation where an aurora can EXIST.
+    //
+    // The atmosphere agent made the aurora fade out when the sun is up
+    // (e364d7f, "an aurora and a +6.6 degree sun cannot both be in the
+    // frame"), which is physically right and immediately made this check
+    // unmeasurable -- the green mask found 0 px. Asserting on the aurora at
+    // the default sun would either demand a physical impossibility or quietly
+    // grade an aurora that is correctly absent. Drop the sun below the horizon
+    // for this one block and restore it after.
+    const sunWas = { e: ctx.sky?.sunElevationDeg, a: ctx.sky?.sunAzimuthDeg };
+    D.setSun(-6, 140);
+    atTime();
+    renderPose('aurora', false);
+    out.auroraStructure = structure(greenField());
+    out.auroraAtSun = -6;
+
+    // Positive control: with the aurora hidden the green mask must collapse.
+    const ag = ctx.aurora?.group;
+    if (ag) {
+      const vis = ag.visible;
+      ag.visible = false;
+      atTime();
+      renderPose('aurora', false);
+      out.auroraNoneStructure = structure(greenField());
+      ag.visible = vis;
     }
-    out.auroraStructure = n ? { gx: gx / n, gy: gy / n, ratio: (gx / n) / Math.max(gy / n, 1e-4) } : null;
+    if (sunWas.e != null) D.setSun(sunWas.e, sunWas.a);
   }
 
   if (ctx.postfx) ctx.postfx.enabled = true;
@@ -1068,10 +1118,27 @@ for (const [pose, c] of Object.entries(results.nosePoses ?? {})) {
 const au = results.auroraStructure;
 // UNVALIDATED: passes at 1.048 while a critic called the aurora a
 // structureless horizontal smear. Warn only until the disagreement is settled.
-record('[unvalidated] aurora has vertical filament structure', au && au.ratio >= 0.85,
-  au ? `horizontal/vertical gradient energy ${au.ratio.toFixed(3)} ` +
-       `(gx ${au.gx.toFixed(2)}, gy ${au.gy.toFixed(2)}; < 0.85 means horizontal banding)`
-     : 'n/a', 'warn');
+const aun = results.auroraNoneStructure;
+if (!au || !au.px || !aun) {
+  record('aurora structure probe is measurable', false,
+    `green-excess mask found ${au?.px ?? 0} px` +
+    (aun ? '' : ' and no fur-off control was taken') +
+    ' — an aurora that the mask cannot find is either absent or not green');
+} else if (!(au.px > Math.max(aun.px * 4, 200))) {
+  // The control is what makes the mask trustworthy: hiding the aurora must
+  // collapse it. Without this, the first version of the check passed at
+  // 1.039 on three flat horizontal smears, because it was measuring the
+  // sun, the stars and the sky's own vertical ramp.
+  record('aurora structure probe isolates the aurora', false,
+    `green mask holds ${au.px} px with the aurora shown and ${aun.px} px with ` +
+    `it hidden — the mask must collapse by 4x or it is not finding the aurora`);
+} else {
+  record('aurora has vertical filament structure', au.ratio >= 0.85,
+    `horizontal/vertical gradient energy of GREEN EXCESS, inside the aurora ` +
+    `itself, ${au.ratio.toFixed(3)} (gx ${au.gx.toFixed(2)}, gy ` +
+    `${au.gy.toFixed(2)}; < 0.85 means horizontal banding). Mask ${au.px} px ` +
+    `against ${aun.px} px with the aurora hidden`);
+}
 
 // Per-region silhouette. The whole-animal median let a good torso mask a bald
 // head -- and the old scan locked onto the horizon in 20 of 50 columns.
