@@ -47,19 +47,19 @@ export class SnowParticles {
         // lens, which the bible forbids outright. Foreground flakes in
         // close framings are not worth either cost.
         near: [2.40, 5.00], opacity: 0.55, crystal: false, groundFade: 0.10, scatter: 1.0,
-        sheet: 0.16, sheetK: 0.30,
+        sheet: 0.16, sheetK: 0.30, heightK: 0.26,
       },
       mid: {
         share: 0.34, box: [26, 14, 26], size: 0.009, fall: 0.70,
         curlAmp: 1.70, curlFreq: 0.045, curlTime: 0.05, streak: 0.12, spin: 1.1,
         near: [2.40, 5.50], opacity: 0.60, crystal: false, groundFade: 0.18, scatter: 0.95,
-        sheet: 0.075, sheetK: 0.72,
+        sheet: 0.075, sheetK: 0.72, heightK: 0.32,
       },
       far: {
         share: 0.30, box: [62, 26, 62], size: 0.038, fall: 0.45,
         curlAmp: 0.90, curlFreq: 0.018, curlTime: 0.04, streak: 0.10, spin: 0.4,
         near: [5, 15], opacity: 0.20, crystal: false, groundFade: 0.4, scatter: 0.85,
-        sheet: 0.035, sheetK: 0.85,
+        sheet: 0.035, sheetK: 0.85, heightK: 0.42,
       },
       // Streamers skating over the surface. This is the layer that actually
       // reads as "polar wind" -- snow in the air just reads as weather.
@@ -71,7 +71,7 @@ export class SnowParticles {
         // glass. Held well back; it still reads from 2 m out, which is
         // where every body-framing pose sits.
         near: [2.40, 5.00], opacity: 0.55, crystal: false, groundFade: 0.0, scatter: 1.15,
-        ground: true, sheet: 0.09, sheetK: 0.62,
+        ground: true, sheet: 0.09, sheetK: 0.62, heightK: 0.0,
       },
     };
   }
@@ -180,6 +180,10 @@ export class SnowParticles {
         uSpin: { value: def.spin },
         uSheet: { value: new THREE.Vector2(def.sheet ?? 0.08, def.sheetK ?? 0.6) },
         uGust: { value: 0 },
+        // x: 1/e-folding height of the suspension layer (m^-1)
+        // y: world metres per backbuffer pixel, per metre of distance
+        // z: minimum sprite half-size in pixels
+        uProfile: { value: new THREE.Vector3(0.20, 0.0005, 0.85) },
         uNear: { value: new THREE.Vector2(def.near[0], def.near[1]) },
         uGroundY: { value: 0 },
         uGroundFade: { value: def.groundFade },
@@ -206,6 +210,7 @@ export class SnowParticles {
         uniform float uTime, uFall, uCurlAmp, uCurlFreq, uCurlTime;
         uniform float uSize, uStreak, uSpin, uGroundY, uGroundFade, uOpacity, uHop, uGust;
         uniform vec2 uSheet;
+        uniform vec3 uProfile;
         uniform vec3 uBox, uCenter, uWind, uCamPos, uCamRight, uCamUp;
         uniform vec2 uNear;
         varying vec2 vUv;
@@ -242,7 +247,20 @@ export class SnowParticles {
           vec2 vdir = vl > 1e-4 ? vs / vl : vec2(0.0, 1.0);
           vec2 perp = vec2(-vdir.y, vdir.x);
 
+          float dist0 = length(p - uCamPos);
+          // Sub-pixel sprites are a lie the rasteriser cannot tell well: a
+          // quad smaller than a pixel still shades that pixel at full alpha,
+          // so the far layer came out as 709 hard white specks against the
+          // sky in aurora.png -- read by a critic as stars, and for the same
+          // reason the ground sparkle read as confetti. Hold the sprite at a
+          // minimum screen size and pay for it in ALPHA, which conserves the
+          // flake's contribution and turns distant snow into the haze §7
+          // asks for instead of a point field.
           float sz = uSize * (0.55 + 0.95 * aRand.x);
+          float szMin = uProfile.z * uProfile.y * dist0;
+          float szFix = max(sz, szMin);
+          float subPix = sz / max(szFix, 1e-6);
+          sz = szFix;
           // Only slightly elongated for the airborne layers. A streaked
           // sprite that is also heavily defocused reads as a smudge on the
           // lens; a round one reads as bokeh. Spindrift keeps its long
@@ -268,7 +286,15 @@ export class SnowParticles {
           float sheet = snoise(pw * uSheet.x + vec3(0.0, 0.0, uTime * 0.06));
           float gate = mix(1.0, smoothstep(-0.55 + uGust * 0.55, 0.45, sheet), uSheet.y);
 
-          vOpacity = fNear * fEdge * fGround * gate * uOpacity * (0.45 + 0.55 * aRand.w);
+          // Blowing snow is a suspension layer, not a uniform fill: the
+          // concentration falls off exponentially with height above the
+          // surface. Without this the far layer put flakes 26 m up, which is
+          // exactly the part of the volume a looking-up framing sees against
+          // the sky.
+          float fHeight = exp(-max(0.0, p.y - uGroundY) * uProfile.x);
+
+          vOpacity = fNear * fEdge * fGround * gate * fHeight * subPix * subPix
+                   * uOpacity * (0.45 + 0.55 * aRand.w);
           vRot = aRand.y * 6.2831853 + uTime * uSpin * (aRand.y * 2.0 - 1.0);
           vUv = uv;
           vWorld = world;
@@ -392,6 +418,9 @@ export class SnowParticles {
 
     const speed = (ctx.windSpeed ?? 2.4) * (1 + 1.4 * gust);
     const sun = ctx.sunColor, si = ctx.sunIntensity ?? 7;
+    // World metres per backbuffer pixel at one metre of distance.
+    const bh = ctx.bufferSize?.height || ctx.size?.y || 800;
+    const pxWorld = 2 * Math.tan(ctx.camera.fov * Math.PI / 360) / bh;
 
     for (const l of this.layers) {
       const u = l.mesh.material.uniforms;
@@ -409,6 +438,7 @@ export class SnowParticles {
       // ceiling tracks exposure and sun-intensity changes.
       u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 4.5;
       u.uGust.value = gust;
+      u.uProfile.value.set(l.def.heightK ?? 0.20, pxWorld, 1.15);
       if (!l.def.ground) u.uOpacity.value = l.def.opacity * (0.50 + 0.65 * gust);
       u.uSunDir.value.copy(ctx.sunDirection);
       u.uSunColor.value.set(sun.r * si, sun.g * si, sun.b * si);

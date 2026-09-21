@@ -86,6 +86,9 @@ export class SnowMaterial {
         uDetail: { value: null },
         uDetailScale: { value: new THREE.Vector4(0.055, 0.32, 1.55, 0.40) },
         uSparkle: { value: new THREE.Vector3(240.0, 1.36, 170.0) },
+        // Radiance the aurora throws down, published by src/world/Aurora.js.
+        // Zero whenever the sun is up, which is most of the review set.
+        uAurora: { value: new THREE.Color(0, 0, 0) },
         uSheen: { value: new THREE.Vector3(0.74, 0.42, 0.38) },
         uSSS: { value: 1.7 },
         uAerial: { value: new THREE.Vector3(0.016, 0.62, 0.62) },
@@ -208,6 +211,12 @@ export class SnowMaterial {
     u.uSunColor.value.copy(ctx.sunColor);
     u.uSkyColor.value.copy(ctx.skyColor);
     u.uBounce.value.copy(ctx.groundBounce);
+    // §7 wants the curtains reflected in the snow. Aurora runs at order 300
+    // and the terrain at -50, so this is last frame's value; it changes over
+    // tens of seconds, so a frame of lag is not observable, and it keeps the
+    // snow from having to reach into another system mid-draw.
+    if (ctx.aurora?.groundLight) u.uAurora.value.copy(ctx.aurora.groundLight);
+    else u.uAurora.value.setRGB(0, 0, 0);
     // Track whatever haze the atmosphere agent is using, so the snow recedes
     // into the same colour the sky does.
     if (ctx.scene.fog?.color) u.uHaze.value.copy(ctx.scene.fog.color);

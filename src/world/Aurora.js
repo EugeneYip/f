@@ -602,7 +602,7 @@ export class Aurora {
     // a white lambertian surface under the current rig) so it cannot drift
     // out of scale with exposure.
     this.groundLight.copy(this.skyLightColor)
-      .multiplyScalar(0.34 * this.intensity * (sky?.diffuseWhite ?? 0.45));
+      .multiplyScalar(1.05 * this.intensity * (sky?.diffuseWhite ?? 0.45));
   }
 
   onQuality(e, ctx) {

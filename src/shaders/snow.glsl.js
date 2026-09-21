@@ -408,6 +408,7 @@ uniform vec3 uDeepTint;
 uniform sampler2D uDetail;
 uniform vec4 uDetailScale;   // world tile sizes: micro, grain, ripple, (aniso)
 uniform vec3 uSparkle;       // intensity, spread, threshold
+uniform vec3 uAurora;        // radiance the aurora throws down (0 by day)
 uniform vec3 uSheen;   // roughness fresh, roughness packed, specular scale         // roughness fresh, roughness packed
 uniform float uSSS;
 uniform vec3 uAerial;   // density, strength, hue-vs-grey
@@ -673,6 +674,12 @@ void main(){
   // Snow is surrounded by snow: a modest near-white interreflection that keeps
   // hollows from going black without washing the blue out of them.
   vec3 inter = uBounce * (uBounceInt * (0.45 + 0.55 * saturate(1.0 - N.y)));
+  // The aurora is a wide, dim source directly overhead, so on snow it is a
+  // broad wash on upward faces with almost no shape to it -- and it only
+  // exists at all once the sun is far enough down for the curtains to be
+  // there, which is what uAurora already encodes. Shares the sky's own
+  // visibility term so hollows and compacted snow take it the same way.
+  ambient += uAurora * (skyVis * (0.55 + 0.45 * N.y));
 
   vec3 col = albedo * (direct + ambient + inter);
 
