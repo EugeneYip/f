@@ -35,6 +35,11 @@ const APPLY = {
   // no-op that rendered identically to `base`, so every "fur is not the cause"
   // conclusion drawn from it was drawn from the same image twice.
   nofur:    '(c) => { const m = [c.fur?.shellMesh, c.fur?.cardMesh].filter(Boolean); if (!m.length) throw new Error("nofur: no coat meshes on ctx.fur"); const v = m.map(o => o.visible); m.forEach(o => { o.visible = false; }); return () => m.forEach((o, i) => { o.visible = v[i]; }); }',
+  // Hide the SKIN and keep the coat. The inverse of `nofur`, and the decisive
+  // test for "is the hard silhouette the skin poking through the coat, or the
+  // coat's own outer shell?" -- a question three agents have now asked without
+  // being able to answer it.
+  noskin:   '(c) => { const m = c.fox?.skinnedMesh; if (!m) throw new Error("noskin: ctx.fox.skinnedMesh not found"); const v = m.visible; m.visible = false; return () => { m.visible = v; }; }',
   nosnow:   '(c) => { const g = c.snowParticles?.points || c.snowParticles?.mesh; const v = g && g.visible; if (g) g.visible = false; return () => { if (g) g.visible = v; }; }',
 };
 
