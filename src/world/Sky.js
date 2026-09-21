@@ -149,6 +149,7 @@ export class Sky {
 
     this.baseSkyColor = new THREE.Color();
     this.baseGroundBounce = new THREE.Color();
+    this._updateNight(ctx);
 
     this.u = {
       uTransLut: { value: null },
@@ -594,8 +595,40 @@ export class Sky {
       + L(ctx.skyColor) + 0.5 * L(ctx.groundBounce)) / Math.PI;
   }
 
+  /**
+   * How dark the sky is, 0 (day) .. 1 (nautical twilight or later), purely
+   * as a function of solar elevation. Published so that everything which can
+   * only exist in a dark sky — stars, aurora — agrees with the sun instead of
+   * each guessing from a local luminance sample.
+   *
+   * This is the resolution of a real contradiction in the art bible, and it
+   * is worth writing down. §1 puts the sun 4-8 DEGREES ABOVE the horizon and
+   * §7 asks for an aurora. Those cannot both be true. A 1 kR auroral arc is
+   * of order 1e-4 cd/m^2; a clear sky with the sun at +6 deg is of order
+   * 1e3 cd/m^2. Seven orders of magnitude is not something artistic licence
+   * bridges — paint an aurora into that sky and you get exactly what review 3
+   * found: a flat green film lying over blue, with no filaments, because
+   * nothing with that contrast ratio can have structure. Stars are the same
+   * argument one order down.
+   *
+   * So the hour is chosen by the sun and everything else follows it. The ramp
+   * runs +1 deg (nothing) to -8 deg (full), which brackets civil twilight:
+   * the sun is down, the horizon still carries the warm glow §1 rim-lights
+   * the animal with, and the sky is dark enough overhead for an arc.
+   *
+   * At the default rig (+6.6 deg) this is 0: no stars, no aurora, and a
+   * frame that agrees with itself. Shoot `--sun -5,140` to see the curtains.
+   */
+  _updateNight(ctx) {
+    const e = Math.asin(clamp(ctx.sunDirection.y, -1, 1)) / DEG;
+    const t = clamp((1.0 - e) / 9.0, 0, 1);
+    this.sunElevationDeg = e;
+    this.nightFactor = t * t * (3 - 2 * t);
+  }
+
   update(dt, ctx) {
     this._updateDiffuseWhite(ctx);
+    this._updateNight(ctx);
     // ctx.sunDirty is consumed by Environment (order -100) before we run, so
     // we watch the vector itself. That also catches FoxDebug.setSun().
     if (!this._lastSun.equals(ctx.sunDirection)) {

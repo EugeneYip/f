@@ -38,6 +38,8 @@ export class Aurora {
     this.intensity = 0;
     /** The greenish ambient the aurora adds to the snow. */
     this.skyLightColor = new THREE.Color(0x8fe8c4);
+    /** Radiance the curtains throw down onto the snow. Read by SnowMaterial. */
+    this.groundLight = new THREE.Color(0, 0, 0);
     this.baseIntensity = 0.62;
     this._drift = 0;
     this._steps = 0;
@@ -92,9 +94,22 @@ export class Aurora {
     };
 
     // Three curtain fields (fine, high-frequency in x) ...
-    const XF = [24, 48, 96, 192];
-    const YF = [2, 3, 5, 8];
-    const AMP = [0.5, 0.26, 0.15, 0.09];
+    //
+    // The SPECTRUM here is the whole effect. It used to be [0.5, 0.26, 0.15,
+    // 0.09] over [24, 48, 96, 192] cells, i.e. 78% of the energy in the two
+    // COARSEST octaves. Against uSFreq the coarsest is one feature every
+    // 32 km, which at 150 km subtends 12 degrees — so what reached the screen
+    // was a 12-degree horizontal blob with a 9%-amplitude filament ripple on
+    // it, and review 3 measured exactly that: "three horizontal lenticular
+    // blobs", no filaments. Filaments are not a garnish on an auroral arc,
+    // they ARE the arc: the emission follows magnetic field lines and the
+    // rays are hundreds of metres to a few km across. So flatten the
+    // spectrum and push it fine. 128 and 340 cells are filaments 6.0 km and
+    // 2.3 km wide, which at 150 km is 2.3 and 0.9 degrees — 75 px and 28 px
+    // in a 2800 px frame, and that is what a curtain looks like.
+    const XF = [18, 46, 128, 340];
+    const YF = [2, 2, 3, 4];
+    const AMP = [0.30, 0.25, 0.26, 0.19];
     for (let b = 0; b < 3; b++) {
       lattices.push(XF.map((nx, k) => makeLattice(nx, YF[k], 1301 + b * 977 + k * 37)));
     }
@@ -112,10 +127,9 @@ export class Aurora {
           for (let k = 0; k < XF.length; k++) { v += AMP[k] * sample(lattices[b][k], x, y); n += AMP[k]; }
           v /= n;
           // Sharpen into distinct striations separated by dark gaps rather
-          // than a soft cloud.
-          // Harder threshold: the gaps between striations have to go to actual
-        // zero or the curtain integrates into a smooth green gradient.
-        v = Math.pow(clamp(v * 2.45 - 0.72, 0, 1), 1.12);
+          // than a soft cloud. The gaps have to reach actual zero or the
+          // curtain integrates into a smooth green gradient.
+          v = Math.pow(clamp(v * 2.80 - 0.88, 0, 1), 1.05);
           data[o + b] = Math.round(v * 255);
         }
         let e = 0, en = 0;
@@ -331,9 +345,15 @@ export class Aurora {
               float texPerPx = uSFreq * (t0 + dt * float(i)) * uPxAngle * 1024.0;
               float lod = max(0.0, log2(max(texPerPx, 1.0)));
               F = textureLod(uCurtain, vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07), lod);
-              sA = sin(s * 0.0042 + uDrift * 9.0);
-              sB = sin(s * 0.0131 - uDrift * 5.0);
-              sC = sin(s * 0.0027 - uDrift * 6.0 + 1.9);
+              // Fold frequencies. At 0.0042 / 0.0131 / 0.0027 per km these
+              // had periods of 1496 / 480 / 2327 km, and a wide framing only
+              // spans ~200 km of arc, so the curtain showed at most a quarter
+              // of one bend: an arc with no folding in it, which is half of
+              // why it read as a smear. 3x up puts one or two folds inside
+              // the frame, which is what a real arc does.
+              sA = sin(s * 0.0125 + uDrift * 9.0);
+              sB = sin(s * 0.0345 - uDrift * 5.0);
+              sC = sin(s * 0.0082 - uDrift * 6.0 + 1.9);
             }
 
             float f1 = (s - uFoldPos.x);
@@ -352,8 +372,12 @@ export class Aurora {
             if (dens <= 0.0) continue;
 
             // Rippling lower border -- a constant-altitude border draws a
-            // dead-straight line across the frame.
-            float vv = clamp(v - (0.075 * sB + 0.045 * sA), 0.0, 1.0);
+            // dead-straight line across the frame. The offset is combed by
+            // the filament field as well as by the fold sines, so the bright
+            // lower edge ends in rays hanging below it rather than in a
+            // drawn line; that ragged bottom edge is the most recognisable
+            // thing about a real curtain and §7 asks for it by name.
+            float vv = clamp(v - (0.075 * sB + 0.045 * sA) - 0.075 * (F.r - 0.35), 0.0, 1.0);
             float b = (vv - 0.045) * 29.41;
             float vert = smoothstep(0.0, 0.03, vv) * (0.06 + 0.40 * exp(-vv * 3.6))
                        + 2.70 * bump(b * b);
@@ -515,11 +539,23 @@ export class Aurora {
     // Follow the camera so the dome and the star sphere never clip.
     this.group.position.copy(ctx.camera.position);
 
-    if (!this.enabled) { this.intensity = 0; if (this.uniforms) this.uniforms.uIntensity.value = 0; return; }
+    if (!this.enabled) {
+      this.intensity = 0;
+      this.groundLight.setRGB(0, 0, 0);
+      if (this.uniforms) this.uniforms.uIntensity.value = 0;
+      if (this.starUniforms) this.starUniforms.uOpacity.value = 0;
+      return;
+    }
 
     // Gentle breathing. Never fully off, never a laser show.
     const breathe = 0.5 + 0.5 * fbm1(t * 0.055, 3, 91);
-    this.intensity = clamp(this.baseIntensity * (0.55 + 0.62 * breathe), 0, 1);
+    // ... and gated on how far the sun is below the horizon. See
+    // Sky._updateNight for the photometry: an aurora is ~1e-4 cd/m^2 and a
+    // sky with the sun at +6 deg is ~1e3, so a "dim, restrained" arc in a
+    // lit sky is not dim, it is impossible — it can only arrive as a flat
+    // green film with no structure, which is precisely what review 3 saw.
+    const night = ctx.sky?.nightFactor ?? 1;
+    this.intensity = clamp(this.baseIntensity * (0.55 + 0.62 * breathe) * night, 0, 1);
 
     // A pure function of ctx.time, not an accumulator: AGENTS.md requires
     // the same time to give the same image regardless of the dt sequence.
@@ -541,14 +577,32 @@ export class Aurora {
 
     this.starUniforms.uTime.value = t;
     this.starUniforms.uPix.value = ctx.renderer.getPixelRatio();
+    // Stars live or die by the same clock the aurora does. The per-pixel
+    // sky-luminance kill was not enough on its own: at the default +6.6 deg
+    // sun the zenith is dark enough in TONEMAPPED terms for exp(-lum*11) to
+    // let third-magnitude stars through, and review 3 read them straight off
+    // aurora.png next to a blazing solar disc. A star at m=3 is ~1e-6 of a
+    // civil-twilight zenith; nothing about that is a matter of taste.
+    this.starUniforms.uOpacity.value = ctx.sky?.nightFactor ?? 1;
 
     // A faint greenish lift on the ambient so the snow registers the aurora.
     // Rebuilt from the sky's base colour every frame -- adding to ctx.skyColor
     // in place would compound without bound.
     const sky = ctx.sky;
     if (sky?.baseSkyColor) {
-      ctx.skyColor.copy(sky.baseSkyColor).lerp(this.skyLightColor, 0.055 * this.intensity);
+      ctx.skyColor.copy(sky.baseSkyColor).lerp(this.skyLightColor, 0.075 * this.intensity);
     }
+
+    // §7: "faint reflection in the snow". A 5% hue lerp on ctx.skyColor is
+    // not a reflection — it is a hue nudge that survives into the frame as
+    // nothing. The curtain is a large, dim, OVERHEAD source, so what it
+    // actually does to snow is a broad green wash on upward-facing surfaces
+    // that gets stronger as the twilight it competes with dies. Published in
+    // the same units as the other light terms (a fraction of the radiance of
+    // a white lambertian surface under the current rig) so it cannot drift
+    // out of scale with exposure.
+    this.groundLight.copy(this.skyLightColor)
+      .multiplyScalar(0.34 * this.intensity * (sky?.diffuseWhite ?? 0.45));
   }
 
   onQuality(e, ctx) {

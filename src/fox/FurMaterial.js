@@ -419,6 +419,10 @@ export function buildFurUniforms(ctx) {
     // reaches FURTHER temporally and nasally; y > 1 pulls the parting in
     // above and below, which is what keeps coat on the brow and the cheek.
     uEyeSlot: { value: new THREE.Vector2(1 / 1.55, 1.50) },
+    // Cards are cut where their own length would sweep across the cornea —
+    // see the card vertex shader. Kept as a uniform so it can be A/B'd at
+    // runtime; there is no reason to author it below 1.
+    uCardEyeGuard: { value: 1 },
     uNose: { value: new THREE.Vector3(0.001, 0.293, 0.274) },
     // the rhinarium is ~8-10 mm across, so ~4 mm of bare pad and full
     // coat by 7 mm; 18 mm was clearing the entire muzzle

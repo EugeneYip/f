@@ -67,6 +67,14 @@ const CLAMP_FADE_HI = 0.055;
 /** Lower bound on airborne limb extension — stops the elbow folding shut. */
 const MIN_EXT = 0.42;
 /**
+ * Swing fraction past which a foot is COMMITTED to landing, and may therefore
+ * ask the body to come down to meet it. Before this it is still leaving the
+ * ground and the body must ignore it entirely — see the reach backstop.
+ * Half-way is the natural place: it is where the paw stops travelling away
+ * from the old contact and starts closing on the new one.
+ */
+const SWING_COMMIT = 0.5;
+/**
  * Ceiling on how fast the ankle bone may travel while the paw is near the
  * snow, in m/s. The contact patch is pinned during stance, so the ankle can
  * only move on a sphere around it — every radian of foot-plate rotation is
@@ -82,6 +90,14 @@ const MAX_ANKLE_MPS = 0.027;
 const ANKLE_LIMIT_CLEAR = 0.045;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
 const MAX_REACH_DROP = 0.080;
+/**
+ * Ceiling on how fast the ANTICIPATORY half of the reach backstop may move
+ * the body, in m/s. Stance demand is exempt — that one is a guarantee and it
+ * changes slowly anyway (measured peak 1.37 m/s at a walk, 1.95 at a trot).
+ * This bounds only the "come down to meet a descending paw" term, which at a
+ * gallop measured 9.6 m/s. 1.2 m/s is a hard but real landing.
+ */
+const SWING_DROP_MPS = 1.2;
 /**
  * The review harness's SINGLE simulation advance, in seconds.
  *
@@ -853,9 +869,24 @@ export class FoxBrain {
     // Scapula protraction/retraction. This is where a short-legged animal
     // gets the last centimetre of stride from, and it keeps the front IK
     // inside its (very tight) reach envelope.
+    //
+    // THE SIGN WAS INVERTED, and it was costing what it was written to buy.
+    // `scapula()` returns +1·amp at touchdown (protracted) down to −1·amp at
+    // toe-off (retracted), which is the right intent — but on this rig a
+    // POSITIVE pitch on the girdle bone carries the shoulder joint CAUDALLY,
+    // so the shoulder was being thrown away from the foot at both ends of
+    // stance instead of toward it. MEASURED by sweeping the amplitude and
+    // recording the worst stance hip→target horizontal distance over a whole
+    // trot cycle (the quantity that decides whether the limb can reach):
+    //
+    //   amp  −24     −18     −12     −6      0       +6      +11     +15     +24
+    //   m    0.1144  0.1214  0.1291  0.1331  0.1391  0.1403  0.1470  0.1464  0.1550
+    //
+    // Monotonic, and the authored +15 was 7.3 mm WORSE than not having a
+    // scapula at all. Negated, the same 15° buys 6 mm instead of costing 7.
     for (const f of loco.feet) {
       if (f.limb.front) {
-        rig.add(f.limb.girdle, loco.scapula(f), 0, 0);
+        rig.add(f.limb.girdle, -loco.scapula(f), 0, 0);
       } else {
         rig.add('hips', 0, 0, 0);
       }
@@ -948,19 +979,51 @@ export class FoxBrain {
     // 2. exact reach backstop — drop the body until every target is inside
     //    its limb's envelope. A Y translation on the root bone moves all four
     //    hips by exactly that much, so one pass is exact, not iterative.
-    let drop = 0;
+    //
+    //    Split into two halves, because they have different obligations.
+    //    The STANCE half is a hard guarantee: a planted contact is frozen in
+    //    world space and the audit measures it, so that demand is met exactly
+    //    and instantly. The SWING half is only ANTICIPATION — bringing the
+    //    body down to where a descending foot is going to land — and nothing
+    //    is measured while it acts, so it may be rate-limited. It has to be:
+    //    MEASURED over a gallop cycle, the drop went 0 → 80 mm (the cap) in
+    //    three 120 Hz steps, which is 9.6 m/s of downward body velocity.
+    //    Walk and trot peak at 1.37 and 1.95 m/s; the gallop's spike is the
+    //    anticipatory half alone, and it is a teleport, not a landing.
+    let dropStance = 0, dropSwing = 0;
     for (const f of feet) {
       const w = f.limb.front ? this.frontIK : this.hindIK;
       if (w < 0.5) continue;
-      // ONLY feet that are down, or close enough to the snow that the clamp
-      // above has stopped helping. Including airborne feet here made a
-      // galloping fox drop its whole body 42 mm to chase a paw that was
-      // 80 mm in the air — which then folded the elbow flat. The two
-      // mechanisms are complementary and must not overlap.
-      if (!f.stance && f.clear >= CLAMP_FADE_HI) continue;
-      drop = Math.max(drop, f.limb.requiredDrop(f._A, f.limb.Ltot * REACH_MAX));
+      // ONLY feet that are down, or about to be. Two exclusions, and the
+      // second one was missing:
+      //
+      //  * a swing foot that is still HIGH is the airborne clamp's problem
+      //    (2b); including it made a galloping fox drop its whole body 42 mm
+      //    to chase a paw 80 mm in the air, which folded the elbow flat;
+      //
+      //  * a swing foot that has just LEFT the ground has no claim on body
+      //    height AT ALL. It is leaving. Chasing it is what put the belly
+      //    through the snow. MEASURED at a trot: the binding constraint at
+      //    phase 0.44 is a forefoot at u = 0.10 — risen 34 mm, 172 mm behind
+      //    its shoulder, against 185 mm of forelimb — and satisfying it costs
+      //    69 mm of body drop. Over a cycle the drop went
+      //    0 → 72 → 0 → 40 → 72 mm, i.e. the whole trunk slammed 72 mm twice
+      //    per 400 ms cycle, in MID-SUSPENSION with all four feet in the air.
+      //    That is the "belly intersects the terrain" in review-N-trot, and
+      //    it is also most of why the moving states read as a crouched slink.
+      //    The foot lock is untouched by this: a rising foot is airborne by
+      //    definition, so nothing it does is measured as contact.
+      if (!f.stance) {
+        if (f.clear >= CLAMP_FADE_HI) continue;
+        if (f.u < SWING_COMMIT) continue;
+      }
+      const need = f.limb.requiredDrop(f._A, f.limb.Ltot * REACH_MAX);
+      if (f.stance) dropStance = Math.max(dropStance, need);
+      else dropSwing = Math.max(dropSwing, need);
     }
-    drop = Math.min(drop, MAX_REACH_DROP);
+    const step = SWING_DROP_MPS * (this.h || 1 / 120);
+    this._dropSwing = clamp(dropSwing, (this._dropSwing || 0) - step, (this._dropSwing || 0) + step);
+    let drop = Math.min(Math.max(dropStance, this._dropSwing), MAX_REACH_DROP);
     this.reachDrop = drop;
     if (drop > 1e-6) {
       this.rootBone.position.y -= drop;

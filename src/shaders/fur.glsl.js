@@ -114,6 +114,9 @@ uniform vec3  uEyeFade;
 uniform vec3  uEyeAxisL;       // bind-space optical axes: the fissure, and
 uniform vec3  uEyeAxisR;       // therefore the slot, is built off these
 uniform vec2  uEyeSlot;        // x along the fissure (<1 = further) · y across
+uniform float uCardEyeGuard;   // 0..1, how hard a card is cut where it would
+                               // sweep across the cornea. 0 restores the old
+                               // root-only test, for A/B.
 uniform vec3  uNose;           // nose pad centre, bind space
 uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
@@ -1150,7 +1153,31 @@ void main(){
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
-  vP0   = vec4(v, rb.z, aFurAO, ra.x * furSkinMask2(position).y);
+  /*
+   * CARDS MUST NOT CROSS THE CORNEA.
+   *
+   * The vibrissae are guarded by a sphere plus a sight cone; the cards were
+   * guarded by neither. They read furSkinMask2 at their ROOT only, so a
+   * card rooted outside the parting could still be combed across the eye by
+   * lay, by the lock pull, or by a long lenMul draw -- and at macro_eye
+   * one does, as a 2 px white scratch over the iris. Aperture area barely
+   * notices it (0.4% of the aperture) and the eye is ruined anyway: the iris
+   * is the one place on this animal where a single hair is legible.
+   *
+   * position + offB IS this vertex's own bind-space point along the card,
+   * so evaluating the mask there tests the whole card, not its root, and does
+   * it per vertex: the length that lies over the eye fades and the rest of
+   * the card is untouched. It reuses the eye slot, so the guard volume is the
+   * eyeball plus its lid margin by construction and cannot drift away from
+   * the parting the shells use.
+   *
+   * Not covered: the world-space wind/gravity term W, which is applied after
+   * skinning and is a few mm. Blowing a hair INTO a socket is not a thing the
+   * wind does here, and testing it would need the mask in world space.
+   */
+  float rootMask = furSkinMask2(position).y;
+  float tipMask  = furSkinMask2(position + offB).y;
+  vP0   = vec4(v, rb.z, aFurAO, ra.x * mix(rootMask, min(rootMask, tipMask), uCardEyeGuard));
   vP1   = vec4(rb.x, rb.y, ra.w, L);
   vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));

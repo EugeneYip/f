@@ -419,3 +419,68 @@ Render `frontal`, `chin` and `profile`. Trace the outer contour. If any
 continuous run of it longer than ~2 % of the contour is a smooth curve with a
 hard edge rather than a broken, hairy one, it fails. The silhouette of a
 winter arctic fox is hair, everywhere, without exception.
+
+## 4g. "Short" has now been misread twice. The muzzle is too SHORT.
+
+§4b said "short muzzle"; it was implemented as BLUNT and produced a bear, and
+§4c corrected it. The same word has now produced a second error, on the other
+axis: "short" has been implemented as **shorter than the cranium**, and that is
+not what an arctic fox is.
+
+Three independent measurements agree, and none of them is mine:
+
+| source | muzzle : braincase |
+|---|---|
+| Nanova & Prôa 2017, n=43 callipered crania (`REFERENCE-FOX.md` §3a) | **1.57 : 1** (rostrum 74.1 mm of 121.3 mm CBL) |
+| critic, pixels off `profile.png` | 0.9 : 1 |
+| anatomy agent, measured on the SDF field | **0.62 : 1** (muzzle ≈46, braincase ≈74) |
+
+Our whole head is the right size — nose-tip-to-occiput measures ≈116 mm against
+a real CBL of 121.3 mm. The head is correctly scaled and **wrongly divided**.
+
+### Is the craniometric ratio usable here?
+
+Partly, and the anatomy agent was right to refuse to act on it alone. The
+researcher's warning stands: 61 % rostrum is a *dry-bone length* ratio, not the
+same quantity as §4c's live-tissue *width taper*, and substituting one for the
+other is exactly the move that produced the bear.
+
+But it is not incomparable either. Craniometric rostrum means the facial region
+anterior to the orbits, and on a canid the stop sits roughly at the orbits — so
+our "muzzle measured from the stop" is approximately the same span. Treat the
+craniometry as establishing the **direction and rough magnitude**, not as a
+number to hit.
+
+### The standard
+
+- **Target rostrum ≈ 55 % of nose-tip-to-occiput**, against our current ~40 %.
+  That is deliberately short of the sourced 61 %, because the source is dry
+  bone and because §4b/§4c's "short" is still binding against a red fox.
+- **Get there in increments and render at every step.** A single 25 mm jump on
+  a 116 mm skull, taken on a number alone, is precisely how this went wrong
+  before. §4c's width taper of 1.4–1.6 : 1 does not change.
+- **If lengthening starts to read as a red fox, stop and report the number you
+  stopped at.** That figure is worth more than reaching the target.
+
+## 4h. Correction to §4f rule 2: the muzzle coat is set by rule 3, not by a number
+
+§4f rule 2 fixed the muzzle at 3–5 mm of coat, reasoning that the contrast
+against a deep skull coat is what makes the face read pointy. The reasoning is
+right; the number was not mine to invent.
+
+The anatomy agent measured it: at 15 mm of muzzle coat, **62 % of the muzzle
+core is still skin-dominant.** So no depth anywhere in rule 2's band satisfies
+rule 3 ("no bare skin visible anywhere except rhinarium, eyes and pads"), and
+the two rules were in direct conflict. Rule 3 wins — bare skin is the defect
+the user has actually complained about, three rounds running.
+
+**Rule 2 is restated:** the muzzle carries whatever coat depth is needed for no
+bare skin to show, and no more. The thing that must hold is the *contrast*
+between the muzzle's coat and the skull's, not the muzzle's absolute depth. At
+a 26 mm skull coat, a muzzle at 8 mm is still a 3:1 contrast and the face still
+reads pointy.
+
+Also settled by that measurement: the bare muzzle was never a fur bug. The
+cause was `nosePad`, a 30.7 × 23.9 mm skin-tinted sphere standing in for a
+13 mm rhinarium — FaceDetail had been clamping its *drawn* pad to 10–14.2 mm to
+survive it, while nothing clamped the SDF.
