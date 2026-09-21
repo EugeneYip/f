@@ -152,7 +152,7 @@ export async function buildFoxSurface(skeleton, {
         reg = R.back;
       }
       // Guard hair sweeps down the flanks and under the belly.
-      const down = 0.60 * wSide + 0.34 * wBelly;
+      const down = 0.44 * wSide + 0.30 * wBelly;
       fy -= down;
       const l = Math.hypot(fx, fy, fz) || 1;
       fx /= l; fy /= l; fz /= l;
@@ -180,7 +180,7 @@ export async function buildFoxSurface(skeleton, {
       // (user 2x crop: a stair-stepped blue-grey cutout). A real winter fox
       // carries a heavy fringe here, sweeping up the leading edge, and that
       // fringe is the thing that breaks the ear silhouette.
-      earRim = 1 - smoothstep(0.04, 0.42, Math.abs(dot));
+      earRim = 1 - smoothstep(0.05, 0.55, Math.abs(dot));
     }
 
     // --- pinna coat shortens toward the tip --------------------------------
@@ -190,7 +190,12 @@ export async function buildFoxSurface(skeleton, {
     // short at the rim, which preserves the wedge.
     if (reg === R.earOuter || reg === R.earInner) {
       const t = saturate((y - EAR_SPAN.baseY) / (EAR_SPAN.tipY - EAR_SPAN.baseY));
-      len *= 1.0 - 0.64 * t;
+      // 0.64 left the apex with 5 mm of coat — measured on the built mesh, the
+      // single highest skin vertex on the whole animal was a BALD ear tip, and
+      // §4c asks for a soft rounded apex, which 5 mm cannot give. 0.46 keeps
+      // ~8.4 mm there and the taper still does its job (the pinna's furred
+      // base-to-tip ratio is what §4c's wedge is measured on).
+      len *= 1.0 - 0.46 * t;
       // Rim fringe, applied AFTER the tip taper so the fringe tapers with the
       // pinna and the §4c wedge survives. Softer than the pinna face too: a
       // stiff fringe reads as bristle, and on the reference animal this hair
@@ -199,6 +204,22 @@ export async function buildFoxSurface(skeleton, {
         len *= 1 + 1.55 * earRim;
         stiff -= 0.22 * earRim;
       }
+    }
+
+    // --- the muzzle's short coat must not leak back onto the jaw ------------
+    // §4f.2 pins the muzzle at 3-4 mm, and the softmax that blends the fur
+    // fields is isotropic, so the muzzle root drags the coat down across the
+    // whole jaw line BEHIND it: measured 14.8 mm on the lateral jaw where the
+    // cheek authors 40. That band is exactly where the user's 3x crop shows a
+    // stair-stepped bare skin edge with ruff fur visible beyond it — the coat
+    // simply is not there to cover the head's own silhouette against the body.
+    // A floor that ramps up with distance behind the muzzle root removes the
+    // leak while leaving the muzzle itself untouched, so the short-muzzle /
+    // deep-skull contrast §4f asks for survives intact.
+    if (reg === R.cheek || reg === R.jawLower || reg === R.muzzle) {
+      const back = smoothstep(0.2140, 0.1920, z);
+      const floor = FUR[R.jawLower][0] * (1 - back) + FUR[R.cheek][0] * back;
+      len = Math.max(len, floor * back * 0.72);
     }
 
     // --- throat ------------------------------------------------------------
@@ -220,13 +241,17 @@ export async function buildFoxSurface(skeleton, {
     // which is about the leg TOP, not the joint.
     if (reg === R.legHindUpper || reg === R.hock ||
         reg === R.legFrontUpper || reg === R.legFrontLower) {
-      len *= 0.68 + 0.32 * smoothstep(0.055, 0.150, y);
+      len *= 0.78 + 0.22 * smoothstep(0.055, 0.150, y);
     }
 
     // Never let a hair point into the body.
+    // Minimum rise off the skin. 0.04 is 2.3 degrees, i.e. flat, and a flat
+    // hair cannot break a silhouette — see the trunk flowRadial note in
+    // FoxAnatomy. 0.13 is ~7.5 degrees, still a combed coat, but every hair
+    // now has a component pointing out of the surface.
     const dn = fx * nx + fy * ny + fz * nz;
-    if (dn < 0.04) {
-      fx += nx * (0.04 - dn); fy += ny * (0.04 - dn); fz += nz * (0.04 - dn);
+    if (dn < 0.13) {
+      fx += nx * (0.13 - dn); fy += ny * (0.13 - dn); fz += nz * (0.13 - dn);
       const l = Math.hypot(fx, fy, fz) || 1;
       fx /= l; fy /= l; fz /= l;
     }
@@ -264,8 +289,8 @@ export async function buildFoxSurface(skeleton, {
     fx /= l; fy /= l; fz /= l;
     const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
     const dn = fx * nx + fy * ny + fz * nz;
-    if (dn < 0.03) {
-      fx += nx * (0.03 - dn); fy += ny * (0.03 - dn); fz += nz * (0.03 - dn);
+    if (dn < 0.12) {
+      fx += nx * (0.12 - dn); fy += ny * (0.12 - dn); fz += nz * (0.12 - dn);
       const l2 = Math.hypot(fx, fy, fz) || 1;
       fx /= l2; fy /= l2; fz /= l2;
     }

@@ -229,11 +229,11 @@ export const EAR_SPAN = { baseY: LANDMARKS.earR01[1], tipY: LANDMARKS.earR_tip[1
 export const FUR = {
   [R.nose]: [0.0006, 1.00],
   [R.muzzle]: [0.0034, 0.90],
-  [R.jawLower]: [0.0140, 0.72],
-  [R.cheek]: [0.0380, 0.28],
+  [R.jawLower]: [0.0190, 0.72],
+  [R.cheek]: [0.0400, 0.28],
   [R.forehead]: [0.0175, 0.82],
   [R.skull]: [0.0260, 0.74],
-  [R.earOuter]: [0.0155, 0.70],
+  [R.earOuter]: [0.0180, 0.70],
   [R.earInner]: [0.0080, 0.44],
   [R.throat]: [0.0310, 0.28],
   [R.neck]: [0.0455, 0.58],
@@ -246,11 +246,11 @@ export const FUR = {
   [R.croup]: [0.0460, 0.80],
   [R.haunch]: [0.0415, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
-  [R.legFrontLower]: [0.0205, 0.66],
-  [R.pawFront]: [0.0090, 0.86],
+  [R.legFrontLower]: [0.0260, 0.66],
+  [R.pawFront]: [0.0120, 0.86],
   [R.legHindUpper]: [0.0380, 0.60],
-  [R.hock]: [0.0175, 0.52],
-  [R.pawHind]: [0.0090, 0.86],
+  [R.hock]: [0.0220, 0.52],
+  [R.pawHind]: [0.0120, 0.86],
   [R.tailBase]: [0.0480, 0.78],
   [R.tailMid]: [0.0540, 0.80],
   [R.tailTip]: [0.0420, 0.72],
@@ -373,7 +373,15 @@ export function buildField() {
     f.add({
       name: `trunk${i}`, a: [0, y0, z0], b: [0, y1, z1], ra: r0, rb: r1,
       squash: [sx, 1, 1], k: 0.011, ...furOf(reg),
-      flowDir: dir, flowRadial: 0.18, tint: TINT_FUR,
+      // flowRadial was 0.18, and measured on the built mesh that put the mean
+      // hair-to-normal dot at 0.09-0.19 across chest, shoulder, ruff, neck,
+      // flank and back — 28 % of the whole mesh had hair lying within 3
+      // degrees of the skin. A hair combed that flat adds nothing to the
+      // OUTLINE however long it is, which is why the trunk kept failing the
+      // silhouette-hardness gate while carrying 48 mm of coat. A winter
+      // arctic fox's trunk coat is plush and stands off the body; a sleek
+      // lie-flat coat is a summer animal.
+      flowDir: dir, flowRadial: 0.50, tint: TINT_FUR,
     });
   }
 
@@ -397,18 +405,18 @@ export function buildField() {
   const H = skullXf;
   f.add({
     name: 'braincase', a: H([0, 0.3140, 0.1985]), ra: sr(0.0216),
-    squash: [0.900, 0.880, 0.96], k: 0.019, ...furOf(R.skull),
+    squash: [0.900, 0.880, 0.96], k: 0.026, ...furOf(R.skull),
     flowDir: [0, 0.16, -1], flowRadial: 0.22, tint: TINT_FUR,
   });
   f.add({
     name: 'occiput', a: H([0, 0.3040, 0.1790]), ra: sr(0.0205),
-    squash: [0.900, 0.880, 0.78], k: 0.020, ...furOf(R.skull),
+    squash: [0.900, 0.880, 0.78], k: 0.026, ...furOf(R.skull),
     flowDir: [0, 0.10, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Domed forehead with a gentle stop — arctic fox, not red fox.
   f.add({
     name: 'forehead', a: H([0, 0.3175, 0.2145]), ra: sr(0.0210),
-    squash: [0.90, 0.84, 0.94], k: 0.019, ...furOf(R.forehead),
+    squash: [0.90, 0.84, 0.94], k: 0.024, ...furOf(R.forehead),
     flowDir: [0, 0.22, -1], flowRadial: 0.20, tint: TINT_FUR,
   });
   f.addMirrored({
@@ -432,20 +440,27 @@ export function buildField() {
   f.add({
     name: 'mandible', a: H([0, 0.2925, 0.2205]), b: H([0, 0.2895, 0.2385]),
     ra: sr(0.0178), rb: sr(0.0110),
-    squash: [0.95, 0.86, 1.0], k: 0.016, ...furOf(R.jawLower),
+    squash: [0.95, 0.86, 1.0], k: 0.021, ...furOf(R.jawLower),
     flowDir: [0, -0.30, -1], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Whisker pads — the paired swellings at the muzzle root. Small, but they
   // are most of what stops a canid muzzle reading as a plain cone.
+  //
+  // Shrunk 15.6 -> 12.3 mm and moved 3 mm forward. At the old size it was the
+  // nearest primitive over most of the JAW LINE, and it carries `muzzle` fur,
+  // so it dragged the coat there down to 14.8 mm where the cheek authors 38.
+  // The user's 3x crop of that exact band shows the result: a stair-stepped
+  // skin edge with ruff fur visible beyond it. §4f.2 keeps the muzzle short —
+  // it does not ask for the jaw to be short too.
   f.addMirrored({
-    name: 'whiskerPadR', a: H([0.0160, 0.2950, 0.2258]), ra: sr(0.0132),
+    name: 'whiskerPadR', a: H([0.0158, 0.2948, 0.2288]), ra: sr(0.0104),
     squash: [0.88, 0.84, 1.05], k: 0.015, ...furOf(R.muzzle),
     flowDir: [0.18, -0.25, -0.95], flowRadial: 0.35, tint: TINT_FUR,
   });
   f.addMirrored({
     name: 'cheek', a: H([0.0228, 0.2990, 0.2120]), b: H([0.0246, 0.2958, 0.1940]),
     ra: sr(0.0208), rb: sr(0.0206),
-    squash: [0.87, 0.90, 1.02], k: 0.021, ...furOf(R.cheek),
+    squash: [0.87, 0.90, 1.02], k: 0.028, ...furOf(R.cheek),
     flowDir: [0.55, -0.25, -0.55], flowRadial: 0.90, tint: TINT_FUR,
   });
 
