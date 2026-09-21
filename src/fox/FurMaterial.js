@@ -224,8 +224,24 @@ export const FUR_DEFAULTS = {
   coatVarFreq: 15,
 
   // shading
-  ambient: 2.45,
+  //
+  // `ambient` is divided by PI in the shader, so 4.0 is a response of 1.27 x
+  // the incident hemisphere radiance -- above a Lambertian 1.0 on paper, and
+  // below it in practice, because the very next factor is `ao`, whose own
+  // authored floor is 0.54. It was 2.45, i.e. 0.78 before AO and ~0.5 after,
+  // on a medium whose whole character is that light bounces around inside it
+  // and comes back out. Measured differentially, that put the coat at 0.66 x
+  // the luminance of the snow behind it; bible 4b says an arctic fox is
+  // "only slightly brighter than its background", never darker.
+  ambient: 4.0,
   ambientSat: 1.0,
+  // See furShade(): uSkyColor is the ZENITH, which is the darkest and bluest
+  // patch of a polar sky, and using it as the whole upward irradiance is the
+  // single largest contributor to the blue cast. 0.65 was chosen by measuring
+  // the coat's r-b against bible 3's own shaded-fur swatch #b9c7d8 (r-b =
+  // -31): at 0.65 the shaded coat lands on -29/-31 at `frontal`/`profile`,
+  // against -54/-53 before.
+  skyHorizon: 0.65,
   sunSat: 0.30,
   transSat: 0.16,     // scattered light keeps almost none of the sun's hue       // how much of the sun's chromaticity survives scattering
   wrap: 0.40,
@@ -328,6 +344,7 @@ export function buildFurUniforms(ctx) {
     uGroundBounce: { value: new THREE.Color().copy(ctx.groundBounce) },
     uAmbient: { value: d.ambient },
     uAmbientSat: { value: d.ambientSat },
+    uSkyHorizon: { value: d.skyHorizon },
     uSunSat: { value: d.sunSat },
     uTransSat: { value: d.transSat },
 
@@ -381,7 +398,24 @@ export function buildFurUniforms(ctx) {
 
     uFurLit: { value: c(0xfdfcfa) },
     uFurUnder: { value: c(0xdcd3c6) },
-    uShadowTint: { value: new THREE.Vector3(0.72, 0.845, 1.0) },
+    /*
+     * The blue of shaded fur is DOUBLE-COUNTED if this carries all of it.
+     *
+     * (0.72, 0.845, 1.0) is exactly #b9c7d8 / #fdfcfa in linear — bible 3's
+     * shaded-fur swatch divided by its lit one — so it was derived correctly
+     * and applied in the wrong place. Those swatches are under a "Role"
+     * column beside "Snow (shadow) #6d8cb8", and snow's albedo is not blue:
+     * they are what each surface must LOOK like, not what to multiply its
+     * albedo by. The look already comes from the illuminant, because unlit
+     * coat here is lit by nothing but a blue sky. Charging it a second time
+     * against the albedo is why the shaded coat measured r-b = -53 when the
+     * swatch it was derived from is -31.
+     *
+     * What survives is a token: real fur in shade is marginally cooler than
+     * the same fur in sun (the sun is the only warm source in the scene), so
+     * the tint stays, softened until the measured shade lands on the swatch.
+     */
+    uShadowTint: { value: new THREE.Vector3(0.90, 0.95, 1.0) },
     uSpecTintA: { value: c(0xfff3e2) },
     uSpecTintB: { value: c(0xffe8cc) },
     uTransTint: { value: c(0xfffaf3) },

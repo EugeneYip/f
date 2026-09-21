@@ -82,6 +82,10 @@ uniform vec3  uSkyColor;
 uniform vec3  uGroundBounce;
 uniform float uAmbient;
 uniform float uAmbientSat;
+// How far the UPWARD ambient is pulled off the zenith toward the pale band
+// around the horizon. uSkyColor is the zenith swatch, and a surface does not
+// see the zenith -- see the ambient block in furShade().
+uniform float uSkyHorizon;
 uniform float uSunSat;
 uniform float uTransSat;
 
@@ -599,8 +603,25 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   vec3 direct = sunScatter * uSunIntensity * wrapD * mix(ao, 1.0, 0.62) * RECIPROCAL_PI;
 
   // ---- ambient: cool sky above, snow bounce below -------------------------
+  //
+  // A SURFACE DOES NOT SEE THE ZENITH. uSkyColor is bible 3's "cool zenith
+  // fill", which on a polar sky is both the darkest and by far the bluest
+  // part of the dome; the pale, much brighter band wrapped around a 6-degree
+  // sun covers most of the cosine-weighted solid angle an upward-facing hair
+  // actually integrates. Feeding the zenith swatch in as the WHOLE upward
+  // irradiance is what made a white fox render as a blue-grey cloud --
+  // measured differentially at the profile framing, the coat sat at r-b
+  // = -50 against the snow's -14 and at 0.66x the luminance of the snow
+  // it stands on, when bible 4b's own two swatch pairs put fur at
+  // 1.03-1.44x its background.
+  //
+  // uSkyHorizon pulls the sky end of the mix toward uGroundBounce, which in
+  // this scene IS that band: sunlit snow and the glow above it are the same
+  // pale blue-white. No new colour enters the palette, and the term still
+  // degrades correctly if the sky agent changes either swatch.
+  vec3 skyDome = mix(uSkyColor, uGroundBounce, uSkyHorizon);
   float up = N.y * 0.5 + 0.5;
-  vec3 amb = mix(uGroundBounce, uSkyColor, up);
+  vec3 amb = mix(uGroundBounce, skyDome, up);
   amb = mix(vec3(luma(amb)), amb, uAmbientSat);
   vec3 ambient = amb * (uAmbient * RECIPROCAL_PI) * ao;
 
@@ -656,8 +677,10 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // exactly zero and the falloff steep, so only genuinely grazing fragments
   // glow and the interior contributes nothing to integrate.
 
-  // A cool sky rim keeps the shadow side alive on the silhouette.
-  col += uSkyColor * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
+  // A cool sky rim keeps the shadow side alive on the silhouette. Same dome
+  // colour as the ambient: a grazing fragment sees the sky it reflects over
+  // a wide lobe, not the zenith alone.
+  col += skyDome * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
 
   return col;
 }
