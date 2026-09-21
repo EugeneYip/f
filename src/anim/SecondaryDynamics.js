@@ -340,12 +340,49 @@ export class SecondaryDynamics {
     rig.add('chest', this.ruff.x, this.ruff.y, 0);
     rig.add('spine04', this.ruff.x * 0.5, this.ruff.y * 0.45, 0);
     rig.add('spine02', this.belly.x, 0, 0);
-    // Coat inertia, expressed on the two loosest regions of the trunk. This
-    // is ROTATION only, deliberately: `rig.offset` would translate the bone
-    // and take its children with it, so a coat lag on `chest` would jiggle
-    // the head. The translational half of the effect belongs in the fur
-    // shader and is published on `ctx.fox.coatLag` for it.
-    rig.add('spine03', this.coat.z * 0.55, this.coat.x * 0.50, 0);
-    rig.add('spine01', this.coat.z * 0.40, this.coat.x * 0.35, 0);
+    /**
+     * Coat inertia, expressed on the two loosest regions of the trunk. This
+     * is ROTATION only, deliberately: `rig.offset` would translate the bone
+     * and take its children with it, so a coat lag on `chest` would jiggle
+     * the head. The translational half of the effect belongs in the fur
+     * shader and is published on `ctx.fox.coatLag` for it.
+     *
+     * MEASURED, and this whole block was a no-op before: `coat.x` and
+     * `coat.z` are driven by `accelX` and `accelZ`, which are the body's
+     * LONGITUDINAL and LATERAL acceleration — and both are identically zero
+     * in every gait. `Locomotion` sets `vel` from a damped `speed` along a
+     * damped `yaw`, so in steady straight-line travel the body has no
+     * intra-stride surge and no lateral throw at all. Probed over 1.2 s of
+     * gallop: coat.x peak-to-peak 0.00 mm, coat.z 0.00 mm, coat.y 4.57 mm.
+     * The only axis that moves is the one `apply` did not read, so the coat
+     * chain articulated exactly nothing while looking like it worked.
+     *
+     * Vertical lag is the honest signal here and it is also the right one
+     * for §4f: what a deep coat does when the body is thrown upward is stay
+     * behind and then catch up. On the trunk that reads as the loose
+     * segments pitching against the throw.
+     */
+    // Gain is geometric, not taste: `coat.y` is a displacement in METRES of
+    // the coat's centre of mass, and a trunk segment is ~90 mm long, so
+    // θ ≈ d / 0.09. At the measured ±2.3 mm of gallop lag that is ±1.5 deg.
+    rig.add('spine03', this.coat.y * 11, this.coat.x * 0.50, 0);
+    rig.add('spine01', this.coat.y * 8, this.coat.x * 0.35, 0);
+    /**
+     * Coat compression. `coatCompress` has existed for two rounds, reaches
+     * 0.20 at a gallop, and was read by NOTHING — not here, not in
+     * `src/fox/FurSystem.js`, not in `src/shaders/fur.glsl.js`. Grepping
+     * `coatLag|coatCompress|agitation` across `src/` finds only the three
+     * lines in `FoxBrain` that publish them.
+     *
+     * The independent part of this — hair length shortening under the crush
+     * — can only happen in the fur shader and is still published for it.
+     * What a bone can carry is the SHAPE of the crush: the ruff and belly
+     * fold down onto the body on the landing and spring back past rest,
+     * a beat after the skeleton has already absorbed it.
+     */
+    const cc = this.coatCompress;
+    rig.add('chest', cc * 0.20, 0, 0);
+    rig.add('spine04', cc * 0.14, 0, 0);
+    rig.add('spine02', cc * -0.10, 0, 0);
   }
 }

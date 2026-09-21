@@ -83,19 +83,28 @@ const ANKLE_LIMIT_CLEAR = 0.045;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
 const MAX_REACH_DROP = 0.080;
 /**
- * When the review harness forces a moving state it then settles 2.5 s and
- * shoots each pose after another 0.35 s, against camera poses that are
- * absolute world coordinates aimed at the origin. Launching the animal this
- * many seconds "upstream" puts it back on its mark when the shutter opens.
+ * The review harness's SINGLE simulation advance, in seconds.
  *
- * 2.5 + 0.35 = 2.85, and this constant was 3.05 — so the animal was landing
- * 0.2 s of travel SHORT of its mark in every moving review shot, which is
- * 0.14 m at a walk and 0.52 m at the new gallop speed. Harmless at a wide
- * framing and fatal at `profile`. Note the mark still moves if a reviewer
- * passes a non-default `--settle`: the offset is (settle + 0.35 − 2.85) ×
- * the gait speed, so use the default when framing matters.
+ * `shoot.mjs` settles once before the pose loop and never again; `spec.mjs`
+ * and `ab.mjs` both use 2.5 as well. Two things are derived from it and both
+ * are wrong if it is wrong:
+ *
+ *   1. the review mark — the animal is launched this many seconds "upstream"
+ *      so it arrives where the absolute camera poses are aimed;
+ *   2. the shutter phase — the gait clock starts at `reviewPhase` minus this
+ *      many seconds, so the still frame lands on a chosen instant.
+ *
+ * It was 2.85 = 2.5 + 0.35, because shoot.mjs used to settle another 0.35 s
+ * per pose. That per-pose settle is gone (it was what made `run-paws` shoot
+ * empty snow), so 2.85 left the animal 0.35 s of travel PAST its mark —
+ * 0.25 m at a walk, 0.91 m at a gallop. Measured: root z = −0.91 with the
+ * mark at 0. Same class of error as "the review mark was 0.2 s downstream of
+ * itself", in the opposite direction.
+ *
+ * A reviewer passing a non-default `--settle` simply lands on a different
+ * mark and a different phase; nothing breaks, the still is just less chosen.
  */
-const REVIEW_LEAD = 2.85;
+const REVIEW_SETTLE = 2.5;
 /**
  * Pounce cycle length, and the instant within it that a review shot wants.
  * NOT the apex: at apex the animal is 440 mm up and the `profile` camera is
@@ -364,19 +373,43 @@ export class FoxBrain {
     if (harness) {
       this.prevState = name;
       this.blend = 1;
-      let lead = (GAITS[s.gait]?.speed ?? 0) * REVIEW_LEAD;
+      let lead = (GAITS[s.gait]?.speed ?? 0) * REVIEW_SETTLE;
       if (s.special === 'pounce') {
         // The pounce's travel comes from `lungeZ`, which the gait clock knows
         // nothing about, so the gait-speed lead above is zero and the animal
         // simply leaps out of frame before the shutter opens. Start the cycle
         // so the APEX lands on the shutter, then integrate the lunge profile
         // over the settle to find where that puts it. Exact, not estimated.
-        this.pounceT = POUNCE_APEX - REVIEW_LEAD;
+        this.pounceT = POUNCE_APEX - REVIEW_SETTLE;
         while (this.pounceT < 0) this.pounceT += POUNCE_CYCLE;
-        lead = this._pounceTravel(this.pounceT, REVIEW_LEAD);
+        lead = this._pounceTravel(this.pounceT, REVIEW_SETTLE);
       }
       _p.set(0, 0, -lead);
       this.loco.reset(this.ctx, _p, 0, s.gait);
+      /**
+       * Choose the instant the shutter sees.
+       *
+       * The pounce has done this since it was written — "start the cycle so
+       * the APEX lands on the shutter" — and the gaits never did, so they
+       * landed wherever `frac(REVIEW_SETTLE / cycle)` happened to fall. For
+       * `run` that is phase 0.353, which measurement puts inside the 25 ms
+       * extended-suspension window: both hind feet still pinned where they
+       * pushed off, both fore feet already pinned on their landing spot,
+       * fore/aft paw spread 565 mm against 228 mm standing, and a ballistic
+       * rise of 0.4 mm. That is 7% of the cycle and it is the single least
+       * flattering 7%; it is the frame the critic called a belly-slide.
+       *
+       * This is composition, not instrumentation: it selects which real
+       * frame of a real cycle the still shows. The motion either side of it
+       * is unchanged, and `audit.mjs` samples the whole cycle regardless.
+       */
+      const rp = GAITS[s.gait]?.reviewPhase;
+      if (rp != null && (GAITS[s.gait]?.speed ?? 0) > 0) {
+        const cyc = GAITS[s.gait].cycle;
+        let p0 = (rp - REVIEW_SETTLE / cyc) % 1;
+        if (p0 < 0) p0 += 1;
+        this.loco.phase = p0;
+      }
     } else {
       this.loco.setGait(s.gait);
     }

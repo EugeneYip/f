@@ -110,8 +110,12 @@ export const GAITS = {
     offsets: { RL: 0, FR: 0, RR: 0.5, FL: 0.5 },
     lift: 0.062, drop: 0.024, track: 0.96, sink: 0.019, uLift: 0.12, uPlant: 0.88,
     press: 0.22, bob: 0.0255, bobBeats: 2, sway: 0.0050, swayBeat: 0.0042, pitch: 0.4,
-    scapula: 15, spineFlex: 7.0, yawSway: 0.8,
+    scapula: 15, spineFlex: 7.0, spinePhase: 2.33, yawSway: 0.8,
     flight: 0.7, impact: 0.0115,
+    // Mid-suspension, diagonals crossing: the instant a trot is photographed
+    // in. Stance is [0,0.38] and [0.5,0.88], so 0.44 is the middle of the
+    // first zero-support window.
+    reviewPhase: 0.44,
   },
   // Rotary gallop: LH → RH → RF → LF, with a gathered and an extended
   // suspension. The one canids actually use at speed.
@@ -127,10 +131,14 @@ export const GAITS = {
     // excursion has to fit inside a 192 mm forelimb. A genuine suspension
     // phase buys distance the legs never have to reach for — the body flies
     // it — so the same limb covers a longer stride at a higher speed.
-    // Re-timed for a real extended suspension. Support windows at these
-    // offsets are RL[0,.25] RR[.10,.35] FR[.42,.67] FL[.52,.77], leaving a
-    // gathered gap of 0.07 and an EXTENDED gap of 0.23 — 78 ms with nothing
-    // on the ground, against 34 ms before. Stance excursion is
+    // Re-timed for a real double suspension. Support windows at these
+    // offsets are RL[0,.25] RR[.10,.35] FR[.42,.67] FL[.52,.77], leaving two
+    // zero-support gaps. NAMES CORRECTED: the 0.23 gap runs from forelimb
+    // lift-off to hindlimb touchdown, which makes it the GATHERED one (limbs
+    // under the body, back rounded) — 78 ms, against 34 ms before — and the
+    // 0.07 gap runs from hindlimb lift-off to forelimb touchdown, which is
+    // the EXTENDED one. They were labelled the other way round, which is
+    // also the sign convention `spinePhase` has to satisfy. Stance excursion is
     // speed×cycle×duty = 221 mm (±110), a hair over the ±101 mm the old
     // 2.0 m/s tune measured as its reach ceiling, and the lower duty is
     // what pays for the extra speed.
@@ -138,8 +146,18 @@ export const GAITS = {
     offsets: { RL: 0, RR: 0.10, FR: 0.42, FL: 0.52 },
     lift: 0.078, drop: 0.040, track: 0.76, sink: 0.021, uLift: 0.10, uPlant: 0.88,
     press: 0.30, bob: 0.030, bobBeats: 1, sway: 0.004, swayBeat: 0.0022, pitch: -3.4,
-    scapula: 24, spineFlex: 15.0, yawSway: 0.5,
+    scapula: 24, spineFlex: 30.0, spinePhase: 2.325, yawSway: 0.5,
     flight: 1.0, impact: 0.0190,
+    // The gathered suspension, at the top of its arc. Support windows are
+    // RL[0,.25] RR[.10,.35] FR[.42,.67] FL[.52,.77], so [0.77,1.00] is the
+    // zero-support window that FOLLOWS the forelimbs (gathered: limbs under
+    // the body, back rounded) and [0.35,0.42] is the short one that follows
+    // the hindlimbs (extended: limbs stretched fore and aft). 0.88 is the
+    // apex of the long one — measured there: all four feet clear, ballistic
+    // rise 5.4 mm, bob +12 mm, fore/aft paw spread −148 mm (the feet have
+    // crossed under the animal). The old default landed on 0.353, which is
+    // inside the 25 ms EXTENDED window: spread +565 mm, rise 0.4 mm.
+    reviewPhase: 0.88,
   },
 };
 
@@ -922,12 +940,23 @@ export class Locomotion {
     // together at all times, so the split is ~0 and the topline came out dead
     // flat (measured 0.0 deg at trot). The harmonic supplies the symmetric
     // part; together they cover every gait in the table.
+    //
+    // THIRD BUG, and it is why the gallop's topline read as a plank. The two
+    // drivers were in ANTIPHASE. For `run` the load split peaks at phase
+    // ~0.60 (both forefeet carrying) and the harmonic `sin(2π·φ + 1.0)`
+    // peaks at 0.09 and troughs at 0.59 — so the term that was supposed to
+    // supply the symmetric half was subtracting the asymmetric half instead.
+    // Measured delivery was 13.1 deg peak-to-peak of an authored 39, i.e.
+    // 43% — and 13 deg of trunk articulation is 3.4 mm of sagittal camber
+    // over a 227 mm trunk, which is a straight back with a rounding error.
+    // `spinePhase` puts the harmonic's peak on the load split's peak per
+    // gait; it is a phase, not a gain, so it costs nothing.
     const foreShare = FL.load + FR.load;
     const hindShare = RL.load + RR.load;
     const beats2 = g.bobBeats || 2;
     const flexT = (g.spineFlex * Math.PI / 180) * moving
       * ((foreShare - hindShare) * 0.75
-        + Math.sin(TAU * beats2 * this.phase + 1.0) * 0.55);
+        + Math.sin(TAU * beats2 * this.phase + (g.spinePhase ?? 1.0)) * 0.55);
     // Rate matters here: the harmonic runs at 2x cycle (5 Hz at a trot) and
     // a damper at 16 was attenuating it to 45% before it ever reached a bone.
     this.spineFlex = damp(this.spineFlex, flexT, 30, h);
