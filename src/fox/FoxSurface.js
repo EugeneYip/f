@@ -22,7 +22,9 @@
  */
 import * as THREE from 'three';
 import { smoothstep, saturate } from '../util/math.js';
-import { buildField, REGION as R, FUR, TORSO_REGIONS, EAR, EAR_NORMAL, EAR_SPAN } from './FoxAnatomy.js';
+import {
+  buildField, REGION as R, FUR, TORSO_REGIONS, CRANIUM, EAR, EAR_NORMAL, EAR_SPAN,
+} from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
   sampleGrid, surfaceNets, buildAdjacency, relax,
@@ -158,6 +160,12 @@ export async function buildFoxSurface(skeleton, {
       const l = Math.hypot(fx, fy, fz) || 1;
       fx /= l; fy /= l; fz /= l;
     }
+
+    // --- the cranium owns its own region ------------------------------------
+    // Done BEFORE the ear block so a relabelled dome vertex cannot then be
+    // read as pinna. See CRANIUM in FoxAnatomy for why `region` is wrong on
+    // the top of the head and what downstream reads it.
+    if ((reg === R.neck || reg === R.ruff) && CRANIUM.contains(x, y, z)) reg = R.skull;
 
     // --- ear: concha, rim and blade ----------------------------------------
     // The concha is carved by a subtraction, and subtractions own no surface,

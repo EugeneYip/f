@@ -176,6 +176,55 @@ export const EYE = {
   cornealProud: 0.0030,    // how far the cornea stands out of the socket
 };
 
+/**
+ * The cranium, as one place both the primitives and the region test read.
+ *
+ * `region` on a vertex is "whose primitive is nearest", and on the top of the
+ * head that is not the braincase — it is the last NECK station of the trunk
+ * chain, a 50 mm sphere whose surface passes closer to the blended skin than
+ * the 25.5 mm braincase's does. Measured on the built mesh: `skull` owned
+ * ONE vertex on the whole animal, and on the cranium itself `neck` owned 71.
+ * Coat DEPTH was never affected — that is a softmax over every nearby
+ * primitive and measures 27.7 mm there, correctly shallower than the flank —
+ * but every per-region table the fur agent keys off the integer id was
+ * reading the top of the head as neck: card length, card opacity floor,
+ * shell length scale and transmission are all indexed by it.
+ *
+ * So FoxSurface relabels the dome by POSITION, and takes the position from
+ * here rather than re-deriving it, so the test cannot drift off the shape.
+ *
+ * It does NOT make `skull` a large region, and should not be read as trying
+ * to: after §4f halved the braincase to 25.5 mm half-width the primitive
+ * barely reaches the skin anywhere, because the ear bases, the cheeks, the
+ * forehead and the neck surround it. `skull` goes from 1 vertex to 24 and
+ * that is the honest size of the exposed cranium. What the relabel is FOR is
+ * the other direction: no vertex on the top of the head is labelled `neck`
+ * any more, so the fur agent's 45 mm ruff character cannot be applied to the
+ * poll by an accident of which sphere happened to be nearest.
+ */
+export const CRANIUM = {
+  braincase: { c: skullXf([0, 0.3140, 0.1985]), r: sr(0.0216), s: [0.900, 0.880, 0.96] },
+  occiput:   { c: skullXf([0, 0.3040, 0.1790]), r: sr(0.0205), s: [0.900, 0.880, 0.78] },
+  /**
+   * Multiple of the primitive radius the test reaches to. The blended skin
+   * stands ~30 mm off the braincase centre where the primitive's own surface
+   * is at 22 mm, because smin with the neck, forehead and ear bases pushes it
+   * out; 1.42 only just reached it and 1.80 covers the poll strip without
+   * reaching back onto the nape (measured: the relabelled vertices span
+   * y 301-305 mm, z 150-174 mm, |x| < 18 mm, which is exactly the dome
+   * between the ear bases).
+   */
+  grow: 1.80,
+  /** Is this bind-space point on the cranium? */
+  contains(x, y, z) {
+    for (const p of [this.braincase, this.occiput]) {
+      const dx = (x - p.c[0]) / p.s[0], dy = (y - p.c[1]) / p.s[1], dz = (z - p.c[2]) / p.s[2];
+      if (dx * dx + dy * dy + dz * dz < (p.r * this.grow) ** 2) return true;
+    }
+    return false;
+  },
+};
+
 /** The ear pinna plane normal — the direction the concha faces (right ear). */
 export const EAR_NORMAL = [0.7000, 0.0850, 0.7090];
 
@@ -229,10 +278,10 @@ export const EAR = {
   thickTip: 0.92,     //   ... and at the apex (near-circular cross-section)
   thickPower: 1.3,
   wide: 1.02,
-  rim: 0.0105,        // blade left outside the concha on each side
+  rim: 0.0120,        // blade left outside the concha on each side
   // Concha: a cone, not a sphere, sized FROM the blade profile so it can never
   // outgrow it however the pinna is retuned.
-  bowlU0: 0.12, bowlU1: 0.80, bowlWide: 0.85, bowlThick: 0.50, bowlK: 0.006,
+  bowlU0: 0.12, bowlU1: 0.80, bowlWide: 0.85, bowlThick: 0.50, bowlK: 0.009,
   bowlFloor0: 0.0035, bowlFloor1: 0.0115,
 
   ...earFrame(),
@@ -397,7 +446,11 @@ const TRUNK_PROFILE = [
 const TRUNK = TRUNK_PROFILE.map(([z, top, bot, sx, reg]) =>
   [z, (top + bot) * 0.5, (top - bot) * 0.5, sx, reg]);
 
-const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0224, 0.0196, 0.0160, 0.0118, 0.0050];
+// The last station was 5.0 mm, which is 0.83 of a 6 mm voxel: below the
+// mesher's ~1.5-cell watertightness floor, never mind its ability to round
+// anything. 9.5 mm is 1.6 cells and still tapers, and it is invisible in the
+// silhouette because the tail tip carries 42 mm of coat over it.
+const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0224, 0.0196, 0.0162, 0.0126, 0.0095];
 
 
 /**
@@ -491,13 +544,13 @@ export function buildField() {
   // top of this file for why the head moves as a unit.
   const H = skullXf;
   f.add({
-    name: 'braincase', a: H([0, 0.3140, 0.1985]), ra: sr(0.0216),
-    squash: [0.900, 0.880, 0.96], k: 0.026, ...furOf(R.skull),
+    name: 'braincase', a: CRANIUM.braincase.c, ra: CRANIUM.braincase.r,
+    squash: CRANIUM.braincase.s, k: 0.026, ...furOf(R.skull),
     flowDir: [0, 0.16, -1], flowRadial: 0.22, tint: TINT_FUR,
   });
   f.add({
-    name: 'occiput', a: H([0, 0.3040, 0.1790]), ra: sr(0.0205),
-    squash: [0.900, 0.880, 0.78], k: 0.026, ...furOf(R.skull),
+    name: 'occiput', a: CRANIUM.occiput.c, ra: CRANIUM.occiput.r,
+    squash: CRANIUM.occiput.s, k: 0.026, ...furOf(R.skull),
     flowDir: [0, 0.10, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Domed forehead with a gentle stop — arctic fox, not red fox.
@@ -507,8 +560,12 @@ export function buildField() {
     flowDir: [0, 0.22, -1], flowRadial: 0.20, tint: TINT_FUR,
   });
   f.addMirrored({
+    // ra is 10.9 mm world = 1.8 voxels, so the brow itself cannot be rounded
+    // by the mesher; only its FILLET can be, and k is that fillet's radius.
+    // §4d wants the supraorbital ridge "subtle and rounded, never a ledge",
+    // which points the same way as the sampling does.
     name: 'brow', a: H([0.0252, 0.3318, 0.2160]), ra: sr(0.0092),
-    squash: [0.90, 0.74, 0.96], k: 0.016, ...furOf(R.forehead),
+    squash: [0.90, 0.74, 0.96], k: 0.021, ...furOf(R.forehead),
     flowDir: [0.15, 0.20, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Short and BLUNT: 2:1 taper read as a point once fur was on it, so the
@@ -615,11 +672,14 @@ export function buildField() {
   // floor = offset - halfThickness; `bowlFloor0/1` author the floor directly
   // and it is deepest at the root, which is where a canid concha actually is.
   //
-  // k = 6 mm, not a crisper 3: the rim's own radius of curvature has to stay
-  // above one 6 mm voxel or it stair-steps — the defect §4c warns about — and
-  // that is also why the rim is 10.5 mm wide. Measured after: the rim crest
-  // stands 8.5 mm proud of the bowl floor at mid-pinna and 9.9 mm at the root,
-  // against 0.0 mm before, so the bowl is now a bowl.
+  // k = 9 mm, not a crisper 3 or even 6: measured against the SDF's own
+  // curvature, the first cut of this bowl at k = 6 made `earInner` the most
+  // under-sampled region on the whole animal (5th-percentile radius 0.92 of a
+  // voxel, 67 % of its vertices under 3). A fillet's radius IS its k, so k has
+  // to clear the cell -- 1.5 cells here -- and the rim has to be wide enough
+  // that the fillet does not eat it, hence 12 mm. Measured after the first
+  // cut: the rim crest stands 8.5 mm proud of the bowl floor at mid-pinna and
+  // 9.9 mm at the root, against 0.0 mm before, so the bowl is now a bowl.
   {
     const station = (u) => {
       const rc = EAR.bowlHalfWidthAt(u) / EAR.bowlWide;
@@ -662,7 +722,7 @@ export function buildField() {
   });
   f.addMirrored({
     name: 'carpusR', a: [0.0474, 0.0605, 0.0552], b: [0.0458, 0.0250, 0.0730],
-    ra: 0.0156, rb: 0.0178, squash: [1.0, 1.0, 0.92], k: 0.009, ...furOf(R.legFrontLower),
+    ra: 0.0156, rb: 0.0178, squash: [1.0, 1.0, 0.92], k: 0.012, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.12], flowRadial: 0.40, tint: TINT_FUR,
   });
   addPaw(f, furOf, 0.0455, 0.0722, +1, R.pawFront, 0.0192, 0.0206);
@@ -683,7 +743,7 @@ export function buildField() {
   // Long metatarsus — the "backwards knee" is the hock joint at its top.
   f.addMirrored({
     name: 'metatarsusR', a: [0.0461, 0.0900, -0.1755], b: [0.0452, 0.0255, -0.1315],
-    ra: 0.0140, rb: 0.0164, squash: [0.88, 1.0, 1.0], k: 0.009, ...furOf(R.hock),
+    ra: 0.0140, rb: 0.0164, squash: [0.88, 1.0, 1.0], k: 0.012, ...furOf(R.hock),
     flowDir: [0, -1, 0.35], flowRadial: 0.40, tint: TINT_FUR,
   });
   // Calcaneal tuber: the heel bone projects caudally as the Achilles lever and
@@ -710,7 +770,7 @@ export function buildField() {
     const b = [tail[i + 1][0], tail[i + 1][1], tail[i + 1][2]];
     f.add({
       name: `tail${i}`, a, b, ra: tail[i][3], rb: tail[i + 1][3],
-      k: i === 0 ? 0.014 : 0.0055, ...furOf(tail[i][4]),
+      k: i === 0 ? 0.014 : 0.0085, ...furOf(tail[i][4]),
       // radially outward is the signature bottle-brush look
       flowDir: sub(b, a), flowRadial: 1.05, tint: TINT_FUR,
     });
@@ -781,11 +841,20 @@ function addPaw(f, furOf, x, zBack, sgn, region, padR, toeSpread) {
 
   f.addMirrored({
     name: `pad${region}`, a: [x, padY, zBack], b: [x, padY, zBack + sgn * padLen],
-    ra: padR, rb: padR * 1.04, squash: [1.08, 0.62, 1.0], k: 0.010,
+    ra: padR, rb: padR * 1.04, squash: [1.08, 0.62, 1.0], k: 0.013,
     ...fur, ...flow, tint: TINT_PAW,
   });
 
-  // four toes: outer pair shorter and splayed, inner pair longer
+  // four toes: outer pair shorter and splayed, inner pair longer.
+  //
+  // k 8.0 -> 13.0 mm. A 9.6 mm toe radius is 1.6 voxels at the 6 mm `high`
+  // cell and the pads are 1.2, so measured against the SDF's own curvature
+  // the paw was the second most under-sampled thing on the animal after the
+  // ear (53-59 % of paw vertices on a feature under 3 cells). Surface Nets
+  // cannot round a 1.6-cell sphere, so four faceted sausages is the best it
+  // could do. Blending them into one soft mass with dimples is both what the
+  // mesh can represent and what §4b describes -- a winter fox's foot is a
+  // furred mitten, not four visible digits.
   const offs = [-1.85, -0.62, 0.62, 1.85];
   const lens = [0.0206, 0.0268, 0.0268, 0.0206];
   const splay = [-0.0070, -0.0020, 0.0020, 0.0070];
@@ -797,7 +866,7 @@ function addPaw(f, furOf, x, zBack, sgn, region, padR, toeSpread) {
       name: `toe${region}_${i}`,
       a: [x0, 0.0034 + r0 * 0.86, z0],
       b: [x0 + splay[i], 0.0034 + r1 * 0.86, z0 + sgn * lens[i]],
-      ra: r0, rb: r1, squash: [1.0, 0.86, 1.0], k: 0.0080,
+      ra: r0, rb: r1, squash: [1.0, 0.86, 1.0], k: 0.0130,
       ...fur, ...flow, tint: TINT_FUR,
     });
   }
