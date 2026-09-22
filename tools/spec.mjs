@@ -771,6 +771,96 @@ const results = await page.evaluate(async () => {
     }
   }
 
+  /**
+   * TRUE coverage of the animal, independent of what is behind it.
+   *
+   * Alpha compositing is linear in the backdrop: with the world hidden and the
+   * clear colour K, every pixel is `I = C_animal + (1 - cov) * K`, and
+   * `C_animal` does not depend on K. Two clear colours therefore subtract it
+   * away exactly. See tools/matte.mjs, which is the standalone version.
+   *
+   * This replaces the fg-minus-bg mask for silhouette work. That mask peaks at
+   * 261/765 on a white animal against snow, which is why three agents and I
+   * each failed to build a contour metric on it.
+   */
+  function matteOf(pose) {
+    const root = ctx.fox?.root;
+    if (!root) return null;
+    const world = ctx.scene.children.filter((o) => o !== root && !o.isLight && !o.isCamera);
+    const shown = world.map((o) => o.visible);
+    const prevBg = ctx.scene.background;
+    const prevClear = ctx.renderer.getClearColor(new THREE.Color());
+    const prevAlpha = ctx.renderer.getClearAlpha();
+    const wasPost = ctx.postfx?.enabled;
+
+    world.forEach((o) => { o.visible = false; });
+    ctx.scene.background = null;
+    if (ctx.postfx) ctx.postfx.enabled = false;   // post is not linear in K
+
+    atTime();
+    D.setPose(pose);
+    const shoot = (hex) => {
+      ctx.renderer.setClearColor(hex, 1);
+      for (let i = 0; i < 8; i++) D.render();
+      const g = grab();
+      return { d: c2.getImageData(0, 0, g.w, g.h).data, w: g.w, h: g.h };
+    };
+    const A = shoot(0x000000), B = shoot(0xffffff);
+
+    world.forEach((o, i) => { o.visible = shown[i]; });
+    ctx.scene.background = prevBg;
+    ctx.renderer.setClearColor(prevClear, prevAlpha);
+    if (ctx.postfx) ctx.postfx.enabled = wasPost;
+
+    const W = A.w, H = A.h, cov = new Float32Array(W * H);
+    for (let p = 0; p < W * H; p++) {
+      const i = p * 4;
+      let sum = 0;
+      for (let c = 0; c < 3; c++) sum += (B.d[i + c] - A.d[i + c]) / 255;
+      cov[p] = Math.max(0, Math.min(1, 1 - sum / 3));
+    }
+    return { cov, W, H };
+  }
+
+  /** Contour structure per height band, measured on a true coverage matte. */
+  function matteBands(m) {
+    if (!m) return null;
+    const { cov, W, H } = m;
+    let top = H, bot = 0;
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) if (cov[y * W + x] > 0.5) { if (y < top) top = y; if (y > bot) bot = y; break; }
+    if (bot <= top) return null;
+    const bands = {
+      head: [top, top + (bot - top) * 0.33],
+      body: [top + (bot - top) * 0.33, top + (bot - top) * 0.70],
+      legs: [top + (bot - top) * 0.70, bot],
+    };
+    const res = {};
+    for (const [name, [y0, y1]] of Object.entries(bands)) {
+      const tvs = [], ramps = [];
+      for (let y = Math.round(y0) + 1; y < Math.round(y1) - 1; y += 2) {
+        let x = 0;
+        while (x < W - 1 && cov[y * W + x] < 0.02) x++;
+        if (x >= W - 2) continue;
+        let xi = x;
+        while (xi < W - 1 && cov[y * W + xi] < 0.90) xi++;
+        if (xi >= W - 2) continue;
+        let tv = 0;
+        for (let k = x; k < xi; k++) tv += Math.abs(cov[y * W + k + 1] - cov[y * W + k]);
+        const net = Math.abs(cov[y * W + xi] - cov[y * W + x]);
+        if (net > 0.3) { tvs.push(tv / net); ramps.push(xi - x); }
+      }
+      tvs.sort((a, b) => a - b); ramps.sort((a, b) => a - b);
+      res[name] = tvs.length >= 8
+        ? { n: tvs.length,
+            tvMedian: +tvs[tvs.length >> 1].toFixed(3),
+            tvP10: +tvs[Math.floor(tvs.length * 0.1)].toFixed(3),
+            rampMedian: ramps[ramps.length >> 1] }
+        : null;
+    }
+    return res;
+  }
+
   // 10b. SILHOUETTE HARDNESS — width is not softness.
   //
   //      Check 10 reports the head's edge ramping over 8 px and passes it,
@@ -890,6 +980,11 @@ const results = await page.evaluate(async () => {
     // mesh. The anatomy agent reached the same conclusion independently while
     // trying to build its own furred-silhouette metric.
     out.edgeHardness = profileOf(maskedFrame('frontal', true));
+    // The authoritative silhouette measurement, on a TRUE coverage matte, at
+    // BOTH framings -- because the choice of framing turned out to matter more
+    // than the metric did.
+    out.matteProfile = matteBands(matteOf('profile'));
+    out.matteFrontal = matteBands(matteOf('frontal'));
 
     // POSITIVE CONTROL. A new gate that has never been shown to fail on a
     // KNOWN defect is not a gate, it is a number -- that mistake has been made
@@ -1217,6 +1312,34 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
       `coated ${sub.median} vs fur-off control ${ctl.median} — the coat must ` +
       `raise the ratio at least 1.25x above bare mesh or the metric is blind`);
   } else {
+    // --- the authoritative version, on a true coverage matte -------------
+    //
+    // Everything above this line measures a foreground-minus-background mask,
+    // which on a white animal against snow peaks at 261/765 -- so it is a
+    // proxy, and it has now been wrong in four distinct ways. `matteOf`
+    // recovers coverage exactly (see tools/matte.mjs), which means the metric
+    // finally works at ANY framing, and that exposed the last mistake: I
+    // moved this gate to `frontal` because it separated cleanly from its
+    // control, and `frontal` is simply the animal's best angle.
+    //
+    //              ramp   tv      p10
+    //    frontal   13px  2.308   1.384      passes comfortably
+    //    profile    5px  1.216   1.000      a perfectly monotonic crossing
+    //
+    // So `profile` is asserted and `frontal` is reported. The floor stays at
+    // 1.15 for the same reason as before -- 1.0 is bare mesh by construction.
+    for (const band of ['head', 'body', 'legs']) {
+      const v = results.matteProfile?.[band];
+      const f = results.matteFrontal?.[band];
+      record(`matte silhouette is hair at profile: ${band}`, v && v.tvP10 >= 1.15,
+        v ? `outline path length over net crossing ${v.tvP10} at the 10th ` +
+            `percentile (median ${v.tvMedian}, ramp ${v.rampMedian}px) over ` +
+            `${v.n} rows. 1.0 is a single monotonic crossing, i.e. bare mesh. ` +
+            `Same band at \`frontal\` reads ${f ? f.tvP10 : 'n/a'}`
+          : 'too few usable rows in this band to measure — that is a failure, ' +
+            'not a pass');
+    }
+
     // Floor of 1.15 is derived, not tuned to pass: the fur-off control's own
     // 10th percentile is 1.054, and 1.15 sits clearly above a single monotonic
     // crossing while staying well under the coated reading. It is asserted on
