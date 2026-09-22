@@ -1358,23 +1358,23 @@ void main(){
     // went visibly mottled at sun 14,-30 while the shells alone stayed clean.
     // In the interior the card must shade like the coat it sits in.
     //
-    // ...unless the card is genuinely RESOLVED. lod above is a coarse gate
-    // — it saturates once a card is about 3 px across — and the vEdge weight
-    // then holds the cylinder normal at ~0.2 on anything face-on. At
-    // macro_eye a card is tens of pixels wide and is unmistakably a single
-    // hair, and shading it as though it were part of the surface underneath
-    // is why no Kajiya-Kay travelling highlight is visible on any individual
-    // strand there: the highlight needs the tube's own normal sweeping
-    // through the lobe across the hair's width, and 0.2 of a tube normal
-    // does not sweep.
+    // TRIED AND REVERTED, so nobody spends the round on it again: lifting the
+    // weight to 1.0 wherever the hair is well resolved on screen
+    // (1 - smoothstep(0.10, 0.24, fwidth(s)), which is 1 at macro_eye and 0
+    // at the framings the grey-patch guard was built for) changes the macro
+    // frame by nothing you can see —
+    // shots/fur-p3/macro_eye.png against shots/fur-p3-nocardN/macro_eye.png.
+    // It cannot: the card already rotates about its hair axis to FACE the
+    // camera, so Vp ~ V, and on a face-on surface N ~ V too. Ncyl and N agree
+    // everywhere except within a pixel or two of each hair's own edge.
     //
-    // The grey-patch failure this guard was built for happens where cards are
-    // 1-3 px and their shading mismatch is noise that pools. wide is zero
-    // there by construction, so that case is bit-identical.
-    float wide = 1.0 - smoothstep(0.10, 0.24, fwidth(s));
-    N = normalize(mix(N, Ncyl,
-                      mix(0.12 + 0.82 * clamp(vEdge, 0.0, 1.0), 1.0, wide * uStrandRound)
-                      * lod));
+    // So "no Kajiya-Kay travelling highlight on individual strands" is not
+    // the cylinder normal being suppressed. The cards at macro read as flat
+    // bright ribbons with hard rectangular ends, which is a card SHAPE and
+    // card ALPHA problem, not a shading-normal one. Left for whoever takes it
+    // on with a proper metric; a no-op wired into the render is the one thing
+    // this file has enough of.
+    N = normalize(mix(N, Ncyl, (0.12 + 0.82 * clamp(vEdge, 0.0, 1.0)) * lod));
   }
 
   float ao = (1.0 - vP0.z * uAOBake) *

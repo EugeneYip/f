@@ -9,13 +9,25 @@ import { applyAdaptiveFov, REF_ASPECT } from './App.js';
  * frame. Do not change pose names without updating the review baseline.
  */
 export const POSES = {
-  // Authored against MEASURED anatomy (not guesswork). Current rig, after the
-  // proportion rework that dropped the skull 34 mm and pulled it back 22 mm:
-  //   eyeR (0.0288, 0.2809, 0.1999) · nose (0.0016, 0.2497, 0.2518)
-  //   head bone (0, 0.2821, 0.1638) · skull top 0.322 skin / ~0.33 furred
-  //   inter-pupil 46 mm · pawF z 0.093 · pawR z -0.143 · tail tip y 0.048
+  // Authored against MEASURED anatomy (not guesswork). Re-baselined after
+  // §4f moved the bulk into the coat, §4g lengthened the rostrum to
+  // stretch 1.60, and the eye socket became an anisotropic slot:
+  //
+  //   nose     (0.0000, 0.2406, 0.2761)   mouth  (0.0000, 0.2435, 0.2216)
+  //   eyeR     (0.0289, 0.2784, 0.1984)   eyeL  (-0.0289, 0.2784, 0.1984)
+  //   head     (0.0000, 0.2755, 0.1609)   jaw    (0.0000, 0.2578, 0.1856)
+  //   earR tip (0.0572, 0.3419, 0.1656)   skull top y 0.3048 at z 0.1760 skin
+  //   pawR fr  (0.0455, 0.0205, 0.0750)   footR hind (0.0450, 0.0205, -0.1290)
+  //   tail tip (0.0000, 0.0370, -0.3740)  inter-pupil 57.7 mm
+  //
   // Re-derive these if the anatomy changes; a pose that misses its subject
-  // silently wastes an entire review round.
+  // silently wastes an entire review round. The figures above replace a set
+  // that had gone stale by 22.6 mm in z and 9.1 mm in y at the nose, and
+  // claimed a 46 mm inter-pupil against a measured 57.7 -- and two separate
+  // agents wasted measurements on the old numbers before anyone noticed.
+  //
+  // ANCHORED poses (`anchor:`) re-resolve against the live rig and survive
+  // this; only ABSOLUTE poses carry these coordinates implicitly.
 
   // The money shot: 3/4 front, eye level, backlit from camera-left.
   // Target biased +x so the animal sits left of centre with space to look into.
