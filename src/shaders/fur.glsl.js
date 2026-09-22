@@ -633,7 +633,22 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // fibres are finer, denser and more tangled than the guard hairs, so they
   // modulate it without cutting gaps in it. LOD-safe for free -- below the
   // strand layer's own resolution aHair is already its analytic mean, a
-  // constant, so this term flattens to a constant scale at distance.
+  // constant, so this term flattens to a constant scale at distance. The trap
+  // that produced this artefact's ancestors -- a noise running at full
+  // strength at a framing where its own cells are 40 px -- cannot happen to a
+  // term that inherits its LOD from the layer it samples.
+  //
+  // MEASURED. A/B at macro_eye with uCardFloor identical in both arms, so the
+  // felt is the only difference: shots/fur-p1/macro_eye.png (before) against
+  // shots/fur-p3-nocardN/macro_eye.png (after). The plates' interiors go from
+  // flat tone to fibre; their boundaries survive as a faint tonal step, which
+  // is right -- a lock boundary is a real feature, it just is not a facet.
+  // Both of tools/spec.mjs's macro checks were FAILING and now pass:
+  //   fur reads as hair at macro: muzzle  fine 6.49 -> 7.25, share .70 -> .72
+  //   macro reference carries hair detail brow fine 8.95 -> 9.80, .76 -> .77
+  // and the profile contour holds at head 1.251 / body 1.427 / legs 1.635
+  // against the 1.15 floor (the felt is slightly less opaque, so the body band
+  // comes back from 1.769 -- still clear).
   under *= mix(1.0, 0.62 + 0.38 * aHair, uFeltStrand);
 
   a = max(a, under) * densityScale * uDensity;
