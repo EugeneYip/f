@@ -8,7 +8,11 @@ import * as THREE from 'three';
 import { rng } from '../util/math.js';
 
 const SEGMENTS = 4;
-const BLADES = 4;
+// Five blades in the mesh, of which the shader keeps three to five per tuft.
+// One cluster mesh is all the geometry there is, so if the shader does not
+// reshape it per instance then every tuft in the shot is the SAME silhouette
+// rotated — which is exactly what review 3 meant by "identical sprites".
+const BLADES = 5;
 
 export class SnowTufts {
   init(ctx, terrain) {
@@ -38,6 +42,7 @@ export class SnowTufts {
     const tris = BLADES * SEGMENTS * 2;
     const pos = new Float32Array(verts * 3);
     const at = new Float32Array(verts);
+    const ab = new Float32Array(verts);
     const idx = new Uint16Array(tris * 3);
     let v = 0, ii = 0;
     const rand = rng(90210);
@@ -61,6 +66,7 @@ export class SnowTufts {
           pos[v * 3 + 1] = t * hs;
           pos[v * 3 + 2] = cz + oz + dirz * hw * s;
           at[v] = t;
+          ab[v] = b;
           v++;
         }
       }
@@ -74,6 +80,7 @@ export class SnowTufts {
     const geo = new THREE.InstancedBufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('aT', new THREE.BufferAttribute(at, 1));
+    geo.setAttribute('aBlade', new THREE.BufferAttribute(ab, 1));
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
 
     // --- scatter -----------------------------------------------------------
@@ -189,6 +196,7 @@ export class SnowTufts {
 
 const TUFT_VERT = /* glsl */ `
 attribute float aT;
+attribute float aBlade;
 attribute vec3 iPos;
 attribute vec4 iParam;
 
@@ -217,6 +225,26 @@ void main(){
   // which flattened the size variation the scatter had gone to the trouble of
   // generating.
   p.xz *= 0.42 + hs * 7.6;
+
+  // --- per-blade reshaping -------------------------------------------------
+  // There is exactly ONE cluster mesh for the whole field, so with only an
+  // instance yaw and an instance scale every tuft in the shot is the same
+  // five-blade glyph turned and resized. That is what "identical sprites"
+  // means, and no amount of scatter or size variation hides it, because the
+  // eye matches SHAPE. Three hashes of (instance seed, blade index) fix it
+  // for nothing: one strips a blade, one restretches it, one re-aims it.
+  // A stripped blade collapses to a point, and degenerate triangles are
+  // free, so the draw call and the instance count are unchanged.
+  vec2 sd = vec2(phase * 0.0371 + 0.13, aBlade * 0.197 + 0.41);
+  float h0 = rand(sd);
+  float h1 = rand(sd + vec2(3.71, 1.19));
+  float h2 = rand(sd + vec2(11.3, 7.07));
+  float live = (aBlade < 2.5 || h0 > 0.36) ? 1.0 : 0.0;   // never under three
+  p.y *= live * (0.58 + 0.80 * h1);
+  p.xz *= live * (0.78 + 0.48 * h2);
+  float bYaw = (h2 - 0.5) * 2.3;
+  float bc = cos(bYaw), bs = sin(bYaw);
+  p = vec3(p.x * bc - p.z * bs, p.y, p.x * bs + p.z * bc);
 
   float c = cos(yaw), s = sin(yaw);
   p = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
