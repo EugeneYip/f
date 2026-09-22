@@ -207,7 +207,12 @@ const CONVERGE_RECESS = 0.5 * Math.PI / 180;  // sclera to leave on the tight si
 // or a ring of bare sclera shows between lid and face.
 const LID_SPREAD = 0.62;         // fallback when the SDF is unavailable
 const LID_SLACK = 0.10;          // tuck this much further under the skin
-const LID_SPREAD_MIN = 0.17;     // always enough band for a margin + a blend
+// The floor has to be at least as long as the colour ramp that lives on the
+// band, or the band ENDS MID-RAMP and its outer edge is a dark line drawn on
+// the face — which is the failure the millimetre-authored ramp was written to
+// avoid, arrived at from the geometry side. 0.17 rad is 1.9 mm of arc on this
+// globe against a 3.2 mm ramp; 0.30 rad is 3.4 mm and just clears it.
+const LID_SPREAD_MIN = 0.30;
 const LID_SPREAD_MAX = 0.95;
 
 // --- how wide the dark is, in metres of arc from the free edge -------------
@@ -335,7 +340,12 @@ float feGlobeR(vec3 d){
   t = feGlobeZ(t * dxy) / dz;
   t = feGlobeZ(t * dxy) / dz;
   t = feGlobeZ(t * dxy) / dz;
-  return t;
+  // Past the corneal cap the surface IS the scleral sphere, exactly, and the
+  // fixed point above is not defined there: it divides by a clamped d.z and
+  // flies outward, which turns a long lid band into a flare standing off the
+  // face. The cap ends at rho = uRc, i.e. d.z = sqrt(1 - (uRc/uR)^2) ~ 0.58,
+  // so hand the answer over to the sphere across that crossing.
+  return mix(t, uR, smoothstep(0.62, 0.52, d.z));
 }
 `;
 
@@ -810,7 +820,7 @@ export class Eyes {
    * Falls back to a constant if the SDF is not available.
    */
   _lidSpreadSampler(fox, meta, R, apW, seat = 0, lidYaw = 0) {
-    const COLS = 15;
+    const COLS = 25;
     const f = fox.field;
     const flat = () => LID_SPREAD;
     if (!f?.raycast || !meta?.centre || !meta?.look) return flat;
@@ -843,6 +853,7 @@ export class Eyes {
     };
 
     const table = [new Float32Array(COLS), new Float32Array(COLS)];
+    const raw = [new Float32Array(COLS), new Float32Array(COLS)];
     for (let li = 0; li < 2; li++) {
       const sign = li === 0 ? 1 : -1;
       for (let i = 0; i < COLS; i++) {
@@ -857,14 +868,47 @@ export class Eyes {
         const rl = Math.hypot(ax, ay) || 1;
         const rx = ax / rl, ry = ay / rl;
 
-        // March outward until the skin has closed over the globe.
-        let found = LID_SPREAD;
-        for (let k = 1; k <= 14; k++) {
-          const th = th0 + (k / 14) * 1.05;
+        // March outward until the skin has closed over the globe, then BISECT.
+        //
+        // The march alone was the fix's own defect. Fourteen steps over
+        // 1.05 rad quantises the answer to 4.3 degrees, and the table it
+        // produced stepped 35.8 / 31.5 / 31.5 / 30.5 / 27.2 ... across
+        // fifteen columns — so the band's outer boundary was a staircase with
+        // 4-degree risers. Seen at the grazing angle the lower lid is always
+        // viewed at, that staircase renders as a fan of hard black-and-pale
+        // stripes radiating from the canthus: the exact artefact visible on
+        // the lower-temporal quadrant of one eye at `frontal`, and the reason
+        // that eye read as broken while its mirror image read as an eye.
+        // Twelve bisections take the resolution to 0.015 degrees.
+        const open = (th) => {
           const st = Math.sin(th), ct = Math.cos(th);
-          if (skinAt(rx * st, ry * st, ct) >= need) { found = th - th0; break; }
+          return skinAt(rx * st, ry * st, ct) >= need;
+        };
+        let lo = 0, hi = -1;
+        for (let k = 1; k <= 14; k++) {
+          const th = (k / 14) * 1.05;
+          if (open(th0 + th)) { lo = ((k - 1) / 14) * 1.05; hi = th; break; }
         }
-        table[li][i] = clamp(found + LID_SLACK, LID_SPREAD_MIN, LID_SPREAD_MAX);
+        if (hi < 0) { raw[li][i] = LID_SPREAD; continue; }
+        for (let k = 0; k < 12; k++) {
+          const m = 0.5 * (lo + hi);
+          if (open(th0 + m)) hi = m; else lo = m;
+        }
+        raw[li][i] = 0.5 * (lo + hi);
+      }
+    }
+
+    // A lid is one continuous membrane, so its tuck line cannot step between
+    // neighbouring columns however noisy the field is there. Three-tap
+    // binomial smoothing, edges held — this is a statement about the lid, not
+    // a filter chosen to make a number look better.
+    for (let li = 0; li < 2; li++) {
+      for (let i = 0; i < COLS; i++) {
+        const a = raw[li][Math.max(0, i - 1)];
+        const b = raw[li][i];
+        const c2 = raw[li][Math.min(COLS - 1, i + 1)];
+        table[li][i] = clamp((a + 2 * b + c2) * 0.25 + LID_SLACK,
+          LID_SPREAD_MIN, LID_SPREAD_MAX);
       }
     }
 
@@ -1223,7 +1267,7 @@ export class Eyes {
   // wedge, and because the two sockets face 72 degrees apart only one eye
   // ever caught it. The cornea does not need base gloss (its mirror is the
   // clearcoat lobe); the sclera needs a damp sheen and nothing more.
-  float roughnessFactor = mix(0.42, 0.50, eyOnCornea);
+  float roughnessFactor = mix(0.66, 0.50, eyOnCornea);
 `)
           // The tear film only exists over the cornea, and it dulls where the
           // lid margin presses on the globe.
@@ -1235,7 +1279,12 @@ export class Eyes {
   // the two sockets face 72 degrees apart, which is a second and independent
   // contributor to "the eyes are asymmetric". A tear film over pigmented
   // sclera is a damp sheen; the mirror belongs to the cornea alone.
-  material.clearcoat = mix(0.26, 1.0, eyOnCornea) * (1.0 - max(eyShU, eyShD) * 0.7);
+  //
+  // And 0.26 still blew out, because at any oblique framing the scleral flank
+  // is seen at GRAZING incidence and Fresnel takes a smooth layer to 1.0
+  // there whatever its strength. So the clearcoat is corneal only; the sclera
+  // keeps its damp look from the base lobe, whose roughness is set above.
+  material.clearcoat = eyOnCornea * (1.0 - max(eyShU, eyShD) * 0.7);
   // A real cornea is mirror-smooth, but our env map is a 256 px PMREM: at
   // mirror roughness it reflects the sky/ground horizon as a HARD LINE across
   // the eye, which reads as a rendering artifact rather than as a reflection.
@@ -1243,6 +1292,29 @@ export class Eyes {
   // gradient a photograph actually shows, and widens the catchlight enough to
   // survive the bloom downsample.
   material.clearcoatRoughness = mix(0.30, 0.075, eyOnCornea);
+`)
+          .replace('#include <lights_fragment_end>', /* glsl */ `
+#include <lights_fragment_end>
+  // SOCKET OCCLUSION on the scleral flank.
+  //
+  // Everything outside the limbus sits deep in an orbit ringed by 14 mm of
+  // coat and sees very little of the sky, but it was being handed the whole
+  // hemisphere — so the flank was both too bright for a pigmented sclera and
+  // able to throw a 250-level grazing highlight. Because the two sockets face
+  // 72 degrees apart, only ever one eye at a time, which is the second half
+  // of the reported asymmetry.
+  //
+  // Ramped on radius rather than on the corneal mask: the mask's transition
+  // is only 9 % of the limbal radius wide and an occlusion step that sharp
+  // would draw a ring of its own.
+  float eyAO = mix(1.0, 0.30,
+    smoothstep(0.86, 1.34, eyRho / max(uLimbusR, 1e-6)));
+  reflectedLight.directDiffuse *= eyAO;
+  reflectedLight.indirectDiffuse *= eyAO;
+  reflectedLight.directSpecular *= eyAO;
+  reflectedLight.indirectSpecular *= eyAO;
+  clearcoatSpecularDirect *= eyAO;
+  clearcoatSpecularIndirect *= eyAO;
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeGlobe';
