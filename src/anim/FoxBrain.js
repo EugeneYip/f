@@ -98,6 +98,45 @@ const ANKLE_LIMIT_CLEAR = 0.045;
 /** Hard cap on the reach backstop so a hopeless target cannot flatten the animal. */
 const MAX_REACH_DROP = 0.080;
 /**
+ * How the sagittal spine flexion is shared out: hips · spine01..04 · chest.
+ *
+ * THE WEIGHTS USED TO ALL HAVE THE SAME SIGN and summed to 1.12, which makes
+ * the flexion a LEVER rooted at the pelvis rather than a camber in the back.
+ * Every joint added pitch in the same direction, so the accumulated rotation
+ * at the shoulder girdle was the full 1.12 x flex — and with `run`'s authored
+ * 30 deg that is ~43 deg applied to a chest sitting ~230 mm cranial of the
+ * hips. MEASURED at `run`, shoulder height above the snow over one cycle:
+ *
+ *   term zeroed      shoulder range    peak forelimb reach demand   peak drop
+ *   (baseline)        53..288 mm  235      1.422 x Ltot              80.0 mm (capped)
+ *   bob = 0           49..282     233      1.442                     80.0
+ *   flight = 0        44..285     241      1.497                     80.0
+ *   impact = 0        45..277     232      1.465                     80.0
+ *   pitch = 0         39..275     236      1.440                     80.0
+ *   scapula = 0       51..265     214      1.419                     80.0
+ *   sway = 0          46..285     238      1.501                     80.0
+ *   spineFlex = 0     89..204     115      1.134                     34.5
+ *   spineFlex+scap=0  91..190      99      1.059                     20.0
+ *
+ * One term owns it. The forelimb is 192.1 mm long and 184.8 mm usable at
+ * REACH_MAX, so a shoulder that travels 235 mm vertically cannot keep a paw
+ * on the ground by any amount of IK; the reach backstop saturated its 80 mm
+ * cap, the solver was left 37 mm short of its target, and the shortfall
+ * changes every frame — which is exactly what `audit.mjs` reported as
+ * 0.1005 m/s of ankle slide and 0.1235 m/s of contact-point slide on pawFR.
+ *
+ * A galloping canid's back rounds and extends about its OWN mid-length: the
+ * lumbar flexes one way and the thoracic the other, and the withers and the
+ * croup stay roughly level while the middle of the topline travels. That is a
+ * sign alternation, not a smaller number — these weights sum to 0.00 (the
+ * girdle returns to level) while their absolute total is 1.12, unchanged, so
+ * the topline articulates exactly as much as before. Measured camber (peak
+ * sagittal deviation of the spine joints from the hips->chest chord) is in the
+ * commit message; it went UP, not down, because a lever displaces its far end
+ * instead of bending.
+ */
+const FLEX_W = [0.16, 0.26, 0.18, -0.12, -0.26, -0.22];
+/**
  * Ceiling on how fast the ANTICIPATORY half of the reach backstop may move
  * the body, in m/s. Stance demand is exempt — that one is a guarantee and it
  * changes slowly anyway (measured peak 1.37 m/s at a walk, 1.95 at a trot).
@@ -296,6 +335,7 @@ export class FoxBrain {
     this._prevVX = 0; this._prevVY = 0; this._prevVZ = 0;
     this._prevBodyY = 0;
 
+    this.flexW = FLEX_W.slice();
     this.reachDrop = 0;
     this.ikError = 0;
     this.idleShiftX = 0;
@@ -821,13 +861,13 @@ export class FoxBrain {
     const flex = loco.spineFlex;
     const bend = loco.spineBend * 0.35;
 
-    rig.add('hips', flex * 0.20, loco.pelvisYaw + (this.pounceRock || 0), loco.pelvisRoll);
+    const FW = this.flexW;                    // hips · spine01..04 · chest
+    rig.add('hips', flex * FW[0], loco.pelvisYaw + (this.pounceRock || 0), loco.pelvisRoll);
     const SW = [0.16, 0.22, 0.26, 0.22];      // spine01..04 share of the twist
-    const FW = [0.26, 0.24, 0.20, 0.14];      // and of the sagittal flexion
     for (let k = 0; k < 4; k++) {
-      rig.add(`spine0${k + 1}`, flex * FW[k], dYaw * SW[k] + bend * SW[k], dRoll * SW[k]);
+      rig.add(`spine0${k + 1}`, flex * FW[k + 1], dYaw * SW[k] + bend * SW[k], dRoll * SW[k]);
     }
-    rig.add('chest', flex * 0.08, dYaw * 0.14, dRoll * 0.14);
+    rig.add('chest', flex * FW[5], dYaw * 0.14, dRoll * 0.14);
 
     // ------------------------------------------------------------ breathing --
     // Chest rise, counter-lifted humeri so the front feet are not dragged up

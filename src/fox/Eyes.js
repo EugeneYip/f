@@ -241,6 +241,7 @@ uniform float uIrisR, uLimbusR, uPupilR, uFibreN, uCollarette, uEta, uIrisZ;
 uniform float uCaustic, uWetness, uSunInt;
 uniform float uApW, uApUp, uApDn, uApTilt, uBlinkU, uBlinkD;
 uniform float uSpread;
+uniform float uLidYaw, uLidPitch;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
 uniform vec3 uCamL, uSunL, uSunCol, uSkyCol, uBounceCol;
@@ -536,6 +537,11 @@ export class Eyes {
       `(${(2 * chord(e.apW) / (chord(AP_UP) + chord(AP_DN))).toFixed(2)}:1, ` +
       `fissure/cornea ${(e.R * chord(e.apW) / e.limbusR).toFixed(2)})`,
     );
+    // How far the fissure has failed to keep up with the globe, unsigned.
+    // Both angles are nasal-positive in their own side's frame, so this is
+    // the one quantity that decides the crescent and it needs no per-side
+    // special case.
+    const lag = (x) => Math.abs(x.restYaw) - Math.abs(x.lidYaw);
     for (const x of this.eyes) {
       const w = x.win;
       console.info(
@@ -543,8 +549,14 @@ export class Eyes {
         `N ${w ? deg(w.nasal) : '--'}° U ${w ? deg(w.up) : '--'}° D ${w ? deg(w.down) : '--'}° ` +
         `${w ? '' : '(UNMEASURED — field unavailable, using fallback) '}· ` +
         `canthi ±${deg(x.apTh)}° (AP_W ${x.apW.toFixed(3)}) · limbus ${deg(x.limbusTh)}° · ` +
-        `clears limbus by ${deg(x.apTh - x.limbusTh)}° · ` +
-        `converge ${deg(x.restYawRaw)}° → ${deg(x.restYaw)}° (max ${deg(x.convMax)}°)`,
+        `converge ${deg(x.restYawRaw)}° → ${deg(x.restYaw)}° (max ${deg(x.convMax)}°) · ` +
+        `fissure follows ${deg(x.lidYaw)}° · ` +
+        // The number that decides whether there is a black crescent: how far
+        // outside the limbus each lid margin sits, measured from the CORNEAL
+        // axis rather than the orbital one. Equal is the goal; 15.9 vs 0.5 is
+        // what the critic called an asymmetric O-ring.
+        `sclera N ${deg(x.apTh - lag(x) - x.limbusTh)}° / ` +
+        `T ${deg(x.apTh + lag(x) - x.limbusTh)}°`,
       );
     }
   }
@@ -644,21 +656,53 @@ export class Eyes {
     // --- the palpebral aperture, from the socket rather than from a number --
     const win = this._measureAperture(fox, meta, R, Rc, zc, k, seat);
     const limbusTh = Math.asin(clamp(limbusR / R, 0, 1));   // limbus, in radians off axis
-    // The canthi go as far as the NEARER wall allows. The aperture stays
-    // centred on the orbital axis: it is the socket's opening, and rotating it
-    // nasally to chase the converged globe walks it straight into the near
-    // wall and comes out SHORTER (13.5 mm against 15.2 for a 3-degree rotation
-    // — measured, not guessed).
+    // THE FISSURE FOLLOWS THE GLOBE, as far as the nasal wall allows.
+    //
+    // The note that used to be here said the aperture must stay centred on the
+    // orbital axis because "rotating it nasally walks it straight into the
+    // near wall and comes out SHORTER (13.5 mm against 15.2 for a 3-degree
+    // rotation)". That was measured on a socket that opened 97.9 degrees in
+    // total. The anatomy agent's muzzle work has since moved the nasal wall
+    // out: this socket now measures T 64.8 / N 54.8 = 119.6 degrees, and the
+    // trade is no longer the one that measurement describes.
+    //
+    // Leaving the fissure centred while the globe converges 8.8 degrees is
+    // what the critic is looking at. Measured on `macro_eye` with each
+    // surface forced to a unique primary and the mask read back off the
+    // untinted frame: 30 423 px of bare sclera, 28 989 of them (95.3 %) on
+    // the temporal side — a 20 : 1 split, 128 px against 17 px on the iris
+    // centre row, against an iris radius of 249 px. The geometry predicts
+    // exactly that: temporal margin at apTh + restYaw = 15.9 degrees outside
+    // the limbus, nasal margin at 0.5 degrees outside it.
+    //
+    // So rotate the fissure with the globe. The cost is width — the nasal
+    // canthus is the one near a wall — and the cost is bounded and measured:
+    // half-width becomes min(nasalRoom - follow, temporalRoom + follow).
+    const nasalRoom = win ? win.nasal - AP_WALL_MARGIN : Math.atan(0.78);
+    const tempRoom = win ? win.temporal - AP_WALL_MARGIN : Math.atan(0.78);
+    // Never follow so far that the fissure's own half-width drops onto the
+    // limbus: a margin inside the limbus clips the iris, which is the defect
+    // this is here to cure, arriving from the other direction.
+    const minHalf = limbusTh + CONVERGE_RECESS;
+    const follow = win
+      ? clamp(Math.min(Math.abs(restYawRaw), Math.max(0, nasalRoom - minHalf)), 0, 0.45)
+      : 0;
     const apTh = win
-      ? clamp(Math.min(win.temporal, win.nasal) - AP_WALL_MARGIN,
+      ? clamp(Math.min(nasalRoom - follow, tempRoom + follow),
         Math.atan(AP_W_FLOOR), Math.atan(AP_W_CEIL))
       : Math.atan(0.78);
     const apW = Math.tan(apTh);
-    // ...and the globe may converge only as far as the fissure can follow it.
-    // Past `apTh - limbusTh` the lid margin crosses inside the limbus on the
-    // side the globe is turning away from, which is the black O-ring.
-    const convMax = Math.max(0, apTh - limbusTh - CONVERGE_RECESS);
+    // The globe may converge as far as the fissure has followed it, PLUS
+    // whatever clearance the fissure still has outside the limbus. Past that
+    // the lid margin crosses inside the limbus on the side the globe is
+    // turning away from, which is the black O-ring.
+    const convMax = follow + Math.max(0, apTh - limbusTh - CONVERGE_RECESS);
     const restYaw = clamp(restYawRaw, -convMax, convMax);
+    // Signed in the socket's own frame: `restYawRaw` is already negative
+    // toward the nose on the right eye and positive on the left, because
+    // eye-local +X flips meaning between sides. The fissure takes the same
+    // sign, so nothing here is a per-side constant.
+    const lidYaw = clamp(restYawRaw, -follow, follow);
 
     // --- assemble ----------------------------------------------------------
     const root = new THREE.Group();
@@ -692,18 +736,24 @@ export class Eyes {
     cornea.castShadow = false;
     ball.add(cornea);
 
-    const spreadAt = this._lidSpreadSampler(fox, meta, R, apW, seat);
+    const spreadAt = this._lidSpreadSampler(fox, meta, R, apW, seat, lidYaw);
     const lids = new THREE.Mesh(buildLids(R, apW, segs.LU, segs.LS, spreadAt), this._lidMaterial(u));
     lids.name = `eyeLids${side}`;
     lids.castShadow = false;
     lids.receiveShadow = false;
     lids.frustumCulled = false;   // shader-moved verts; the bound is a guess
+    // YXZ so the yaw is the outer rotation: `update` writes rotation.x every
+    // frame (the lids follow the gaze a little) and that pitch has to happen
+    // INSIDE the yawed frame, or the aperture tilts as the eye looks up.
+    lids.rotation.order = 'YXZ';
+    lids.rotation.y = lidYaw;
     root.add(lids);
 
     return {
       side, anchor, root, ball, globe, cornea, lids, u, axis,
       R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat, coat, skin: meas,
-      apW, apTh, limbusTh, win, restYawRaw, convMax,
+      apW, apTh, limbusTh, win, restYawRaw, convMax, lidYaw, follow,
+      nasalRoom, tempRoom,
       restYaw, restPitch,
       blink: 0, gazeYaw: 0, gazePitch: 0,
     };
@@ -722,7 +772,7 @@ export class Eyes {
    * smoothly enough around one socket that more would be wasted raycasts.
    * Falls back to a constant if the SDF is not available.
    */
-  _lidSpreadSampler(fox, meta, R, apW, seat = 0) {
+  _lidSpreadSampler(fox, meta, R, apW, seat = 0, lidYaw = 0) {
     const COLS = 15;
     const f = fox.field;
     const flat = () => LID_SPREAD;
@@ -731,6 +781,15 @@ export class Eyes {
     const c = meta.centre;
     const q = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(meta.look).normalize());
+    // The lid mesh is yawed `lidYaw` off the socket axis (the fissure follows
+    // the converged globe), so a direction given in LID-local coordinates
+    // reaches the field through q * Ry(lidYaw). Measuring in the unrotated
+    // frame would apply the nasal column's clearance to the temporal column
+    // and leave a crescent of bare sclera on one side only.
+    if (lidYaw) {
+      q.multiply(new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), lidYaw));
+    }
     const d = new THREE.Vector3();
     // The lid rides the globe, and the globe is seated `seat` further out
     // along the optical axis than the socket centre these rays start from. A
@@ -1000,6 +1059,13 @@ export class Eyes {
       uApDn: { value: AP_DN }, uApTilt: { value: AP_TILT },
       uBlinkU: { value: 0 }, uBlinkD: { value: 0 },
       uSpread: { value: LID_SPREAD },
+      // Rotation of the LID frame relative to the GLOBE frame, so the globe's
+      // contact shadow can be evaluated from the same aperture curves the lid
+      // geometry uses. It was previously evaluated in the globe's own frame,
+      // which silently assumed the two frames coincide — they never did (the
+      // globe carries restPitch = -4.2 degrees of it) and now they differ by
+      // the fissure's nasal follow as well. Written every frame by `update`.
+      uLidYaw: { value: 0 }, uLidPitch: { value: 0 },
     };
   }
 
@@ -1085,7 +1151,14 @@ export class Eyes {
   // --- contact shadow under the lid margins ------------------------------
   // Evaluated from the same aperture curves the lid geometry uses, so the
   // shadow tracks a blink exactly.
+  // Into the LID's frame first. v_lid = Ry(ballYaw - lidYaw) * v_globe, with
+  // the pitch difference folded in the same way; both are packed into
+  // uLidYaw / uLidPitch by update().
   vec3 eyD = normalize(eyP);
+  float eyLc = cos(uLidYaw), eyLs = sin(uLidYaw);
+  eyD = vec3(eyD.x * eyLc + eyD.z * eyLs, eyD.y, -eyD.x * eyLs + eyD.z * eyLc);
+  float eyPc = cos(uLidPitch), eyPs = sin(uLidPitch);
+  eyD = vec3(eyD.x, eyD.y * eyPc - eyD.z * eyPs, eyD.y * eyPs + eyD.z * eyPc);
   float eyDz = max(eyD.z, 1e-3);
   float eyGu = clamp((eyD.x / eyDz) / uApW, -1.0, 1.0);
   float eyGy = eyD.y / eyDz;
@@ -1397,8 +1470,15 @@ void main(){
       e.gazePitch += (pitch - e.gazePitch) * (1 - Math.exp(-16 * dt));
       e.ball.rotation.set(e.restPitch + e.gazePitch, e.restYaw + e.gazeYaw, 0, 'YXZ');
 
-      // Lids follow the eye a little, as real lids do.
+      // Lids follow the eye a little, as real lids do. rotation.y is the
+      // fissure's nasal follow, set once at build; order is YXZ so this pitch
+      // happens inside it.
       e.lids.rotation.x = e.gazePitch * 0.22;
+      // Hand the globe the frame difference so its contact shadow lands under
+      // the lid margin rather than under where the margin would be if the two
+      // frames coincided.
+      e.u.uLidYaw.value = (e.restYaw + e.gazeYaw) - (e.lidYaw ?? 0);
+      e.u.uLidPitch.value = (e.restPitch + e.gazePitch) - e.lids.rotation.x;
     }
   }
 

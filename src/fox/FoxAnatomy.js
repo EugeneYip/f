@@ -315,7 +315,7 @@ export const ROSTRUM = {
   pivot: [0, 0.3020, 0.2255],
   /** Unit rostral axis in authored space: muzzle root -> nose-pad centre. */
   axis: [0, -0.26312, 0.96477],
-  stretch: 1.15,
+  stretch: 1.30,
   occipitalTuck: 0.0000,
 };
 
