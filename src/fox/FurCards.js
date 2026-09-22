@@ -261,6 +261,35 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
   };
 }
 
+/*
+ * REGION_TABLE.b[3]. `earOuter` carries 2.60 and `earInner` 2.20, the two
+ * highest weights on the animal, on the reasoning that the ear fringe is
+ * silhouette-critical.
+ *
+ * MEASURED, AND IT IS WORTH KNOWING BEFORE ANYONE TUNES THIS AGAIN: at the
+ * `profile` framing the near ear barely exists to be fringed. On the
+ * bare-mesh coverage matte (coat length driven to zero, so this is geometry
+ * alone), the per-column topmost covered row over the head reads
+ *
+ *   x  354 .. 426   y 378 -> 308     nose climbing to forehead
+ *   x  430 .. 474   y 285 -> 263 -> 273   ONE smooth arc, peak at x~448
+ *   x  478          y 292             a 19 px step
+ *   x  482 onward   y 314 descending  the nape
+ *
+ * So the ear is a single 48 px-wide convex arc that merges CONTINUOUSLY into
+ * the forehead on its rostral side and has exactly one discontinuity, the
+ * 19 px step at its caudal margin. It rises ~51 px above the nape line on a
+ * 383 px animal. What is missing is not height — it is the notch at the ear's
+ * base and any defined tip: this is 4c's "semicircular paddle", not its
+ * "rounded triangle", and it is fused to the skull.
+ *
+ * That is anatomy, not coat, and it is NOT the fur agent's to fix. The coat's
+ * part in it is only this: a ~15 px fringe at that framing is a third of the
+ * ear's 45 px rise above the forehead, and it fills the one step the outline
+ * has. So the deeper the coat gets, the more completely the ear merges into
+ * the head — which means raising these two weights cannot recover an ear that
+ * has no notch in it, and lowering them cannot either. Route the shape.
+ */
 function cardWeight(regionId) {
   const r = REGION_TABLE[Math.round(regionId)];
   return r ? r.b[3] : 0.8;
