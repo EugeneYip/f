@@ -11,6 +11,67 @@
 //   * discrete, world-locked crystal glints
 //   * wind-packing dependent GGX sheen + grazing fresnel
 //   * aerial perspective through the scene's own fog
+//
+// ---------------------------------------------------------------------------
+// THE RECTILINEAR LADDER IN THE NEAR SNOW IS NOT THIS MATERIAL. IT IS SSAO.
+// ---------------------------------------------------------------------------
+// shots/orch-w7/profile.png has a ladder of ~21 px vertical bars crossing a
+// bright crest around y 1120-1180, x 1300-2095. It reproduces exactly on a
+// fresh render. It is produced by src/fx/AO.js (postfx agent), after this
+// material has finished, and NOT by anything in the snow.
+//
+// The proof is a positive control inside ONE page session, at ONE simulation
+// instant, with the animal verified stationary (root 0, -0.003613, 0 in every
+// arm). High-passed rms of the luma across that band, and the same figure as a
+// percentage of the band mean:
+//
+//   arm                                        rms     mean   contrast
+//   base                                      4.881   126.7    3.85 %
+//   uDebugView = 1 (material writes a CONST)  0.000   255.0    0.00 %   <- post off
+//   ... same, post back on                    4.151   136.4    3.04 %   <- post ALONE
+//   ... same, postfx.ao.intensity = 0         0.113   195.7    0.06 %   <- AO alone
+//   base with postfx.ao.intensity = 0         1.151   186.3    0.62 %
+//   base with postfx.ao.radius 85 mm -> 12 mm 1.715   171.0    1.00 %
+//   base with ao.maxScreenRadius 44 -> 6      5.799   114.4    5.07 %   <- WORSE
+//
+// Row 2 is the control that matters: with uDebugView = 1 the fragment shader
+// writes one constant over that whole band, and with post off the band
+// measures rms 0.000. Every level of the ladder is added downstream, and
+// turning AO off removes 98 % of it. AO also costs the band 47 % of its
+// brightness there (mean 126.7 against 186.3).
+//
+// Mechanism: ao.radius is 0.085 m of WORLD radius. At the profile pose the
+// camera is 0.205 m above the snow and the band is 1.27 m away, so the surface
+// runs at roughly 9 degrees of grazing: 0.085 m projects to ~206 px across
+// view and is clamped to ao.maxScreenRadius (44 half-res = 88 full-res px),
+// while the along-view pixel footprint is 2.46 mm against 0.412 mm across.
+// A spiral kernel sampled over that anisotropy on a surface whose depth ramps
+// ~6x faster in y than in x resolves as a screen-locked lattice instead of as
+// occlusion. Screen-locked is measurable: the pitch is 21 px at dsf 1.5 and
+// 23 px at dsf 1.0, i.e. constant in DEVICE pixels, where anything world-
+// locked would have gone to 14 px.
+//
+// Eliminated first, each by ablation in the same session, each leaving the
+// band bit-identical (rms 4.881, to three decimals):
+//   * footprints         — foot.n = 0 + rebuild; identical
+//   * clipmap stitching  — aMeta.zw zeroed on all 4320 stitch vertices; identical
+//   * clipmap fw doubling— aMeta.x halved on every level-edge row; identical
+//   * the height field   — heightAt sampled 1024x across the band in world
+//                          space: 18.6 um of high-passed rms, no periodic
+//                          component at any scale. The geometry is smooth.
+//   * detail normals     — uDetailScale.xyz -> 1e-4 (dn exactly 0): 4.592
+//   * sparkle            — uSparkle.x = 0: 4.108 (it is ~15 % of the rms, and
+//                          not the ladder; the sparkle-only debug view shows
+//                          isolated glints, no lattice)
+//   * DoF / TAA          — removing either makes the ladder SHARPER (6.175,
+//                          4.652): they were hiding it, not making it.
+//
+// A trap for whoever ablates this next: PostFX._skip.ao does NOT disable AO.
+// It skips the AO pass, which leaves the previous frame's AO target bound and
+// still sampled by the composite, so the image barely moves (4.902 against
+// 4.881). Set postfx.ao.intensity = 0 instead.
+//
+// AO.js belongs to the postfx agent, so this is a report, not a fix.
 
 import * as THREE from 'three';
 import { rng } from '../util/math.js';
@@ -94,6 +155,9 @@ export class SnowMaterial {
         uAerial: { value: new THREE.Vector3(0.016, 0.62, 0.62) },
         uHaze: { value: new THREE.Color(0xaac4e0) },
         uSkirtDrop: { value: 60.0 },
+        // 0 off · 1 shadow mask · 2 ridge self-shadow · 3 clipmap level ·
+        // 4 sparkle · 5 detail normal · 6 footprint channels · 7/8 shadow dbg.
+        // See the note below before blaming this material for a lattice.
         uDebugView: { value: 0 },
       },
     ]);
