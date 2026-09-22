@@ -298,24 +298,50 @@ export const EYE = {
  * bear. Anything at or behind the pivot is untouched, so the stop, the brow,
  * the orbit, the cheek and the cranium do not move.
  *
- * `occipitalTuck` moves the occipital pole forward, in authored metres. A
- * pure forward stretch grows the total as fast as it grows the rostrum, so
- * the fraction converges slowly and the head runs long: reaching 55 % on
- * `stretch` alone needs +43 mm of nose and a 166 mm head, which is a red
- * fox. The tuck buys the fraction from the other end, where the coat hides
- * the change.
- *
  * MEASURE, DO NOT DERIVE: `t` below is an authored-space projection but the
  * rostrum is measured on the blended skin, so a given `stretch` does not move
- * the nose tip by a predictable amount. The step table lives in the commit
- * messages and in ART_DIRECTION §4g's increments.
+ * the nose tip by a predictable amount. The step table, measured:
+ *
+ *              nose tip   rostrum | skin pole:        | occipital condyle:
+ *   stretch      z mm       mm    |  total    frac    |  CBL-eq   frac
+ *     1.00       253.3      48.3  |  122.5    39.4 %  |   92.4    52.3 %
+ *     1.15       258.8      53.9  |  128.0    42.1 %  |   98.0    55.0 %
+ *     1.30       264.6      59.6  |  133.8    44.6 %  |  103.7    57.5 %
+ *     1.45       270.4      65.5  |  139.6    46.9 %  |  109.6    59.7 %
+ *     1.60       276.3      71.3  |  145.5    49.0 %  |  115.4    61.8 %   <-
+ *     1.75       282.1      77.2  |  151.3    51.0 %  |  121.3    63.6 %
+ *     2.05       293.8      88.8  |  163.0    54.5 %  |  133.0    66.8 %
+ *
+ * Two caudal landmarks because they disagree and the disagreement is the
+ * whole §4g story. The SKIN POLE is §4g's own ("nose-tip-to-occiput", the
+ * landmark its ~40 % baseline came from): the caudal pole of a head-only
+ * field. The CONDYLE is `LANDMARKS.head`, the atlanto-occipital pivot, which
+ * is where CBL's caudal end sits and is therefore the only one comparable
+ * with Nanova & Prôa's 121.3 mm CBL / 61.1 % rostrum.
+ *
+ * On the source's own landmark we are AT the sourced ratio at stretch 1.60,
+ * and §4g asks to land deliberately short of it. On §4g's landmark 55 % needs
+ * stretch 2.07 and a 164 mm head, 35 % over the sourced CBL and longer than a
+ * red fox's skull. Stopped at 1.60; see the commit for the render judgement.
+ *
+ * `occipitalTuck` moves the occipital pole forward, in authored metres, and
+ * is **measured dead — leave it at 0**. The idea was that it buys the
+ * fraction from the caudal end "where the coat hides the change". It does not
+ * hide the change; the NECK does, and that means there is no change. A 20 mm
+ * tuck (23.6 mm world) moves the visible sagittal topline of the FULL field
+ * by at most 0.70 mm between z = 200 and z = 85, and the caudal skin at every
+ * height from y = 240 to y = 305 by at most 0.50 mm — because below y ~ 300
+ * the back of the head is not the occiput primitive at all, it is the
+ * trunk/neck chain standing outside it. The tuck moves a buried landmark and
+ * nothing else, so using it to reach 55 % would be gaming the instrument.
  */
 export const ROSTRUM = {
   /** Authored skull-space pivot — the muzzle cone's root, i.e. the stop. */
   pivot: [0, 0.3020, 0.2255],
   /** Unit rostral axis in authored space: muzzle root -> nose-pad centre. */
   axis: [0, -0.26312, 0.96477],
-  stretch: 1.45,
+  stretch: 1.60,
+  /** Measured dead — see above. Not a knob; 0 is the only supported value. */
   occipitalTuck: 0.0000,
 };
 
