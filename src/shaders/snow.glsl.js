@@ -867,14 +867,14 @@ void main(){
   //
   // This pass is a read-modify-write through a LinearFilter sampler, and the
   // file header warns that such a pass has to be exact or the CPU closed form
-  // stops describing it. It was not exact. `vUv` came from a varying over a
+  // stops describing it. It was not exact. vUv came from a varying over a
   // triangle spanning 0..2, so at 2048 texels a rasteriser error of ~1e-6 in
   // UV is ~0.002 of a texel — which bilinear turns into a 0.2% bleed from the
   // neighbour, every frame, at 120 frames a second. That diffuses the field:
   // a footprint's peak erodes on its own, on top of the intended decay.
   //
   // Measured on the deepest stamp in the seeded trail, comparing the GPU
-  // against `heightAt` at the same point and instant: the effective depth
+  // against heightAt at the same point and instant: the effective depth
   // e-folding time came out at 10-13 s against the 21 s the CPU model uses,
   // and the error grew with sim time (0.8 mm at t=0.2 s, 5.0 mm at 2.5 s,
   // 12.0 mm at 6.0 s) because it is a per-FRAME loss.
@@ -939,9 +939,9 @@ export const FOOT_STAMP_VERT = /* glsl */ `
 precision highp float;
 attribute vec3 position;
 attribute vec4 iXform;     // world x, z, radius, rotation
-attribute vec2 iDepth;     // depth 0..1, sharpness 0..1
+attribute vec3 iDepth;     // depth 0..1, sharpness 0..1, age in seconds
 varying vec2 vQ;
-varying vec2 vParam;
+varying vec3 vParam;
 uniform vec3 uFootOrigin;  // xy centre, z = 1/size
 void main(){
   float c = cos(iXform.w), s = sin(iXform.w);
@@ -957,10 +957,21 @@ void main(){
 export const FOOT_STAMP_FRAG = /* glsl */ `
 precision highp float;
 varying vec2 vQ;
-varying vec2 vParam;
+varying vec3 vParam;
 FOOT_PAW
 void main(){
-  gl_FragColor = vec4(sn_pawProfile(vQ, vParam.x, vParam.y), 1.0);
+  // THE STAMP CARRIES ITS OWN AGE. The target is rebuilt from the live stamp
+  // list every frame (see Footprints.prerender) instead of being decayed in
+  // place, so each stamp is drawn already aged and the texture is the CPU
+  // closed form by construction rather than by an inductive argument about a
+  // read-modify-write pass. The three channels age at their own rates, which
+  // is what the old per-channel uDecay multiplier did.
+  vec3 p = sn_pawProfile(vQ, vParam.x, vParam.y);
+  gl_FragColor = vec4(
+    p.x * exp(-vParam.z / S_FP_TAU_DEPTH),
+    p.y * exp(-vParam.z / S_FP_TAU_RIM),
+    p.z * exp(-vParam.z / S_FP_TAU_COMP),
+    1.0);
 }
 `;
 

@@ -20,11 +20,11 @@
 // without giving the CPU side the same treatment.
 
 import * as THREE from 'three';
-import { SNOW, FOOT_STAMP_VERT, FOOT_STAMP_FRAG, FOOT_DECAY_FRAG, FULLSCREEN_VERT, snowResolve } from '../shaders/snow.glsl.js';
+import { SNOW, FOOT_STAMP_VERT, FOOT_STAMP_FRAG, snowResolve } from '../shaders/snow.glsl.js';
 import { hash11 } from '../util/math.js';
 
-const MAX_STAMPS = 224;       // live stamps tracked on the CPU
-const MAX_PER_FRAME = 48;     // instanced stamp draws per frame
+const MAX_STAMPS = 224;       // live stamps tracked on the CPU, and redrawn
+                              // in full every frame -- one instanced draw
 const MERGE_DIST = 0.022;     // m — a paw pressed again in the same spot
 
 export class Footprints {
@@ -42,8 +42,6 @@ export class Footprints {
     this._rot = new Float32Array(MAX_STAMPS);
     this._t0 = new Float32Array(MAX_STAMPS);
 
-    this._pending = new Int32Array(MAX_PER_FRAME);
-    this._nPending = 0;
     this._serial = 0;
     this.pressCount = 0;
     // Presses that came in through ctx.terrain.press(), i.e. from another
@@ -72,8 +70,10 @@ export class Footprints {
       stencilBuffer: false,
       generateMipmaps: false,
     };
+    // ONE target, not a ping-pong pair: prerender rebuilds it from scratch
+    // every frame and never reads it back, so the second 2048x2048 half-float
+    // target (32 MB at `high`) had nothing left to hold.
     this.rtA = new THREE.WebGLRenderTarget(this.res, this.res, opts);
-    this.rtB = new THREE.WebGLRenderTarget(this.res, this.res, opts);
     this.uniforms.uFoot.value = this.rtA.texture;
 
     // Clear both targets to zero, leaving the renderer's clear state as found.
@@ -82,10 +82,8 @@ export class Footprints {
     ctx.renderer.getClearColor(prevClear);
     const prevAlpha = ctx.renderer.getClearAlpha();
     ctx.renderer.setClearColor(0x000000, 0);
-    for (const rt of [this.rtA, this.rtB]) {
-      ctx.renderer.setRenderTarget(rt);
-      ctx.renderer.clear(true, false, false);
-    }
+    ctx.renderer.setRenderTarget(this.rtA);
+    ctx.renderer.clear(true, false, false);
     ctx.renderer.setRenderTarget(prev);
     ctx.renderer.setClearColor(prevClear, prevAlpha);
 
@@ -99,28 +97,6 @@ export class Footprints {
     // so replaying an old stamp would reset its age on the GPU while the CPU
     // kept the original t0.
     this.n = 0;
-    this._nPending = 0;
-    this._decayedTo = undefined;
-
-    // --- decay + scroll pass -----------------------------------------------
-    this._quad = new THREE.BufferGeometry();
-    this._quad.setAttribute('position', new THREE.BufferAttribute(
-      new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
-    this._quad.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4);
-    this._decayMat = new THREE.RawShaderMaterial({
-      vertexShader: FULLSCREEN_VERT,
-      fragmentShader: FOOT_DECAY_FRAG,
-      uniforms: {
-        uSrc: { value: null },
-        uShift: { value: new THREE.Vector2() },
-        uRes: { value: new THREE.Vector2(this.res, this.res) },
-        uInvRes: { value: new THREE.Vector2(1 / this.res, 1 / this.res) },
-        uDecay: { value: new THREE.Vector3(1, 1, 1) },
-      },
-      depthTest: false, depthWrite: false,
-    });
-    this._decayMesh = new THREE.Mesh(this._quad, this._decayMat);
-    this._decayMesh.frustumCulled = false;
 
     // --- instanced paw stamps ----------------------------------------------
     const g = new THREE.InstancedBufferGeometry();
@@ -128,8 +104,8 @@ export class Footprints {
       -1, -1, 0, 1, -1, 0, 1, 1, 0,
       -1, -1, 0, 1, 1, 0, -1, 1, 0]), 3));
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4);
-    this._iXform = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PER_FRAME * 4), 4);
-    this._iDepth = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PER_FRAME * 2), 2);
+    this._iXform = new THREE.InstancedBufferAttribute(new Float32Array(MAX_STAMPS * 4), 4);
+    this._iDepth = new THREE.InstancedBufferAttribute(new Float32Array(MAX_STAMPS * 3), 3);
     this._iXform.setUsage(THREE.DynamicDrawUsage);
     this._iDepth.setUsage(THREE.DynamicDrawUsage);
     g.setAttribute('iXform', this._iXform);
@@ -151,10 +127,8 @@ export class Footprints {
 
     this._rtScene = new THREE.Scene();
     this._rtCam = new THREE.Camera();
-    this._rtScene.add(this._decayMesh);
     this._rtScene.add(this._stampMesh);
-    this._decayMesh.visible = true;
-    this._stampMesh.visible = false;
+    this._clearColor = new THREE.Color();
   }
 
   /** Queue a depression. Returns the stamp slot, or -1 if it was dropped. */
@@ -176,7 +150,6 @@ export class Footprints {
         this._d[i] = Math.max(depth, old);
         this._s[i] = sharpness;
         this._t0[i] = time;
-        this._queue(i);
         return i;
       }
     }
@@ -202,15 +175,8 @@ export class Footprints {
     // Heading + a deterministic per-stamp jitter so a trail is not rubber-stamped.
     this._rot[slot] = heading + (hash11((this._serial++ * 2654435761) | 0) - 0.5) * 0.30;
     this._t0[slot] = time;
-    this._queue(slot);
     this.pressCount++;
     return slot;
-  }
-
-  _queue(i) {
-    if (this._nPending >= MAX_PER_FRAME) return;
-    for (let k = 0; k < this._nPending; k++) if (this._pending[k] === i) return;
-    this._pending[this._nPending++] = i;
   }
 
   /**
@@ -286,108 +252,92 @@ export class Footprints {
     return rim * SNOW.FP_MAXRIM * (1 - depth) - depth * SNOW.FP_MAXDEPTH;
   }
 
-  /** GPU-side update: scroll, decay, then composite the frame's new stamps. */
+  /**
+   * GPU-side update: REBUILD the deformation target from the live stamp list.
+   *
+   * This used to be a scroll + per-channel decay of the existing target, with
+   * the frame's new stamps MAX-composited on top. The header's identity
+   * argument for that is sound in exact arithmetic and false in a render
+   * target: it is a read-modify-write run once per FRAME, so every frame the
+   * result is rounded back into half-float, and float16 has an 11-bit
+   * mantissa. Measured on a single isolated stamp 6 m from the animal, with
+   * the CPU closed form as the reference, sampling once a second:
+   *
+   *     t      CPU        GPU     tau_eff
+   *     1   -38.605   -37.311
+   *     2   -36.844   -34.120     11.2 s
+   *     4   -33.571   -28.026      9.9 s
+   *     6   -30.597   -24.529     16.0 s
+   *
+   * The CPU held 21.4 s against S_FP_TAU_DEPTH = 21.0 across every interval;
+   * the GPU came out at 10-16 s. That is a per-frame loss of about 0.024% of
+   * the value -- half an ULP, i.e. exactly what truncating rather than
+   * rounding a float32 into float16 costs -- compounded 120 times a second.
+   * Three other candidates were eliminated first, by measurement: the
+   * subtractive 1e-4 in the decay shader (worth 2.9 mm at t=2.5 s, removed),
+   * a render-count-driven rather than time-driven dt (removed), and bilinear
+   * bleed from an interpolated source UV (the fetch is now addressed by
+   * integer texel index, which changed the number by 0.05 mm, so it was never
+   * the cause).
+   *
+   * There is no way to mirror an accumulating rounding error in a closed form,
+   * so the accumulation has to go. Every live stamp is redrawn every frame,
+   * already aged, in ONE instanced draw of at most MAX_STAMPS quads of ~15x15
+   * texels. The texture is then the CPU model evaluated on the GPU rather than
+   * a history that has to stay in step with it, which also retires the scroll
+   * pass, the ping-pong pair and the pending queue: nothing carries over, so
+   * there is nothing to translate or to keep in sync. It is cheaper too --
+   * 224 small quads against a full-screen 2048x2048 pass.
+   */
   prerender(ctx, subject) {
     if (!this.enabled || !this.rtA) return;
     const texel = this.size / this.res;
 
-    // Snap the window centre to a whole texel so scrolling is an exact integer
-    // translation — a fractional shift would blur the trail away in seconds.
+    // Snap the window centre to a whole texel. Nothing is carried across
+    // frames any more, so this no longer has to be exact to avoid smearing --
+    // but `heightAt` reproduces the GPU's bilinear tap from this origin, so
+    // the two still have to agree on where the texel grid is.
     const tx = Math.round(subject.x / texel) * texel;
     const tz = Math.round(subject.z / texel) * texel;
-    // In whole TEXELS, and rounded, because the decay pass addresses the
-    // source by integer index now. `tx` is already snapped to the texel
-    // lattice, so the round only removes float noise from the division.
-    const shiftX = Math.round((tx - this.origin.x) / texel);
-    const shiftZ = Math.round((tz - this.origin.y) / texel);
     this.origin.set(tx, tz);
+    this.uniforms.uFootOrigin.value.set(tx, tz, 1 / this.size);
 
-    // DECAY IS A FUNCTION OF ABSOLUTE SIM TIME, NOT OF RENDER COUNT.
-    //
-    // This used to be `Math.min(ctx.dt, 0.25)`, applied once per prerender —
-    // i.e. once per RENDERED FRAME. The CPU model in `heightAt` is the closed
-    // form `exp(-(ctx.time - t0)/tau)`. Those two agree only if exactly one
-    // render happens per sim advance of `dt`, and on this project that is
-    // simply not true:
-    //
-    //   * the review harness pauses the sim and then calls `D.render()` 20+
-    //     times per pose for TAA, so every one of those renders decayed the
-    //     field again at the last frame's dt with the clock standing still —
-    //     the fourteenth pose of a run was looking at a trail that had been
-    //     eroded by several hundred extra decay steps;
-    //   * the loading screen's own rAF ticks render before the sim is driven;
-    //   * `min(dt, 0.25)` silently DISCARDS decay after any hitch longer than
-    //     a quarter second, which pushes the error the other way.
-    //
-    // So the disagreement was a race with the frame counter, and the number
-    // it produced was a random variable. Measured at one identical sim state
-    // (t = 2.5 s, walk, the same 34 stamps, the same CPU value of -63.868 mm
-    // at (-0.10, -0.50)) the GPU came back at -55.8 mm on one run and
-    // -50.3 mm on the next; `tools/gate.mjs` has reported 0.8, 3.9, 4.0, 9.8
-    // and 29.9 mm for this check on builds that differ in no relevant way.
-    // It was blamed on a powder commit that does not touch the height field,
-    // and reverting that commit made it WORSE (9.8 mm against 3.9 mm), which
-    // is how a random variable behaves under bisection.
-    //
-    // Decaying by the sim time actually elapsed since the last decay restores
-    // the identity by construction: repeated renders at one `ctx.time` decay
-    // by zero, a sim that advanced three fixed steps between renders decays
-    // by all three, and nothing is clamped away. A backward jump in the clock
-    // (spec.mjs rewinds it) re-bases instead of inverting the decay.
-    if (this._decayedTo === undefined || ctx.time < this._decayedTo) {
-      this._decayedTo = ctx.time;
+    const xf = this._iXform.array, dp = this._iDepth.array;
+    let n = 0;
+    for (let i = 0; i < this.n; i++) {
+      xf[n * 4 + 0] = this._x[i];
+      xf[n * 4 + 1] = this._z[i];
+      xf[n * 4 + 2] = this._r[i];
+      xf[n * 4 + 3] = this._rot[i];
+      dp[n * 3 + 0] = Math.min(this._d[i], 1);
+      dp[n * 3 + 1] = this._s[i];
+      // Age, in seconds, clamped at zero: the harness rewinds the clock, and
+      // a negative age would UNDECAY a stamp on the GPU while the CPU clamps.
+      dp[n * 3 + 2] = Math.max(0, ctx.time - this._t0[i]);
+      n++;
     }
-    const dt = ctx.time - this._decayedTo;
-    this._decayedTo = ctx.time;
-    const u = this._decayMat.uniforms;
-    u.uSrc.value = this.rtA.texture;
-    u.uShift.value.set(shiftX, shiftZ);
-    u.uDecay.value.set(
-      Math.exp(-dt / SNOW.FP_TAU_DEPTH),
-      Math.exp(-dt / SNOW.FP_TAU_RIM),
-      Math.exp(-dt / SNOW.FP_TAU_COMP),
-    );
-
-    const o = this.uniforms.uFootOrigin.value;
-    o.set(tx, tz, 1 / this.size);
+    this._iXform.needsUpdate = true;
+    this._iDepth.needsUpdate = true;
+    this._stampGeo.instanceCount = n;
 
     const renderer = ctx.renderer;
     const prevTarget = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
+    renderer.getClearColor(this._clearColor);
+    const prevAlpha = renderer.getClearAlpha();
 
-    // Pass 1 — scroll + decay into B.
-    this._decayMesh.visible = true;
-    this._stampMesh.visible = false;
-    renderer.autoClear = true;
-    renderer.setRenderTarget(this.rtB);
-    renderer.render(this._rtScene, this._rtCam);
-
-    // Pass 2 — MAX-composite this frame's stamps on top.
-    if (this._nPending > 0) {
-      const xf = this._iXform.array, dp = this._iDepth.array;
-      for (let k = 0; k < this._nPending; k++) {
-        const i = this._pending[k];
-        xf[k * 4 + 0] = this._x[i];
-        xf[k * 4 + 1] = this._z[i];
-        xf[k * 4 + 2] = this._r[i];
-        xf[k * 4 + 3] = this._rot[i];
-        dp[k * 2 + 0] = Math.min(this._d[i], 1);
-        dp[k * 2 + 1] = this._s[i];
-      }
-      this._iXform.needsUpdate = true;
-      this._iDepth.needsUpdate = true;
-      this._stampGeo.instanceCount = this._nPending;
-      this._decayMesh.visible = false;
-      this._stampMesh.visible = true;
-      renderer.autoClear = false;
-      renderer.render(this._rtScene, this._rtCam);
-      this._nPending = 0;
-    }
+    // Clear EXPLICITLY to zero. The stamps no longer cover the whole target,
+    // so relying on autoClear would fill the untouched snow with whatever the
+    // app's clear colour happens to be.
+    renderer.setRenderTarget(this.rtA);
+    renderer.autoClear = false;
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, false, false);
+    renderer.setClearColor(this._clearColor, prevAlpha);
+    if (n > 0) renderer.render(this._rtScene, this._rtCam);
 
     renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevTarget);
-
-    const t = this.rtA; this.rtA = this.rtB; this.rtB = t;
     this.uniforms.uFoot.value = this.rtA.texture;
 
     // Retire stamps that have faded or left the window.
@@ -422,17 +372,13 @@ export class Footprints {
     const res = Math.max(256, ctx.quality.get('footprintRes') | 0);
     if (res === this.res) return;
     this.rtA?.dispose();
-    this.rtB?.dispose();
-    this.rtA = this.rtB = null;
+    this.rtA = null;
     this.init(ctx);
   }
 
   dispose() {
     this.rtA?.dispose();
-    this.rtB?.dispose();
-    this._quad?.dispose();
     this._stampGeo?.dispose();
-    this._decayMat?.dispose();
     this._stampMat?.dispose();
   }
 }
