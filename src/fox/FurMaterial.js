@@ -301,6 +301,29 @@ export const FUR_DEFAULTS = {
   // cards
   cardWidth: 0.115,
   cardLength: 1.20,
+  /*
+   * Minimum guard-hair stand-off past the coat, METRES. See the card vertex
+   * shader for the derivation: the reach band is a RATIO, and a ratio cannot
+   * break a 4 mm coat's outline.
+   *
+   * Swept on the true coverage matte at `profile`, which is the framing that
+   * fails — outline path length over net crossing, 10th percentile, against a
+   * 1.15 floor, plus the animal's total covered area:
+   *
+   *      floor      head    body    legs    coverage px   fringe share
+   *      0 mm      1.000   1.276   1.000      154 268        0.183
+   *      6 mm      1.181   1.183   1.364      157 603        0.199
+   *     10 mm      1.226   1.769   1.716      163 937        0.226
+   *     16 mm      1.452   2.001   2.103      174 573        0.269
+   *
+   * 6 mm clears the floor on all three bands but by 0.03 on two of them,
+   * which is inside the run-to-run spread of the metric (the same build
+   * measured twice moved the body band 1.056 -> 1.073). 16 mm grows the
+   * animal 13% and takes the fringe share past a quarter of it — 4f rule 4
+   * cuts both ways, and that is a different animal. 10 mm clears all three
+   * with margin for 6% more area.
+   */
+  cardFloor: 0.010,
   cardInner: 0.17,
   /*
    * vEdge exponent at a card TIP. THE ONE KNOB for how much card stands over
@@ -521,6 +544,7 @@ export function buildFurUniforms(ctx) {
 
     uCardWidth: { value: d.cardWidth },
     uCardLength: { value: d.cardLength },
+    uCardFloor: { value: d.cardFloor },
     uCardInner: { value: d.cardInner },
     uCardTipEdge: { value: d.cardTipEdge },
     uCardJitter: { value: d.cardJitter },

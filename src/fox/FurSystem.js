@@ -489,8 +489,78 @@ export class FurSystem {
    * stands over open sky, and what puts sky behind it is the distance to the
    * outermost opaque shell, not to the skin.
    *
-   * Returns { ok, band, min, mean, max, worstDroop, worst, detail[] }.
+   * THE RATIO IS NOT THE WHOLE INVARIANT — see uCardFloor in the card vertex
+   * shader. A reach expressed as a multiple of the local coat delivers 0.4 mm
+   * of fringe on a 4 mm muzzle coat and 4.8 mm on a 48 mm flank, so the ratio
+   * held while the thing it stands for — how much hair is visible against the
+   * sky — varied twelvefold, and the short-coat regions lost their outline.
+   * uCardFloor puts a floor under the millimetres; this guard has to bound
+   * it, and a ratio cannot.
+   *
+   * So there are two clauses, and they are kept apart on purpose:
+   *
+   *   A  the PROPORTIONAL ratio (uRegionC.x x uCardLength x lenMul x rise,
+   *      the floor excluded) stays inside reachBand. Unchanged, and still
+   *      what catches a CARD_LEN_SCALE or uCardLength mistake. `min`, `mean`,
+   *      `max` and `worstDroop` are this quantity — the one `band` refers to.
+   *   B  uCardFloor <= CARD_SHAPE.standFloorMax. An absolute floor may add no
+   *      more stand-off than the proportional rule already grants the one
+   *      coat depth 4f sources. Without B the floor is an unbounded knob.
+   *
+   * The per-region ABSOLUTE stand-off in millimetres — which is what the eye
+   * actually judges and what A alone cannot see — is reported as `standMm`
+   * per region and `maxStandMm` overall, alongside the measured coat depth it
+   * grows out of. A first version of this asserted on that number directly,
+   * against the deepest coat's own band ceiling; it failed at `tailMid`
+   * (21.16 mm against 16.77) for the uninteresting reason that the cap and
+   * the quantity both scale with the deepest coat, so the bound was really
+   * "the floor adds nothing". Bounding the floor itself is the honest form.
+   *
+   * Coat depth per region is MEASURED off the built geometry (furLength x
+   * uCoatScale x uRegionA.y), not assumed: a guard that reasons about
+   * millimetres from uniforms alone would be blind to the one attribute that
+   * actually sets them. Measured now, for the record, in mm:
+   *
+   *   nose 1.6 · muzzle 14.6 · jaw 14.1 · cheek 33.2 · forehead 16.6
+   *   skull 38.3 · earOuter 17.4 · earInner 11.0 · throat 33.0 · neck 43.7
+   *   ruff 45.0 · chest 42.2 · shoulder 41.5 · back 43.0 · flank 47.4
+   *   belly 22.2 · croup 43.8 · haunch 42.9 · legFU 37.6 · legFL 21.2
+   *   pawF 23.2 · legHU 36.8 · hock 16.8 · pawH 22.8 · tailBase 51.4
+   *   tailMid 67.1 · tailTip 48.0
+   *
+   * The flank reads 47.4 against 4f's 48 mm, which is the one number in that
+   * list with a source — so the measurement is landing where it should.
+   *
+   * Returns { ok, band, min, mean, max, worstDroop, worst, maxStandMm,
+   *           floorMm, floorCapMm, detail[] }.
    */
+  /**
+   * Mean coat depth per region, in METRES, measured off the geometry the
+   * shader actually reads: furLength (anatomy's per-vertex coat thickness)
+   * x uCoatScale x uRegionA.y. Returns null rather than a guess if either
+   * attribute is missing — an unmeasurable probe is a hard failure, not a
+   * silently-dropped check.
+   */
+  regionCoatDepth() {
+    const g = this.fox?.geometry;
+    const fl = g?.getAttribute('furLength');
+    const rg = g?.getAttribute('region');
+    const ra = this.uniforms?.uRegionA?.value;
+    if (!fl || !rg || !ra) return null;
+    const n = ra.length;
+    const sum = new Float64Array(n), cnt = new Uint32Array(n);
+    for (let v = 0; v < fl.count; v++) {
+      const i = Math.min(n - 1, Math.max(0, Math.round(rg.getX(v))));
+      sum[i] += fl.getX(v); cnt[i]++;
+    }
+    const scale = this.uniforms.uCoatScale.value;
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = cnt[i] ? (sum[i] / cnt[i]) * scale * (ra[i].y || 1) : 0;
+    }
+    return out;
+  }
+
   reachReport() {
     const u = this.uniforms;
     if (!u) return { ok: false, reason: 'fur not initialised' };
@@ -499,40 +569,77 @@ export class FurSystem {
     const cardLen = u.uCardLength.value;
     const droop = u.uDroop.value;
     const rc = u.uRegionC.value;
+    const floor = u.uCardFloor?.value ?? 0;
+    const coat = this.regionCoatDepth();
+    if (!coat) {
+      return { ok: false, reason: 'no furLength/region attribute: card reach is '
+                                  + 'unmeasurable, not unbounded' };
+    }
+
+    // The proportional stand-off the reach band already delivers. Read off the
+    // band so the shader's `stand` term and this guard cannot drift apart.
+    const PROP = reachBand[0] - 1;
+    let deepest = 0;
+    for (let i = 0; i < coat.length; i++) deepest = Math.max(deepest, coat[i]);
 
     // lenMul = lo + sp * rClump * rCard, a product of two uniforms, so E = 1/4.
     // CARD_SHAPE.lenMulMean carries that so the builder and the guard cannot
     // disagree; the old `lo + sp/3` here assumed E[r^2] for a single uniform.
+    //
+    // TWO QUANTITIES, and keeping them apart is the whole point:
+    //   reach()  the PROPORTIONAL ratio, floor excluded — the only thing the
+    //            reachBand can meaningfully bound, and still the check that
+    //            catches CARD_LEN_SCALE and uCardLength drift.
+    //   stand()  the ABSOLUTE stand-off in metres, floor included — what the
+    //            eye actually judges, bounded by CARD_SHAPE.standFloorMax.
     const reach = (lm, s) => s * cardLen * lm * rise;
+    const standOf = (lm, s, c) => {
+      const st = Math.max(0, floor - c * PROP);
+      return Math.max(0, (c + st) * s * cardLen * lm * rise - c);
+    };
 
     // Gravity acts in world space and adds to reach wherever the surface faces
     // down — the belly and chest, which is where the "Afghan skirt" came from.
     const STIFF = { 11: 0.46, 13: 0.86, 14: 0.62, 15: 0.24 };
     const detail = [];
     let min = Infinity, max = -Infinity, meanSum = 0;
-    let worstDroop = 0, worst = null, worstOver = 0;
+    let worstDroop = 0, worst = null, worstOver = 0, maxStandMm = 0;
     for (let i = 0; i < rc.length; i++) {
       const s = rc[i].x > 0 ? rc[i].x : 1;
       const shell = rc[i].z > 0 ? rc[i].z : 1;
+      const c = coat[i];
       const rMin = reach(lo, s), rMean = reach(mid, s), rMax = reach(lo + sp, s);
       const soft = 1 - (STIFF[i] ?? 0.62);
       const extra = droop * (s * cardLen * mid) * (0.30 + soft) * droopBoost;
       min = Math.min(min, rMin); max = Math.max(max, rMax);
       meanSum += rMean;
       worstDroop = Math.max(worstDroop, rMean + extra);
+      const standM = standOf(lo + sp, s, c);
+      maxStandMm = Math.max(maxStandMm, standM * 1000);
       // How far outside the band this region sits, in either direction.
       const over = Math.max(rMax - reachBand[1] * 1.02, reachBand[0] * 0.92 - rMin,
                             (rMean + extra) - reachBand[1] * 1.05);
       if (over > worstOver) { worstOver = over; worst = i; }
-      detail.push({ region: i, scale: +s.toFixed(3),
+      detail.push({ region: i, scale: +s.toFixed(3), coatMm: +(c * 1000).toFixed(2),
                     min: +rMin.toFixed(3), mean: +rMean.toFixed(3), max: +rMax.toFixed(3),
+                    standMm: +(standM * 1000).toFixed(2),
+                    totalRatio: c > 0 ? +(1 + standM / c).toFixed(3) : null,
+                    floorBinds: floor > c * PROP,
                     vsShell: +(rMean / shell).toFixed(3),
                     droopTotal: +(rMean + extra).toFixed(3) });
     }
 
-    const ok = worstOver <= 0;
+    // Clause B: the absolute floor may add no more stand-off than the
+    // proportional rule already grants the one coat depth 4f sources.
+    const floorOver = floor - CARD_SHAPE.standFloorMax;
+    const ok = worstOver <= 0 && floorOver <= 0;
     return {
       ok, band: reachBand, worst, worstOver: +worstOver.toFixed(3),
+      floorMm: +(floor * 1000).toFixed(2),
+      floorCapMm: +(CARD_SHAPE.standFloorMax * 1000).toFixed(2),
+      floorOverMm: +(floorOver * 1000).toFixed(2),
+      maxStandMm: +maxStandMm.toFixed(2),
+      deepestCoatMm: +(deepest * 1000).toFixed(2),
       min: +min.toFixed(3), mean: +(meanSum / rc.length).toFixed(3), max: +max.toFixed(3),
       worstDroop: +worstDroop.toFixed(3), detail,
     };

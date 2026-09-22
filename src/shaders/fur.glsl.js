@@ -54,6 +54,24 @@ export const CARD_SHAPE = {
   droopBoost: 0.40,     // gravity multiplier for cards (guard hair is stiff)
   reachBand: [1.10, 1.25],
 
+  /*
+   * The most ABSOLUTE guard-hair stand-off any floor may add, in metres — the
+   * ceiling on uCardFloor (see the card vertex shader).
+   *
+   * reachBand is a ratio and therefore cannot bound the millimetres that a
+   * card stands over open sky; it grants 0.25 x the local coat, which is
+   * 4.8 mm on the flank and 0.4 mm on the muzzle. uCardFloor exists to put a
+   * floor under that second number, and it needs its own ceiling or it is an
+   * unbounded knob with the same shape as every self-defeating one this
+   * project has already shipped.
+   *
+   * 12 mm = 0.25 x the 48 mm flank coat, which is 4f's ONE sourced depth. So
+   * the rule is: an absolute floor may add no more stand-off than the
+   * proportional rule already grants the only coat depth we have a source
+   * for. It is not a number chosen to admit the current value.
+   */
+  standFloorMax: 0.012,
+
   /**
    * Clumping — bible §5, "fur must clump, not distribute evenly".
    *
@@ -1035,6 +1053,7 @@ ${SKIN_FN}
 
 uniform float uCardWidth;
 uniform float uCardLength;
+uniform float uCardFloor;   // minimum guard-hair stand-off past the coat, metres
 uniform float uCardJitter;
 uniform float uCardClump;
 
@@ -1062,7 +1081,38 @@ void main(){
   float lrnd = aClump.w;            // shared by every card in this lock
   float soft = 1.0 - furStiffness;
   vec4  rc   = uRegionC[ri];
-  float L    = furCoatLength(position, ra.y) * rc.x * uCardLength * aCard.w;
+
+  // --- the guard-hair stand-off -------------------------------------------
+  //
+  // Card length used to be strictly PROPORTIONAL to the local coat, so the
+  // amount a card tip stands past the outermost shell was ~10% of the coat
+  // depth -- and on a 4 mm muzzle coat that is 0.4 mm, which at the profile
+  // framing is a third of a pixel. Measured on the true coverage matte: with
+  // the shells hidden the cards alone break the profile contour on all three
+  // bands (head/body/legs p10 1.249 / 2.049 / 1.402 against a 1.15 floor);
+  // with the shells back, the same cards are buried and the contour collapses
+  // to 1.000 / 1.073 / 1.000. A proportional reach scales the fringe to
+  // nothing exactly where the coat is shallowest, which is exactly where the
+  // mesh edge is showing through.
+  //
+  // So the reach RATIO is kept for deep coat -- that is where the 1.10-1.25
+  // band was validated and where the urchin lives -- and becomes an ABSOLUTE
+  // stand-off in metres wherever the ratio cannot deliver one. That is also
+  // the animal: a fox's guard hairs over the muzzle, brow and cannon are not
+  // proportionally shorter than the ones over its flank, they stand out of a
+  // much shallower undercoat.
+  //
+  // The stand-off tops the card up only when the proportional reach it already has
+  // -- reachBand[0] - 1 of the coat, read from the band itself so the two
+  // cannot drift -- falls short of uCardFloor. Where the coat is deep enough
+  // that it does not, stand is exactly 0 and nothing changes.
+  //
+  // It is gated on furSkinMask2().x, the same LENGTH mask the coat uses, so a
+  // floor cannot regrow hair on the rhinarium or across the eye parting.
+  float coat  = furCoatLength(position, ra.y);
+  float stand = max(0.0, uCardFloor * furSkinMask2(position).x
+                         - coat * ${(CARD_SHAPE.reachBand[0] - 1).toFixed(3)});
+  float L    = (coat + stand) * rc.x * uCardLength * aCard.w;
 
   vec3  nb   = normalize(normal);
   vec3  tb   = furTangent;
