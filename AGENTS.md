@@ -166,6 +166,31 @@ measures moves.
 - **Concurrent agents change the source mid-run.** `spec.mjs` names the files
   that changed so you can judge per check instead of discarding the run.
 
+**A backtick inside a `/* glsl */` template literal will close it.** This has
+now fired three times in one session — in `Eyes.js` (`` `update` `` in a
+comment, 66 lines early), in `snow.glsl.js` (`` `- 1e-4` `` and
+`` `gate.mjs` ``), and once more in terrain. Node reports it as "missing )
+after argument list" tens of lines from the actual character, and the second
+occurrence left the page unparseable for about forty minutes and blocked
+**every** agent's renders. Do not put backticks in GLSL comments. If the page
+suddenly will not parse and the error makes no sense, grep your shader strings
+for a backtick before anything else.
+
+**Cross-run A/B renders are not trustworthy instruments on this project.** Fur
+TAA convergence dominates the pixel difference between any two runs: an
+in-page A/B in which *only one object's visibility* changed still moved 10.9%
+of the frame and lit up the fox rather than the object. Compare arms inside one
+page session at one simulation instant (`tools/ab.mjs` does this and aborts if
+the animal moves), and prefer a derived quantity — a matte, a masked mean —
+over a raw pixel diff. Relatedly: `gate.mjs`'s "Determinism" group checks
+buffer SIZE, not pixels, so it will not catch a nondeterministic render.
+
+**And a single-frame probe is not what the harness renders.** `shoot.mjs`
+renders 2 warm-up plus 18 TAA frames per pose. A probe that renders one frame
+per variant invented a fan of hard stripes around an eyelid that does not
+exist converged, and an agent published a wrong cause before catching it
+itself. Converge before you conclude.
+
 **And the rule that matters most:** if you are handed a diagnosis and the data
 disagrees with it, say so. Agents on this project have disproved a handed-down
 diagnosis at least eleven times and have been right **every single time** —

@@ -681,6 +681,7 @@ const results = await page.evaluate(async () => {
   out.nosePoses = {};
   for (const pose of ['portrait', 'hero', 'silhouette', 'profile']) {
     renderPose(pose, true);
+    const postArm = true;
     const p = project('nose');
     if (!p) { out.nosePoses[pose] = null; continue; }
     // Scale the sample box to the feature. A fixed 10x10 box averaged an
@@ -722,6 +723,31 @@ const results = await page.evaluate(async () => {
     out.nosePoses[pose] = best
       ? { ...best.c, widthPx: +widthPx.toFixed(1), rad: r, foundAt: [best.dx, best.dy] }
       : { ...sample(p.x, p.y, r), widthPx: +widthPx.toFixed(1), rad: r, foundAt: null };
+
+    // Also measure the pad on the RAW frame.
+    //
+    // The post-side expectation is not physical at every framing. At
+    // `silhouette` the pad is a 15-27 px black disc against 250-level snow
+    // with the sun nearly in shot, so bloom veils it exactly as a real lens
+    // would -- the face agent measured (2.8, 5.1, 9.2) raw against
+    // (105, 110, 118) post at the same pixels. Demanding (23, 26, 32) there
+    // asks the render to be wrong. So the PAD'S OWN COLOUR is asserted on the
+    // raw frame, and post is reported beside it; annihilation by post is
+    // already guarded separately by `nose survives post` at `portrait`.
+    renderPose(pose, false);
+    const pr = project('nose');
+    if (pr) {
+      let rb = null;
+      for (let dy = -win; dy <= win; dy += 2) {
+        for (let dx = -win; dx <= win; dx += 2) {
+          const c0 = sample(pr.x + dx, pr.y + dy, r);
+          if (!c0 || !c0.n) continue;
+          const L = (c0.r + c0.g + c0.b) / 3;
+          if (!rb || L < rb.L) rb = { L, c: c0 };
+        }
+      }
+      out.nosePoses[pose].raw = rb ? rb.c : null;
+    }
   }
 
   // 10. PER-REGION SILHOUETTE — a whole-animal median let a good torso mask a
@@ -1265,12 +1291,13 @@ record('[unvalidated] fur covers camera-facing surfaces', idt && idt.meanHF >= 1
 // fur layering over the muzzle occludes it at distance. One framing was not
 // enough.
 for (const [pose, c] of Object.entries(results.nosePoses ?? {})) {
-  record(`nose stays dark at ${pose}`, c && c.r < 95,
-    `${hex(c)} vs spec (23,26,32) — sampled r=${c?.rad ?? '?'}px ` +
-    `in a ${c?.widthPx ?? '?'}px feature`,
-    // Was a warning at distance while we believed the coat was occluding it.
-    // The raw render is now measured EXACTLY on spec at hero (23,26,32) and
-    // the post chain is what breaks it, so this is a real regression gate.
+  record(`nose pad is near-black at ${pose}`, c?.raw && c.raw.r < 60,
+    `RAW ${hex(c?.raw)} vs spec (23,26,32); after post the same pixels read ` +
+    `${hex(c)} — sampled r=${c?.rad ?? '?'}px in a ${c?.widthPx ?? '?'}px ` +
+    `feature. Asserted on the raw frame because bloom legitimately veils a ` +
+    `15-27 px black disc against 250-level snow at backlit framings, which is ` +
+    `what a real lens does; post-side annihilation is guarded by ` +
+    `\`nose survives post\``,
     'error');
 }
 

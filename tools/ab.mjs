@@ -39,7 +39,19 @@ const APPLY = {
   // test for "is the hard silhouette the skin poking through the coat, or the
   // coat's own outer shell?" -- a question three agents have now asked without
   // being able to answer it.
-  noskin:   '(c) => { const m = c.fox?.skinnedMesh; if (!m) throw new Error("noskin: ctx.fox.skinnedMesh not found"); const v = m.visible; m.visible = false; return () => { m.visible = v; }; }',
+  //
+  // Hides the skin MESH ONLY, via layers rather than `visible`.
+  //
+  // `visible = false` was wrong and confounded every conclusion drawn from
+  // this variant, including my own "the skin is visible through the coat".
+  // `Fox.js:132` does `skinnedMesh.add(rig.rootBone)`, and three's
+  // `projectObject` returns early on an invisible object -- so hiding the
+  // skin also hid every bone-parented thing on the animal: both eyes, the
+  // whiskers, the nose pad, the lip line and the ears. Found by the face
+  // agent. Layers do NOT cull children: `projectObject` tests
+  // `object.layers` to decide whether to draw THAT object and recurses
+  // regardless, so layer 31 removes the skin and leaves the rig alone.
+  noskin:   '(c) => { const m = c.fox?.skinnedMesh; if (!m) throw new Error("noskin: ctx.fox.skinnedMesh not found"); const had = m.layers.mask; m.layers.set(31); return () => { m.layers.mask = had; }; }',
   nosnow:   '(c) => { const g = c.snowParticles?.points || c.snowParticles?.mesh; const v = g && g.visible; if (g) g.visible = false; return () => { if (g) g.visible = v; }; }',
 };
 
