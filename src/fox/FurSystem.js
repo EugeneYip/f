@@ -569,7 +569,15 @@ export class FurSystem {
     const cardLen = u.uCardLength.value;
     const droop = u.uDroop.value;
     const rc = u.uRegionC.value;
+    // uCardFloor is the PEAK stand-off: each lock draws uCardFloorLow..1 of it
+    // (see the card vertex shader). standOf() therefore measures the LONGEST
+    // lock, which is the quantity standFloorMax was derived as a ceiling on --
+    // reachBand's own ceiling, 0.25 x the 48 mm flank coat. Clause B is
+    // unchanged and now bounds the right thing; before this it bounded a
+    // constant that every lock in the coat received.
     const floor = u.uCardFloor?.value ?? 0;
+    const floorLow = u.uCardFloorLow?.value ?? 1;
+    const floorMean = floor * (floorLow + (1 - floorLow) * CARD_SHAPE.floorDrawMean);
     const coat = this.regionCoatDepth();
     if (!coat) {
       return { ok: false, reason: 'no furLength/region attribute: card reach is '
@@ -636,6 +644,7 @@ export class FurSystem {
     return {
       ok, band: reachBand, worst, worstOver: +worstOver.toFixed(3),
       floorMm: +(floor * 1000).toFixed(2),
+      floorLow, floorMeanMm: +(floorMean * 1000).toFixed(2),
       floorCapMm: +(CARD_SHAPE.standFloorMax * 1000).toFixed(2),
       floorOverMm: +(floorOver * 1000).toFixed(2),
       maxStandMm: +maxStandMm.toFixed(2),

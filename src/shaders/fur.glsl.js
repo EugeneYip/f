@@ -72,6 +72,16 @@ export const CARD_SHAPE = {
    */
   standFloorMax: 0.012,
 
+  /*
+   * Mean of the per-lock draw on that peak. The card vertex shader draws
+   * pow(hash, 1.5), whose mean is 1/(1 + 1.5) = 0.40; a lock's share of the
+   * peak is then uCardFloorLow + (1 - uCardFloorLow) * that. reachReport()
+   * reads this constant rather than repeating the exponent, so the guard's
+   * idea of the typical stand-off and the shader's cannot drift. If the
+   * exponent in the shader changes, change this with it.
+   */
+  floorDrawMean: 0.40,
+
   /**
    * Clumping — bible §5, "fur must clump, not distribute evenly".
    *
@@ -1087,7 +1097,8 @@ ${SKIN_FN}
 
 uniform float uCardWidth;
 uniform float uCardLength;
-uniform float uCardFloor;   // minimum guard-hair stand-off past the coat, metres
+uniform float uCardFloor;   // PEAK guard-hair stand-off past the coat, metres
+uniform float uCardFloorLow; // what the shortest lock gets, as a fraction of it
 uniform float uCardJitter;
 uniform float uCardClump;
 
@@ -1143,8 +1154,35 @@ void main(){
   //
   // It is gated on furSkinMask2().x, the same LENGTH mask the coat uses, so a
   // floor cannot regrow hair on the rhinarium or across the eye parting.
+  //
+  // uCardFloor is the PEAK stand-off, not a constant one, and that correction
+  // is the whole of "the hairs are uniform frizzy needles". The cap it lives
+  // under -- standFloorMax, 0.25 x the 48 mm flank coat -- is reachBand's
+  // CEILING, i.e. what the proportional rule grants its LONGEST card; the mean
+  // card is granted reachBand's middle, about 0.17. A constant floor therefore
+  // handed every lock in the coat the allowance meant for the longest one, so
+  // every card tip cleared the shells by the same few millimetres and the coat
+  // resolved as a halo of equal-length needles. Attributed in one page session
+  // at the profile framing: hiding the cards leaves a smooth blob with a
+  // granular rim and no needles at all; setting uCardFloor to 0 removes them
+  // too and leaves a dense fuzz. The needles are card tips, and their
+  // uniformity is this term's.
+  //
+  // So each LOCK draws its own share of the peak, skewed (pow 1.5) so that
+  // long guard locks are a minority and most of the coat sits shorter. On the
+  // 47 mm flank the shortest locks now come out at stand exactly 0 -- they do
+  // not clear the shells at all, which is what an undercoat is -- while the
+  // longest clear them by 7.3 mm, against 5.3 mm for every hair before.
+  //
+  // Per LOCK, not per card: lrnd is aClump.w, shared by every card on a Worley
+  // site, so a lock is long or short as a unit. Drawing this per card would
+  // make neighbouring hairs disagree, which is the anti-clump that
+  // CARD_SHAPE.clumpCell exists to undo.
   float coat  = furCoatLength(position, ra.y);
-  float stand = max(0.0, uCardFloor * furSkinMask2(position).x
+  float fw    = hash11(lrnd * 61.7 + 4.3);
+  fw = fw * sqrt(fw);                       // pow(fw, 1.5) -- mean 0.40
+  float stand = max(0.0, uCardFloor * (uCardFloorLow + (1.0 - uCardFloorLow) * fw)
+                         * furSkinMask2(position).x
                          - coat * ${(CARD_SHAPE.reachBand[0] - 1).toFixed(3)});
   float L    = (coat + stand) * rc.x * uCardLength * aCard.w;
 

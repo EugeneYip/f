@@ -364,7 +364,13 @@ export const FUR_DEFAULTS = {
    * cuts both ways, and that is a different animal. 10 mm clears all three
    * with margin for 6% more area.
    */
-  cardFloor: 0.010,
+  // The PEAK absolute guard-hair stand-off, metres, and what the shortest lock
+  // gets as a fraction of it. See the card vertex shader: this used to be a
+  // constant 10 mm handed to every lock, which is what made the coat a halo of
+  // equal-length needles. 12 mm is CARD_SHAPE.standFloorMax exactly -- the cap
+  // is a ceiling on the longest hair and is now used as one.
+  cardFloor: 0.012,
+  cardFloorLow: 0.45,
   cardInner: 0.17,
   /*
    * vEdge exponent at a card TIP. THE ONE KNOB for how much card stands over
@@ -587,6 +593,7 @@ export function buildFurUniforms(ctx) {
     uCardWidth: { value: d.cardWidth },
     uCardLength: { value: d.cardLength },
     uCardFloor: { value: d.cardFloor },
+    uCardFloorLow: { value: d.cardFloorLow },
     uCardInner: { value: d.cardInner },
     uCardTipEdge: { value: d.cardTipEdge },
     uCardJitter: { value: d.cardJitter },
