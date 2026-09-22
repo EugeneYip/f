@@ -184,9 +184,44 @@ export const REGION_TABLE = [
   /* 21 legHindUpper  */ { a: [1.00, 1.10, 1.05, 0.28], b: [1.05, 1.30, 0.25, 1.05] },
   /* 22 hock          */ { a: [1.00, 1.10, 0.95, 0.32], b: [1.15, 1.50, 0.16, 1.70] },
   /* 23 pawHind       */ { a: [1.00, 1.15, 0.60, 0.16], b: [1.55, 2.05, 0.14, 1.30] },
-  /* 24 tailBase      */ { a: [1.04, 1.14, 0.45, 0.34], b: [0.85, 0.95, 1.00, 1.70] },
-  /* 25 tailMid       */ { a: [1.06, 1.36, 0.30, 0.42], b: [0.78, 0.92, 1.00, 2.10] },
-  /* 26 tailTip       */ { a: [1.04, 1.18, 0.34, 0.36], b: [0.82, 0.95, 1.00, 1.85] },
+  /*
+   * 24-26 THE TAIL. The lengthScales here are the tail's SHAPE, not a
+   * character knob, and they are set against the core radii the anatomy
+   * agent publishes (TAIL_R, metres: .0266 .0278 .0274 .0262 .0246 .0224
+   * .0196 .0162 .0126 .0095; tailBase is control points 0-1, tailMid 2-6,
+   * tailTip 7-9). Coat depth x core radius is what the eye reads:
+   *
+   *              coat mm   core mm   TOTAL RADIUS   diameter
+   *   was  base     51.4      27.2         78.6       157 mm
+   *        mid      67.1      24.0         91.1       182 mm
+   *        tip      48.0      11.0         59.0       118 mm
+   *   now  base     18.0      27.2         45.2        90 mm
+   *        mid      36.0      24.0         60.0       120 mm
+   *        tip      40.7      11.0         51.7       103 mm
+   *
+   * Bible 4 gives the one sourced figure: "tail 0.32 m (bushy, ~0.10 m
+   * diameter with fur)". The tail was rendering at 0.18 m across its middle
+   * -- 1.8x the spec and 0.72x the coated TORSO (127 mm radius) -- so it was
+   * not a brush attached to a fox, it was a second body. That, and not the
+   * croup, is why "the rear is one continuous furry mass".
+   *
+   * The croup hypothesis is disproved and must not be re-tested: deepening
+   * or pulling back the croup coat (region 16) does not move the notch at
+   * all. Only the tail's own coat does. Measured by sweeping region 24's
+   * lengthScale alone on the exact matte at `profile`, dorsal-contour
+   * convexity deficiency: 1.14 -> 26.1 px, 0.58 -> 32.2, 0.40 -> 37.7,
+   * 0.25 -> 42.0. Monotone, and visible in the render at every step.
+   *
+   * The PROFILE across the three regions is the point, not the three numbers
+   * separately: shallow at the root so the tail has a waist where it leaves
+   * the croup's 43.8 mm, deep through the middle so the brush has mass, and
+   * only slightly tapering at the tip, because a tail that tapers to a point
+   * is a whip. 18 mm at the root is still deeper than the hock's 16.8 mm, so
+   * it does not expose skin (bible 4f rule 3) -- verified on the matte.
+   */
+  /* 24 tailBase      */ { a: [1.04, 0.40, 0.45, 0.34], b: [0.85, 0.95, 1.00, 1.70] },
+  /* 25 tailMid       */ { a: [1.06, 0.73, 0.30, 0.42], b: [0.78, 0.92, 1.00, 2.10] },
+  /* 26 tailTip       */ { a: [1.04, 1.00, 0.34, 0.36], b: [0.82, 0.95, 1.00, 1.85] },
 ];
 
 /** Authoring defaults. Every one of these is live-tweakable via ctx.fur.set(). */
