@@ -210,6 +210,42 @@ const LID_SLACK = 0.10;          // tuck this much further under the skin
 const LID_SPREAD_MIN = 0.17;     // always enough band for a margin + a blend
 const LID_SPREAD_MAX = 0.95;
 
+// --- how wide the dark is, in metres of arc from the free edge -------------
+//
+// THIS IS THE REASON THE EYE DID NOT READ AT NORMAL FRAMINGS, and it is the
+// opposite of the reported symptom. The critic's "no dark eyelid rim" at
+// `frontal` and `portrait` is not a missing rim; the whole 3.4-5.5 mm lid
+// band was rendering dark, so there was nothing for a rim to be a rim
+// AGAINST. Attributed by tinting each surface a unique primary and reading
+// the mask back off the untinted frame at `portrait`: 910 px of margin at
+// (8,8,10), 1857 px of periocular skin at (26,28,36) and 2402 px of lid FUR
+// at (38,50,69) — against coat immediately outside the socket at ~(180,190,
+// 200). Four thousand pixels of black around an amber disc is a hole in the
+// face with a bead in it, which is exactly the phrase the critic used.
+//
+// At 0.13 m that band is 300 px across and reads as a shaded lid, which is
+// why `macro_eye` looked right while the same geometry at 0.55 m collapsed
+// into one featureless blob 25 px wide. Nothing was scale-dependent except
+// the reader.
+//
+// So: the same ramp, pulled in about 30%, so the dark is a LINE at the
+// framings a viewer actually sees and still a modelled lid at macro.
+//   frontal, 0.1615 mm/px : margin 5.0 px · ring out to 8.7 px · fur by 20 px
+//   macro,   0.0239 mm/px : margin 33 px  · ring out to 59 px  · fur by 134 px
+const RIM_MARGIN_0 = 0.00030;    // near-black tarsal margin starts fading here
+const RIM_MARGIN_1 = 0.00080;    // ...and is gone here
+const RIM_RING_1 = 0.00140;      // dark periocular skin ends
+const RIM_FUR_0 = 0.00135;       // short lid fur starts taking over
+const RIM_FUR_1 = 0.00320;       // ...and owns the surface from here out
+
+// Short white lid fur is a multiple-scattering medium and an ordinary
+// single-bounce dielectric is not. Under this scene's sky-only fill the
+// difference is the 4.7x measured above. This is the extra irradiance the
+// furry part of the band keeps, as a multiplier on the sky/bounce hemisphere;
+// it is masked to zero on the margin so the black line stays black. Swept
+// against the coat next to the socket — see the commit.
+const LID_SCATTER = 2.15;
+
 /** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
 const chord = (t) => t / Math.sqrt(1 + t * t);
 
@@ -242,9 +278,10 @@ uniform float uCaustic, uWetness, uSunInt;
 uniform float uApW, uApUp, uApDn, uApTilt, uBlinkU, uBlinkD;
 uniform float uSpread;
 uniform float uLidYaw, uLidPitch;
+uniform float uLidScatter;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
-uniform vec3 uCamL, uSunL, uSunCol, uSkyCol, uBounceCol;
+uniform vec3 uCamL, uSunL, uUpL, uSunCol, uSkyCol, uBounceCol;
 `;
 
 /**
@@ -1049,11 +1086,22 @@ export class Eyes {
 
       uCamL: { value: new THREE.Vector3(0, 0, 1) },
       uSunL: { value: new THREE.Vector3(0, 0, 1) },
+      // WORLD UP, in this eye's local frame. The sky catchlight used to be
+      // aimed at eye-local +Y, which is not up: the socket frame is rolled
+      // and mirrored between the sides, so the two eyes reflected the sky
+      // from two different directions. Measured at `frontal`: the left socket
+      // box averaged (73.5, 69.1, 64.8) with a 249-level specular in it and
+      // the right (45.3, 45.1, 44.4) with a peak of 130 and no highlight at
+      // all — the whole of "the two eyes are grossly asymmetric", on eyes
+      // whose geometry is identical to four decimal places.
+      uUpL: { value: new THREE.Vector3(0, 1, 0) },
       uSunCol: { value: new THREE.Color().copy(ctx.sunColor) },
       uSunInt: { value: ctx.sunIntensity },
       uSkyCol: { value: new THREE.Color().copy(ctx.skyColor) },
       uBounceCol: { value: new THREE.Color().copy(ctx.groundBounce) },
-      uWorldNrm: { value: new THREE.Matrix3() },
+      // How much light short lid fur scatters back on top of what an ordinary
+      // dielectric keeps. See the note at the lid's lights_fragment_end.
+      uLidScatter: { value: LID_SCATTER },
 
       uApW: { value: apW }, uApUp: { value: AP_UP },
       uApDn: { value: AP_DN }, uApTilt: { value: AP_TILT },
@@ -1169,20 +1217,32 @@ export class Eyes {
   diffuseColor.rgb = eyCol;
 `)
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
-  float roughnessFactor = mix(0.16, 0.50, eyOnCornea);
+  // OFF the cornea this was 0.16 — glossier than the cornea's own base, on a
+  // surface whose whole job is to be dark. Combined with the clearcoat it
+  // turned the scleral crescent at the medial canthus into a hard white
+  // wedge, and because the two sockets face 72 degrees apart only one eye
+  // ever caught it. The cornea does not need base gloss (its mirror is the
+  // clearcoat lobe); the sclera needs a damp sheen and nothing more.
+  float roughnessFactor = mix(0.42, 0.50, eyOnCornea);
 `)
           // The tear film only exists over the cornea, and it dulls where the
           // lid margin presses on the globe.
           .replace('#include <lights_physical_fragment>', /* glsl */ `
 #include <lights_physical_fragment>
-  material.clearcoat = mix(0.55, 1.0, eyOnCornea) * (1.0 - max(eyShU, eyShD) * 0.7);
+  // THE SCLERA IS WET, NOT MIRRORED. At 0.55 clearcoat over roughness 0.16
+  // the strip of bulbar conjunctiva at the medial canthus reflected the
+  // twilight sky as a hard-edged 250-level white crescent — on ONE eye, since
+  // the two sockets face 72 degrees apart, which is a second and independent
+  // contributor to "the eyes are asymmetric". A tear film over pigmented
+  // sclera is a damp sheen; the mirror belongs to the cornea alone.
+  material.clearcoat = mix(0.26, 1.0, eyOnCornea) * (1.0 - max(eyShU, eyShD) * 0.7);
   // A real cornea is mirror-smooth, but our env map is a 256 px PMREM: at
   // mirror roughness it reflects the sky/ground horizon as a HARD LINE across
   // the eye, which reads as a rendering artifact rather than as a reflection.
   // Roughing the tear film slightly turns that into the soft vertical
   // gradient a photograph actually shows, and widens the catchlight enough to
   // survive the bloom downsample.
-  material.clearcoatRoughness = mix(0.16, 0.075, eyOnCornea);
+  material.clearcoatRoughness = mix(0.30, 0.075, eyOnCornea);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeGlobe';
@@ -1237,7 +1297,17 @@ void main(){
   // this — the twilight sky and the snow bounce off a wet cornea — is the
   // entire catchlight. Aimed up and slightly camera-ward, where the brightest
   // part of a polar twilight sky actually is.
-  vec3 skyDir = normalize(vec3(V.x * 0.35, abs(V.y) * 0.25 + 0.85, V.z * 0.35));
+  //
+  // UP HAS TO BE WORLD UP. This was eye-local +Y, and eye-local +Y is not up:
+  // the socket frame is rolled and it is MIRRORED between the two sides, so
+  // the left and right eyes reflected the sky from two different directions
+  // and only one of them caught it. That is the reported "grossly asymmetric
+  // eyes" -- 249 levels of specular on one and a peak of 130 with no
+  // highlight at all on the other, on geometry that matches to four decimal
+  // places. uUpL is world up carried into this eye's frame every frame, so
+  // both eyes catch the same sky from the same place and the highlight stays
+  // put when the head turns.
+  vec3 skyDir = normalize(normalize(uUpL) * 0.86 + V * 0.36);
   vec3 Hs = normalize(V + skyDir);
   float ndhs = feSat(dot(N, Hs));
   float as2 = 0.052 * 0.052;
@@ -1376,9 +1446,13 @@ void main(){
   // "single most important detail on the face" was a 0.1 mm hairline at the
   // canthus and a 0.55 mm smudge under the brow. At frontal framing the whole
   // ring was sub-pixel and the eye reduced to a grey dot.
-  float feMargin = 1.0 - smoothstep(0.00030, 0.00085, vArc);
-  float feRing   = 1.0 - smoothstep(0.00085, 0.00155, vArc);
-  float feFurry  = smoothstep(0.00170, 0.00450, vArc);
+  //
+  // Widths now live in one place at the top of the file, because the ramp and
+  // the scatter mask below have to agree: any arc the scatter does not reach
+  // renders as part of the black, whatever colour it was authored.
+  float feMargin = 1.0 - smoothstep(${RIM_MARGIN_0.toFixed(5)}, ${RIM_MARGIN_1.toFixed(5)}, vArc);
+  float feRing   = 1.0 - smoothstep(${RIM_MARGIN_1.toFixed(5)}, ${RIM_RING_1.toFixed(5)}, vArc);
+  float feFurry  = smoothstep(${RIM_FUR_0.toFixed(5)}, ${RIM_FUR_1.toFixed(5)}, vArc);
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
   float feHair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
@@ -1400,6 +1474,36 @@ void main(){
   // on the face. It dries out quickly into ordinary skin and then into fur.
   float feWet = 1.0 - smoothstep(0.00012, 0.00075, vArc);
   float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.0025, 0.0060, vArc)), 0.09, feWet);
+`)
+          .replace('#include <lights_fragment_end>', /* glsl */ `
+#include <lights_fragment_end>
+  // MULTIPLE SCATTERING IN THE LID FUR.
+  //
+  // Everything outward of the rim is short white fur over skin — the same
+  // coat as the face, 2 mm deep instead of 26 — and it was rendering 4.7x
+  // darker than the coat it is supposed to disappear into. Albedo was not the
+  // lever (0xf2f4f8 is already 0.88 and pure white buys 14%) and it is not a
+  // shadow (the lid neither casts nor receives one). It is that the coat is a
+  // deep scattering medium whose effective albedo approaches one, while this
+  // band is one dielectric bounce under a hemisphere with no sun in it. The
+  // sun is BEHIND the animal in every framing the bible specifies, so the
+  // direct term contributes nothing here and the difference is the whole
+  // image.
+  //
+  // Adding the missing scatter is physical rather than cosmetic: the same
+  // hair, at the same density, over the same skin, should keep the same share
+  // of the sky. It is masked off the tarsal margin so the black line — which
+  // is bare pigmented lid edge, not fur, and legitimately keeps only one
+  // bounce — stays black.
+  //
+  // Hemispherical rather than flat so the fold still models: fur pointing at
+  // the sky takes the sky's colour, fur pointing at the snow takes the
+  // bounce, which is also what keeps the lid from going blue when the coat
+  // does not.
+  vec3 feWN = inverseTransformDirection(normal, viewMatrix);
+  vec3 feAmb = mix(uBounceCol, uSkyCol, feWN.y * 0.5 + 0.5);
+  reflectedLight.indirectDiffuse +=
+    feAmb * diffuseColor.rgb * (uLidScatter * feFurry);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeLid';
@@ -1494,6 +1598,8 @@ void main(){
       this._m.copy(e.ball.matrixWorld).invert();
       e.u.uCamL.value.copy(cam.position).applyMatrix4(this._m);
       e.u.uSunL.value.copy(ctx.sunDirection).transformDirection(this._m).normalize();
+      this._v.set(0, 1, 0).transformDirection(this._m).normalize();
+      e.u.uUpL.value.copy(this._v);
       e.u.uSunCol.value.copy(ctx.sunColor);
       e.u.uSunInt.value = ctx.sunIntensity;
       e.u.uSkyCol.value.copy(ctx.skyColor);

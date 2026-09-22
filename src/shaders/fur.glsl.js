@@ -192,6 +192,7 @@ uniform float uAniso;
 uniform float uStrandRound;
 uniform float uStrandAniso;
 uniform float uMicroOn;
+uniform float uFeltStrand;   // strand structure in the undercoat felt
 uniform float uRim;
 
 // --- stochastic / TAA ------------------------------------------------------
@@ -599,6 +600,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   tuft = mix(1.0, tuft, smoothstep(0.0, 0.18, t) * uTuftAmt
                         * octaveFade(px, fc) * detail);
 
+  float aHair = a;                        // strand + micro, before the lock
   a = a * tuft * lenFade;                                  // guard hair, tufted
 
   // Beer-Lambert path length, applied to the UNDERCOAT ONLY.
@@ -616,6 +618,23 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // undercoat is the one part of the coat with no hair in it at all, and
   // max(a, under) below hands it the outline wherever it is the larger term.
   under *= mix(1.0, tuft, 0.5);
+  // ...and the STRANDS, shallower still.
+  //
+  // The lock alone is not enough. The felt had clump structure and no strand
+  // structure at all, so wherever max(a, under) picked the felt the coat
+  // rendered as a region of CONSTANT alpha bounded by the lock's Voronoi
+  // edge: flat angular plates, the whole width of a 7.4 mm tuft, which at
+  // macro_eye is ~325 px. That is the artefact the macro framing has been
+  // showing -- it is neither the clump cells being wrong nor the 'deep' shell
+  // early-out, it is the one layer in the coat with no hair in it winning the
+  // max() over a third of the frame.
+  //
+  // Weaker than the lock term because the undercoat genuinely IS felt: its
+  // fibres are finer, denser and more tangled than the guard hairs, so they
+  // modulate it without cutting gaps in it. LOD-safe for free -- below the
+  // strand layer's own resolution aHair is already its analytic mean, a
+  // constant, so this term flattens to a constant scale at distance.
+  under *= mix(1.0, 0.62 + 0.38 * aHair, uFeltStrand);
 
   a = max(a, under) * densityScale * uDensity;
 
@@ -1338,7 +1357,24 @@ void main(){
     // those cards overlap the mismatch pools into grey patches — the flank
     // went visibly mottled at sun 14,-30 while the shells alone stayed clean.
     // In the interior the card must shade like the coat it sits in.
-    N = normalize(mix(N, Ncyl, (0.12 + 0.82 * clamp(vEdge, 0.0, 1.0)) * lod));
+    //
+    // ...unless the card is genuinely RESOLVED. lod above is a coarse gate
+    // — it saturates once a card is about 3 px across — and the vEdge weight
+    // then holds the cylinder normal at ~0.2 on anything face-on. At
+    // macro_eye a card is tens of pixels wide and is unmistakably a single
+    // hair, and shading it as though it were part of the surface underneath
+    // is why no Kajiya-Kay travelling highlight is visible on any individual
+    // strand there: the highlight needs the tube's own normal sweeping
+    // through the lobe across the hair's width, and 0.2 of a tube normal
+    // does not sweep.
+    //
+    // The grey-patch failure this guard was built for happens where cards are
+    // 1-3 px and their shading mismatch is noise that pools. wide is zero
+    // there by construction, so that case is bit-identical.
+    float wide = 1.0 - smoothstep(0.10, 0.24, fwidth(s));
+    N = normalize(mix(N, Ncyl,
+                      mix(0.12 + 0.82 * clamp(vEdge, 0.0, 1.0), 1.0, wide * uStrandRound)
+                      * lod));
   }
 
   float ao = (1.0 - vP0.z * uAOBake) *

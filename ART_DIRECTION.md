@@ -484,3 +484,61 @@ Also settled by that measurement: the bare muzzle was never a fur bug. The
 cause was `nosePad`, a 30.7 × 23.9 mm skin-tinted sphere standing in for a
 13 mm rhinarium — FaceDetail had been clamping its *drawn* pad to 10–14.2 mm to
 survive it, while nothing clamped the SDF.
+
+## 4i. Corrections to §4g and §4f, both landmark errors of mine
+
+Two targets I wrote turned out to be measured against the wrong thing. Both
+were caught by measurement, not argument.
+
+### §4g's "55 % of nose-to-occiput" was the wrong landmark
+
+The sourced figure — Nanova & Prôa 2017, rostrum 61.1 % of a 121.3 mm CBL —
+is measured to the **condyles**, the atlanto-occipital pivot. §4g's landmark
+was the caudal pole of a head-only field, which sits further back. The same
+animal reads differently on the two:
+
+| stretch | rostrum | § 4g landmark | condyle / CBL-equivalent |
+|---|---|---|---|
+| 1.00 | 48.3 mm | 39.4 % | 52.3 % |
+| **1.60 (shipped)** | **71.3 mm** | **49.0 %** | **61.8 %** |
+| 2.07 | 90.7 mm | 55.0 % | 67.4 % |
+
+**On the source's own landmark, stretch 1.60 is already at the sourced ratio**
+— 61.8 % against 61.1 %, with the absolute rostrum just under the sourced
+74.1 mm. Reaching §4g's stated 55 % would need stretch 2.07: a 90.7 mm
+rostrum on a 164.9 mm head, 35 % over the sourced CBL and **longer than a red
+fox's skull**. Rendered as a probe at 1.75, the eye already sits past the
+middle of the head and the nose drops into a straight down-slope.
+
+**The muzzle is done at 1.60.** §4g's numeric target is withdrawn; the
+condyle-referenced figure is the one that means anything, and comparing a
+craniometric ratio to a landmark the craniometrist did not use is the same
+error class as §4b's "short".
+
+Also settled: `occipitalTuck` is a dead lever and is now documented as such.
+Its premise was that the coat hides a change at the caudal end. It does not —
+the *neck* does, which means there is no change. A 20 mm tuck moves the
+sagittal topline by ≤ 0.70 mm. Using it to reach 55 % would have been gaming
+the instrument.
+
+### "A fox is ~1:1" is a SHORT-COATED figure
+
+I set chest:leg ≈ 1:1 as the target and §4f.4 pins the furred silhouette. The
+anatomy agent showed those cannot both hold, and the arithmetic is simple
+enough that I should have seen it: **a constant coat of depth *c* adds 2*c* to
+the chest depth and takes *c* off the ground clearance.** So a 1.46:1 skin —
+which is what we have, and which is a fox — cannot present below about 2:1
+under the sourced 40–60 mm coat. Measured: skin 1.46:1, canopy 2.30:1
+(2.17:1 measuring height at the withers rather than the neck crest).
+
+And the two levers that could move it are both already spoken for. Raising
+the belly canopy shrinks the furred silhouette by exactly what it raises, with
+nowhere sourced to put it back — §4f.1 forbids deepening the flank coat and
+the Underwood & Reynolds ranking forbids deepening the belly's. Lifting the
+animal takes shoulder height from 278 mm to 293/310/333 mm for 2.00/1.75/1.50,
+against the 0.28 m every source in `REFERENCE-FOX.md` §4b agrees on.
+
+**The target is restated: chest:leg ≈ 2.0–2.2 : 1 on the furred canopy**,
+which is where we are. The remaining discrepancy against a photographed fox is
+**ruff**, not trunk — the neck crest reads higher than the withers, and that
+is a coat-distribution question, not a proportion one.

@@ -267,6 +267,12 @@ export const FUR_DEFAULTS = {
   clumpAO: 0.75,
   aoBake: 0.22,
   rim: 0.30,
+  // How much of the undercoat felt's opacity the strand layer modulates.
+  // See furHair(): the felt is the one layer with no hair in it, and wherever
+  // max(a, under) picks it the coat renders as a flat plate the width of a
+  // lock. 1.0 gives it the strands at 0.62-1.00 of full opacity -- felt, so
+  // modulated but never cut through.
+  feltStrand: 1.0,
   strandRound: 1.0,   // 1.0 = the true per-hair cylinder normal; above this the
                        // mix() extrapolates past it and detail degrades again
   strandAniso: 6.0,   // strand cells are tubes along the hair, not balls
@@ -533,6 +539,7 @@ export function buildFurUniforms(ctx) {
     uStrandRound: { value: d.strandRound },
     uStrandAniso: { value: d.strandAniso },
     uMicroOn: { value: 1 },
+    uFeltStrand: { value: d.feltStrand },
     uRim: { value: d.rim },
 
     uStochastic: { value: 0 },
