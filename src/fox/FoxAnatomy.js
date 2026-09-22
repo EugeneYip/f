@@ -459,6 +459,41 @@ function earFrame() {
   return { a, axis, n, w, len };
 }
 
+/**
+ * ## Why the ear all but vanishes at `profile` while reading strongly at
+ * `frontal`. It is the POSE and the RUFF; the pinna itself is fine.
+ *
+ * The `profile` camera sits at (1.900, 0.205, -0.020) looking at
+ * (0, 0.190, -0.020), so its view axis is -X to within half a degree and the
+ * profile silhouette is simply the outline in the (z, y) plane. The pinna's
+ * axis runs base (35.4, 296.1, 167.8) -> tip (57.2, 341.9, 165.6):
+ *
+ *     lean off vertical, FRONTAL projection (y,x)    25.5 deg
+ *     lean off vertical, PROFILE projection (y,z)     2.8 deg
+ *
+ * The whole of §4b's outward lean is on the one axis a side view collapses,
+ * and the base sits only 8 mm caudal of the cranial apex — so in profile the
+ * ear rises straight out of the top of the skull with nothing in front of it
+ * to read against.
+ *
+ * It is still 47 mm proud of the SKIN there, so this is not a shape problem.
+ * The coat closes the rest. Profile-projected upper silhouette, max over x:
+ *
+ *                    z=145 (nape)   z=166 (apex)   z=187 (forehead)
+ *     skin              303.8          351.2           311.2
+ *     canopy            341.2          367.8           323.2
+ *
+ * 47.4 mm of relief against the nape on the skin, 26.6 mm on the canopy: the
+ * nape carries 45.5–58 mm of coat against the pinna's 18 mm and fills the
+ * notch from behind. On `shots/matte/profile.matte.png` — true coverage, so
+ * this is not a backlighting artefact — the head's top contour is a single
+ * convex arc from nose to nape with one apex and no ear notch at all.
+ *
+ * The fix is a POSE change: move the base caudal and put some of the lean
+ * into -z so the pinna clears the dome in the (z, y) plane as well as in
+ * (x, y). Not attempted here; §4c's visible-height rule was tuned on the
+ * frontal read and re-posing the ear needs its own render loop.
+ */
 export const EAR = {
   rBase: 0.0228,      // world half-radius at the pinna root (x `wide` across)
   tipRatio: 0.49,     // r(apex) / r(root) — the §4c base-to-tip wedge
@@ -711,6 +746,49 @@ const mirrorX = (p) => [-p[0], p[1], p[2]];
  * highest trunk point is the withers. The loin drops ~4 mm and the withers
  * rise ~4, which is inside the margin §4f left over the spine bones
  * (spine03 sits 11 mm under TOP at z = 0, and still does).
+ *
+ * ## And why the trunk cannot give the last 0.8 of chest:leg
+ *
+ * Re-measured with the same canopy instrument, which reproduces the two
+ * landmarks above to 0.1 mm (trunk topline 318.7, belly 102.5):
+ *
+ *     SKIN     H 297.6   L 121.1    1.46 : 1     <- already a fox
+ *     CANOPY   H 338.1   L 102.5    2.30 : 1     (2.17 : 1 if H is taken at
+ *                                                 the withers, z = 100, and
+ *                                                 not at the neck crest)
+ *     the coat adds 40.5 mm on top and takes 18.6 mm off the bottom
+ *
+ * The skin is right and the rest is arithmetic that §4f closes from both
+ * sides. chest:leg on the canopy is a function of the CANOPY alone, and
+ * §4f.4 pins the canopy: "total silhouette stays where it is; radius moves
+ * from geometry into coat". On a VENTRAL surface geometry and coat are
+ * interchangeable for the silhouette, so moving radius between them cannot
+ * move this ratio at all — every millimetre the belly skin rises has to come
+ * back as belly coat, which puts the canopy back where it was. Only two
+ * things actually move it, and both are already spoken for:
+ *
+ *   target   raise belly CANOPY   brisket skin depth left   or lift the whole
+ *                                 (137.5 mm today)          animal by
+ *   2.00:1        10.2 mm              127.3 mm              15.3 mm
+ *   1.75:1        20.4 mm              117.1 mm              32.1 mm
+ *   1.50:1        32.7 mm              104.8 mm              54.6 mm
+ *   1.00:1        66.5 mm               71.0 mm             133.1 mm
+ *
+ * Column 2 shrinks the furred silhouette by exactly what it raises, with
+ * nowhere sourced to put it back — §4f.1 forbids deepening the flank coat
+ * and the Underwood & Reynolds ranking forbids deepening the belly's — which
+ * is §4f.4 verbatim. Column 4 keeps the silhouette but takes shoulder height
+ * from 278 mm to 293 / 310 / 333 / 411 mm, and 0.28 m is the single body
+ * measurement every source in REFERENCE-FOX §4b agrees on.
+ *
+ * So: NO FURTHER FROM THE TRUNK. The 1.47:1 "floor" is reached only with
+ * zero belly coat, i.e. by breaking §4f.3. And "a fox is ~1:1" is a
+ * SHORT-COATED figure: a constant coat of depth c adds 2c to the canopy
+ * depth and takes c off the clearance, so a 1.46:1 skin under the sourced
+ * 40–60 mm flank coat cannot present below about 2:1 whatever is done to it.
+ * The one honest millimetre left is not the trunk — it is the 0.13 of the
+ * ratio that is RUFF, H being 338.1 at the neck crest against 324.9 at the
+ * withers.
  */
 // z, TOP, BOTTOM, sqx, region  — silhouette-first authoring; see below.
 const TRUNK_PROFILE = [
