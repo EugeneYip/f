@@ -281,7 +281,11 @@ const main = async () => {
           // camera resolves on render, and render does not advance time.
           D.render(); D.render();
           for (let i = 0; i < taa; i++) D.render();
-          return { ...D.stats(), simTime: D.time?.() ?? null,
+          // `stats().frameMs` is the rAF loop's average, and the harness
+          // stopped that loop before any of this ran -- so it reported the
+          // idle vsync interval for every pose. Measure it for real.
+          const measuredMs = D.measureFrameMs ? D.measureFrameMs(40) : null;
+          return { ...D.stats(), measuredMs, simTime: D.time?.() ?? null,
                    root: D.probe?.()?.root ?? null };
         }, { name, taa: args.taa });
 
@@ -321,7 +325,9 @@ const main = async () => {
           } else report.rootAt = info.root;
         }
         report.poses[name] = { ok: true, ms: Date.now() - t0, ...info };
-        console.log(`[shoot] ${name.padEnd(12)} ${info.drawCalls} calls, ${(info.triangles / 1000).toFixed(0)}k tris`);
+        console.log(`[shoot] ${name.padEnd(12)} ${info.drawCalls} calls, ` +
+          `${(info.triangles / 1000).toFixed(0)}k tris` +
+          (info.measuredMs != null ? `, ${info.measuredMs.toFixed(2)} ms/frame` : ''));
       } catch (e) {
         report.poses[name] = { ok: false, error: String(e) };
         console.error(`[shoot] ${name} FAILED: ${e.message}`);

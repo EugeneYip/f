@@ -406,6 +406,38 @@ export class Debug {
         };
       },
 
+      /**
+       * Actually measure what a frame costs.
+       *
+       * `ctx.quality.avgFrameMs` is accumulated by the rAF loop -- and the
+       * harness calls `pause()`, which stops that loop, before it measures
+       * anything. So the number every review run has reported was whatever
+       * the idle loading screen last averaged: 15.69 ms, the vsync interval,
+       * IDENTICAL to two decimals across all 14 poses including one at 58
+       * draw calls and one at 65. The per-tier `perf` block had the same
+       * origin and reported ultra as FASTER than low, which is impossible.
+       * §10's 16 ms budget has therefore never actually been verified.
+       *
+       * Timing `render()` calls alone measures only the CPU side, because GL
+       * commands queue. A one-pixel `readPixels` after the batch forces the
+       * driver to finish, so the elapsed time includes the GPU.
+       *
+       * `performance.now()` here is deliberate and is not the rule-6
+       * violation it looks like: rule 6 forbids wall-clock in ANIMATION,
+       * where it would break determinism. This advances no state.
+       */
+      measureFrameMs: (n = 60) => {
+        const gl = ctx.renderer.getContext();
+        const px = new Uint8Array(4);
+        const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        for (let i = 0; i < 12; i++) ctx.app.render();   // warm caches + shaders
+        sync();
+        const t0 = performance.now();
+        for (let i = 0; i < n; i++) ctx.app.render();
+        sync();
+        return +((performance.now() - t0) / n).toFixed(3);
+      },
+
       /** Systems that failed to initialise, for a health check. */
       errors: () => (window.__FOX_ERRORS || []),
       systems: () => [...ctx.systemsByName.keys()],
