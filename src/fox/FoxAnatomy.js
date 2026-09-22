@@ -346,6 +346,107 @@ export const ROSTRUM = {
 };
 
 /**
+ * ## The stop, and why there was not one
+ *
+ * `shots/orch-w7/profile.png`: the forehead flows into the muzzle in one
+ * unbroken curve. A fox has a visible stop where the nasal bones meet the
+ * frontal, and without it the lengthened rostrum reads rodent-like.
+ *
+ * Measured on the built field, sagittal dorsum, "nearest primitive and how
+ * far the blended skin stands off its own surface":
+ *
+ *     z (mm)   248   244   236   228   224   220   216   208   200
+ *     owner    nasal muzzle muzzle muzzle muzzle forehd forehd forehd forehd
+ *     lift      3.5   3.5   1.4   1.9   3.2   4.9   3.3   2.3   2.8
+ *
+ * so the rostrum/frontal crossing is at z ~ 221 and the smin lift there is
+ * 4.9 mm — the largest anywhere on the dorsum, but not the main problem.
+ * The main problem is the SLOPE of each segment (mm of rise per mm caudal):
+ *
+ *     nasal shaft  z 248–262   0.44
+ *     muzzle cone  z 224–246   1.02   <- the steepest segment on the head
+ *     frontal      z 196–220   0.67
+ *     dome         z 188–196   0.44
+ *
+ * The muzzle cone's own dorsal line is doing the frontal's job, 25 mm too
+ * far forward, and the junction at z = 221 is therefore CONVEX (the slope
+ * falls 1.02 -> 0.67 going caudally). There is a concave break, but it is at
+ * z ~ 246, the nasal/muzzle joint, in the middle of the rostrum.
+ *
+ * ## And the coat then erases what is left
+ *
+ * Canopy contour = the upper envelope of a disk of radius `coat` swept along
+ * the skin, which is what a coat of uniform depth is. A dilation preserves
+ * CONCAVE corners exactly and rounds convex ones at radius c — so the coat
+ * cannot be blamed for a missing corner. What it can do, and does, is tilt:
+ * the coat runs 9.0 mm at z = 264 to 18.3 mm at z = 228, a gradient of
+ * 0.26 mm/mm in the same direction as the skin's rise, which adds to the
+ * rostrum's slope and takes the skin's 10.4 mm hull defect to zero.
+ *
+ *     skin    nasal 0.675  frontal 0.829   stop angle  +5.6 deg   defect 10.4 mm
+ *     canopy  nasal 1.272  frontal 1.159   stop angle  -2.6 deg   defect  0.0 mm
+ *
+ * ## The levers
+ *
+ * `nasalDrop` lowers the muzzle cone's ROOT — the primitive's `a`, not
+ * `ROSTRUM.pivot`, so `rostral()` and the settled rostrum length are
+ * untouched. The root is buried inside the frontal and the cheek, so this
+ * flattens the caudal end of the nasal dorsum and almost nothing else; the
+ * distal end is pinned by the `nasal` shaft, which does not move.
+ *
+ * `frontalLift` raises the frontal dome so it stands proud of the nasal
+ * dorsum, which is the other half of the same corner.
+ *
+ * `blend` is the muzzle's own smin `k`, and it is the fillet that rounds the
+ * corner off. It has to stay above the mesher's floor — 1.5 cells at the
+ * 6 mm `high` grid is 9 mm — or the stop stair-steps, which is §4c's ear
+ * failure on a different part of the head. §4d's "the stop is too abrupt and
+ * angular" is the opposite failure and this is the knob that trades between
+ * them, so change it in small steps and look at `portrait`.
+ *
+ * `notch` is a transverse dish smooth-SUBTRACTED from the dorsum at the
+ * nasion. It is here because the two levers above move the skin and the
+ * canopy does not follow: a dilation rounds convex corners at radius c but
+ * reproduces concave ones, so the only thing that reaches the canopy through
+ * 18 mm of coat is an actual concavity. `notch.k` is its fillet and is what
+ * keeps it a dish rather than §4d's "abrupt and angular" crease.
+ */
+export const STOP = {
+  nasalDrop: 0.0060,
+  frontalLift: 0.0000,
+  blend: 0.0180,
+  notch: {
+    on: true,
+    /**
+     * A large, shallowly-seated ellipsoid, NOT a small deep one. Swept:
+     * at a fixed floor the dish's RADIUS is what reaches the canopy and its
+     * depth barely matters, because a dilation by c fills anything whose
+     * clearance circle is smaller than c and the coat here is 18 mm.
+     *
+     *   r (mm)      30     45     60     80
+     *   canopy ang  10.9   14.5   14.2    3.2      (80 also flattens the brow)
+     */
+    r: 0.0600,
+    /** World y the dish's lowest point reaches. Dorsum there is 287 mm. */
+    floor: 0.2760,
+    /** Caudal offset of the centre from `ROSTRUM.pivot`, world metres. */
+    dz: 0.0180,
+    /**
+     * Per-axis scale on `r`. `wide` 1.0 keeps the dish on the nasal bridge:
+     * measured at z = 224 it takes 11.4 mm off the midline, 9.0 at x = 12 mm
+     * and 3.0 at x = 24, and the temple half-width does not move at all.
+     * `deep` (the z scale) is the one that has to stay small — at 0.55 the
+     * dish reaches z = 187 and takes 5 mm off the brow above the eye; at
+     * 0.35 with `dz` 18 it stops at z = 200 and the orbit moves 0.4 mm.
+     */
+    wide: 1.0,
+    deep: 0.35,
+    /** The fillet. §4d: a dish, not a crease. */
+    k: 0.0110,
+  },
+};
+
+/**
  * Stretch an authored skull-space point along the rostral axis. Points at or
  * behind the pivot come back unchanged, so this can be applied to any head
  * primitive without a per-primitive opt-in list drifting out of date.
@@ -917,8 +1018,10 @@ export function buildField() {
     flowDir: [0, 0.10, -1], flowRadial: 0.25, tint: TINT_FUR,
   });
   // Domed forehead with a gentle stop — arctic fox, not red fox.
+  const foreheadC = H([0, 0.3175, 0.2145]);
+  foreheadC[1] += STOP.frontalLift;
   f.add({
-    name: 'forehead', a: H([0, 0.3175, 0.2145]), ra: sr(0.0210),
+    name: 'forehead', a: foreheadC, ra: sr(0.0210),
     squash: [0.90, 0.84, 0.94], k: 0.024, ...furOf(R.forehead),
     flowDir: [0, 0.22, -1], flowRadial: 0.20, tint: TINT_FUR,
   });
@@ -933,10 +1036,16 @@ export function buildField() {
   });
   // Short and BLUNT: 2:1 taper read as a point once fur was on it, so the
   // muzzle now barely narrows and stops well short of the old nose position.
+  // `a` is ROSTRUM.pivot lowered by STOP.nasalDrop in WORLD metres, applied
+  // after skullXf so the knob is not silently scaled by SKULL_SCALE, and to
+  // the primitive only so `rostral()` keeps its pivot and the rostrum keeps
+  // its settled length.
+  const muzzleA = H(ROSTRUM.pivot);
+  muzzleA[1] -= STOP.nasalDrop;
   f.add({
-    name: 'muzzle', a: H(ROSTRUM.pivot), b: H(rostral([0, 0.2952, 0.2380])),
+    name: 'muzzle', a: muzzleA, b: H(rostral([0, 0.2952, 0.2380])),
     ra: sr(0.0225), rb: sr(0.0131),
-    squash: [1.0, 0.92, 1.0], k: 0.018, ...furOf(R.muzzle),
+    squash: [1.0, 0.92, 1.0], k: STOP.blend, ...furOf(R.muzzle),
     flowDir: [0, 0.05, -1], flowRadial: 0.34, tint: TINT_FUR,
   });
   /**
@@ -1026,6 +1135,16 @@ export function buildField() {
     squash: [0.87, 0.90, 1.02], k: 0.028, ...furOf(R.cheek),
     flowDir: [0.55, -0.25, -0.55], flowRadial: 0.90, tint: TINT_FUR,
   });
+  // The stop. See STOP for the measurement that says why it is a carve and
+  // not a reshaping of the two primitives that meet here.
+  if (STOP.notch.on) {
+    const n = STOP.notch, p = H(ROSTRUM.pivot);
+    f.add({
+      name: 'nasion', a: [0, n.floor + n.r, p[2] + n.dz], ra: n.r,
+      squash: [n.wide, 1.0, n.deep], k: n.k, op: 'subtract', ...furOf(R.forehead),
+      flowDir: [0, 0.22, -1], flowRadial: 0.20, tint: TINT_FUR,
+    });
+  }
 
   // ------------------------------------------------------------------ ears ---
   // §4b: small, WIDE APART and LOW on the skull, thickly furred. §4c corrects
