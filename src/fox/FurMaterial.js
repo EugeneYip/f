@@ -278,7 +278,28 @@ export const FUR_DEFAULTS = {
   // the luminance of the snow behind it; bible 4b says an arctic fox is
   // "only slightly brighter than its background", never darker.
   ambient: 4.0,
-  ambientSat: 1.0,
+  /*
+   * Saturation of the AMBIENT term only (furShade: amb is mixed toward its own
+   * luma, so this is luminance-preserving and leaves the sun and the rim
+   * alone). 1.0 put the coat's bulk at B-R +34 against bible 3's shaded-fur
+   * swatch #b9c7d8, which is B-R +31; 0.70 lands it on +31 exactly. Measured
+   * with spec.mjs's own sampler, six arms in one page session at one instant:
+   *
+   *     ambientSat   coat B-R   snow B-R   excess (want <= 10)   coat/snow L
+   *       1.00         33.9       24.4          9.5                 0.849
+   *       0.85         32.4       23.5          8.9                 0.845
+   *       0.70         30.8       23.0          7.8                 0.843
+   *       0.55         29.2       22.6          6.6                 0.841
+   *
+   * skyHorizon moves the same number about as far (0.75 -> 30.0) but it is
+   * the sky-vs-bounce MIX, tuned in its own comment against the same swatch,
+   * so the saturation is the honest place to take this.
+   *
+   * The target is the swatch, not the threshold. Bible 4b's "shaded fur goes
+   * blue-grey, never pink" still binds: at 0.70 the coat is 31 levels bluer
+   * than it is red, which is blue-grey.
+   */
+  ambientSat: 0.70,
   // See furShade(): uSkyColor is the ZENITH, which is the darkest and bluest
   // patch of a polar sky, and using it as the whole upward irradiance is the
   // single largest contributor to the blue cast. 0.65 was chosen by measuring
