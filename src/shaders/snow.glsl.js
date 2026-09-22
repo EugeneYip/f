@@ -107,6 +107,37 @@ export const SNOW = {
   // world spacing the glint field locks to once distance stops resolving it.
   SPK_R_M: 0.0048, SPK_R_MIN: 0.55, SPK_R_MAX: 2.6, SPK_CELL_MAX: 0.224,
 
+  // WIND SLAB. Sastrugi are not one material and the renderer used to treat
+  // them as one. The crest is erosional: wind-scoured, sintered, dense, with a
+  // large effective grain. The trough is depositional and collects soft drift.
+  // Broadband visible albedo of fresh dry snow is 0.85-0.90 and of wind slab
+  // 0.75-0.82, so the two differ by about 10% RELATIVE -- and that difference
+  // is in the MATERIAL, so unlike a grazing shadow it survives the sun going
+  // up. §2 says the look has to hold at any sun; measured at `terrain`, sun
+  // -6 deg gives the snow 0.835 of orientation coherence and sun 14,-30 only
+  // 0.627, because at a high sun the only ridge-aligned cue left is shading
+  // that is no longer there. This is the cue that does not need the sun.
+  //
+  // SLAB_K maps oSast onto 0..1: oSast measured over a 12 m square runs
+  // -0.415 .. +0.263 with p05/p95 at -0.195/+0.179, so 0.5 + 2.4*oSast fills
+  // 0.03 .. 0.93 across the ridge. Every term is written mean-preserving
+  // (slab - 0.5) so this adds VARIATION without moving the field's level --
+  // the palette in §3 stays where it was.
+  SLAB_K: 2.4,
+  SLAB_ALB: 0.095,        // full albedo swing, crest slab against trough powder
+  SLAB_PACK: 0.50,        // slab is glossier: feeds the sheen roughness
+  SLAB_DEEP: 0.38,        // denser snow, longer path, more red absorbed: bluer
+  SLAB_SPK: 0.45,         // sintered slab has no loose facets left to glint
+  // The 18 m wind-exposure field carries the same physics one scale up, and
+  // it used to carry it with the SIGN REVERSED: (1 - 0.03*(1 - expo)) made the
+  // EXPOSED, wind-packed snow the brighter of the two, against this file's own
+  // account of compaction ("denser, so it scatters less and reads darker").
+  EXPO_ALB: 0.05,
+
+  // Wind alignment of the two finer detail layers. 1.0 is isotropic;
+  // below 1 the tile is stretched ALONG the wind by 1/value.
+  DET_GRN_ANISO: 0.42, DET_MIC_ANISO: 0.62,
+
   // Normal differencing epsilon (metres). Same on CPU and GPU.
   NRM_EPS: 0.035,
 
@@ -650,10 +681,23 @@ void main(){
 
   vec3 dRip = vec3(0.0, 0.0, 0.5), dGrn = vec3(0.0, 0.0, 0.5), dMic = vec3(0.0, 0.0, 0.5);
   if (wRip > 0.01) dRip = sn_detail(vec2(wuv.x + wuv.y * 0.11, wuv.y * uDetailScale.w) / uDetailScale.z, 1.0);
-  if (wGrn > 0.01) dGrn = sn_detail(wuv / uDetailScale.y + vec2(0.37, 0.61), 1.0);
-  if (wMic > 0.01) dMic = sn_detail(wuv / uDetailScale.x + vec2(0.11, 0.83), 1.0);
+  // The grain and micro layers used to be ISOTROPIC, and nothing on a polar
+  // snow surface is. The wind works the surface at every scale, so both are
+  // stretched along it the way the ripple layer already was. It matters for
+  // more than plausibility: the medium layer tiles at 0.32 m, which at the
+  // terrain framing is ~150 screen px, i.e. squarely inside the band the eye
+  // reads relief in -- so isotropic grain is mottle competing with the
+  // ridges, and stretched grain is streaks agreeing with them. wuv.y is the
+  // ALONG-wind coordinate, so scaling it below 1 lengthens the features.
+  if (wGrn > 0.01) dGrn = sn_detail(vec2(wuv.x, wuv.y * S_DET_GRN_ANISO) / uDetailScale.y + vec2(0.37, 0.61), 1.0);
+  if (wMic > 0.01) dMic = sn_detail(vec2(wuv.x, wuv.y * S_DET_MIC_ANISO) / uDetailScale.x + vec2(0.11, 0.83), 1.0);
 
-  float packed = clamp(vFields.y * 0.85 + comp * 0.6, 0.0, 1.0);
+  // Wind slab on the crest, soft catch in the trough. See S_SLAB_* in
+  // snow.glsl.js. Everything downstream uses (slab - 0.5) so the mean of the
+  // field is untouched and only its VARIATION grows.
+  float slab = saturate(0.5 + vFields.x * S_SLAB_K);
+  float slabD = slab - 0.5;
+  float packed = clamp(vFields.y * 0.85 + comp * 0.6 + S_SLAB_PACK * slabD, 0.0, 1.0);
   float soft = 1.0 - packed;
   vec2 dn = dRip.xy * (wRip * (0.30 + 0.34 * vFields.y))
           + dGrn.xy * (wGrn * (0.34 + 0.34 * soft))
@@ -684,11 +728,15 @@ void main(){
   // than the powder around it. At 10% that was not enough for a print to be
   // legible as a hole rather than as a bright lip; the depression has to have
   // a visibly different SURFACE, not just a different shape.
-  vec3 albedo = uAlbedo * (1.0 - 0.20 * comp) * (1.0 - 0.03 * (1.0 - vFields.y));
+  vec3 albedo = uAlbedo * (1.0 - 0.20 * comp)
+              * (1.0 - S_SLAB_ALB * slabD - S_EXPO_ALB * (vFields.y - 0.55));
   // Ice barely absorbs in the visible, but what it absorbs is red — light that
   // takes a long path through snow comes back cyan. Together with the sky term
-  // below, this is what makes shadowed snow BLUE rather than grey.
-  vec3 deep = uDeepTint * mix(vec3(1.0), uDeepTint, comp);
+  // below, this is what makes shadowed snow BLUE rather than grey. Slab is
+  // denser than the powder beside it and takes the same tint for the same
+  // reason the footprint compaction channel does, one notch weaker.
+  vec3 deep = uDeepTint * mix(vec3(1.0), uDeepTint,
+                              max(comp, S_SLAB_DEEP * saturate(slabD * 2.0)));
 
   vec3 direct = uSunColor * (uSunInt * diff * sun);
 
@@ -757,7 +805,15 @@ void main(){
   float sparkGate = saturate(0.25 + NdotL * 2.5) * shadowMask * horizon
                   * (1.0 - comp * 0.85) * sparkDist;
   if (sparkGate > 0.004) {
-    col += sn_sparkle(N, V, L, p, px, pxIso, crystal * sparkGate * (0.6 + 0.6 * vFields.y));
+    // Glints come from loose, unsintered facets, and a wind slab has none
+    // left — so the sparkle collects in the troughs. That is both what snow
+    // does and, measurably, what stops the sparkle from erasing the ridges:
+    // at the terrain pose the sparkle costs 0.216 of the field's orientation
+    // coherence (0.835 -> 0.619), because an isotropic glitter is exactly the
+    // signal the structure tensor reads as "no preferred direction".
+    col += sn_sparkle(N, V, L, p, px, pxIso,
+                      crystal * sparkGate * (0.6 + 0.6 * vFields.y)
+                      * (1.0 - S_SLAB_SPK * saturate(slabD * 2.0)));
   }
 
   // --- aerial perspective ---------------------------------------------------
