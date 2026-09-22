@@ -171,14 +171,43 @@ export class Whiskers {
     const SIGHT_D = 0.038;            // how far in front of the eye to keep clear
     const probe = new THREE.Vector3();
     const rel = new THREE.Vector3();
-    const eyeGuard = (root, dir, curve, len) => {
+    // Radius of a ball about the CORNEAL APEX that no ventrally-rooted strand
+    // may enter.
+    //
+    // The cone test below was written for `macro_eye`, where the camera looks
+    // straight down the optical axis, and it is view-dependent by
+    // construction: at `frontal` the camera sits 32 degrees off that axis, so
+    // a strand can clear the sight cone entirely and still be drawn straight
+    // across the iris. Verified by A/B on one build -- base has a dark double
+    // line over the lower-nasal amber of the left eye at `frontal` and the
+    // nowhisk arm does not.
+    //
+    // A ball is the view-INDEPENDENT form of the same statement, and it is
+    // also the anatomy: the mystacial pad sits on the side of the muzzle and
+    // the genal row on the cheek, both rostral and ventral to a recessed
+    // aperture, so on a live animal neither row reaches the eye from any
+    // angle. Superciliary strands DO root next to the aperture, and they arc
+    // up and back away from it (droop -0.85), so they keep the cone test
+    // only -- a ball would delete the brow row that §4b asks for.
+    const SIGHT_BALL = eyeR + 0.0060;
+    // Read the corneal apex offset off the eyes system rather than guessing a
+    // fraction of the globe: `apexZ` is R * (1 + CORNEA_BULGE) and it moves
+    // whenever the socket resizes the globe.
+    const apexZ = ctx.eyes?.eyes?.[0]?.apexZ ?? eyeR * 0.85;
+    const apex = eyeBalls.map((p, i) => (eyeAxis[i]
+      ? p.clone().addScaledVector(eyeAxis[i], apexZ) : p.clone()));
+    const eyeGuard = (root, dir, curve, len, kind) => {
       if (!eyeBalls.length) return false;
+      const ball = kind === 'brow' ? 0 : SIGHT_BALL;
       for (let i = 0; i <= 12; i++) {
         const t = i / 12;
         probe.copy(root).addScaledVector(dir, len * t).addScaledVector(curve, t * t);
         for (let e = 0; e < eyeBalls.length; e++) {
           // (a) never enter the globe itself
           if (probe.distanceTo(eyeBalls[e]) < eyeR) return true;
+          // (a2) ...nor the ball in front of the aperture, for the rows that
+          // have no anatomical business there.
+          if (ball > 0 && probe.distanceTo(apex[e]) < ball) return true;
           // (b) never cross the eye's line of sight close in. Clearing the
           // globe in 3D is not sufficient: at `macro_eye` the camera looks
           // straight down the optical axis from 0.13 m, so a strand that
@@ -247,7 +276,7 @@ export class Whiskers {
       // Tested in FIELD space, where root/dir/curve all still live — the push
       // below converts them to bone space, and mixing the two frames here
       // would test a strand that does not exist.
-      if (eyeGuard(root, dir, curveField, len)) return;
+      if (eyeGuard(root, dir, curveField, len, kind)) return;
 
       strands.push({
         root: root.clone().applyMatrix4(inv),

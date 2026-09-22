@@ -857,18 +857,54 @@ void main(){
 // ---------------------------------------------------------------------------
 export const FOOT_DECAY_FRAG = /* glsl */ `
 precision highp float;
-varying vec2 vUv;
 uniform sampler2D uSrc;
-uniform vec2 uShift;      // texel-exact scroll, in UV
+uniform vec2 uShift;      // scroll, in whole TEXELS
+uniform vec2 uRes;        // target resolution, and 1/resolution below
+uniform vec2 uInvRes;
 uniform vec3 uDecay;      // per-channel multiplier for this frame
 void main(){
-  vec2 uv = vUv + uShift;
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+  // ADDRESS THE SOURCE TEXEL BY INDEX, NOT BY AN INTERPOLATED UV.
+  //
+  // This pass is a read-modify-write through a LinearFilter sampler, and the
+  // file header warns that such a pass has to be exact or the CPU closed form
+  // stops describing it. It was not exact. `vUv` came from a varying over a
+  // triangle spanning 0..2, so at 2048 texels a rasteriser error of ~1e-6 in
+  // UV is ~0.002 of a texel — which bilinear turns into a 0.2% bleed from the
+  // neighbour, every frame, at 120 frames a second. That diffuses the field:
+  // a footprint's peak erodes on its own, on top of the intended decay.
+  //
+  // Measured on the deepest stamp in the seeded trail, comparing the GPU
+  // against `heightAt` at the same point and instant: the effective depth
+  // e-folding time came out at 10-13 s against the 21 s the CPU model uses,
+  // and the error grew with sim time (0.8 mm at t=0.2 s, 5.0 mm at 2.5 s,
+  // 12.0 mm at 6.0 s) because it is a per-FRAME loss.
+  //
+  // gl_FragCoord.xy is at pixel centres, so floor() is the integer index and
+  // +0.5 puts us back on the centre. uShift is an integer texel count, and
+  // (i + 0.5 + k) / res is exact in float32 for a power-of-two res, so the
+  // sampler's own (uv*res - 0.5) lands on an integer and the bilinear weights
+  // are exactly 1 and 0. No filtering, no bleed, on every driver.
+  vec2 st = floor(gl_FragCoord.xy) + vec2(0.5) + uShift;
+  if (st.x < 0.0 || st.y < 0.0 || st.x > uRes.x || st.y > uRes.y) {
     gl_FragColor = vec4(0.0);
     return;
   }
-  vec3 s = texture2D(uSrc, uv).xyz * uDecay;
-  gl_FragColor = vec4(max(s - 1e-4, 0.0), 1.0);
+  vec2 uv = st * uInvRes;
+  // NO subtractive epsilon. There used to be a "- 1e-4" here to drive dead
+  // stamps to exactly zero, and it was the single largest CPU/GPU height
+  // disagreement in the build, because it is applied ONCE PER PASS while the
+  // CPU model is a function of TIME. Instrumented at a walk: 304 passes by
+  // t = 2.5 s, so 0.0304 had been subtracted from a depth channel whose full
+  // scale is S_FP_MAXDEPTH = 95 mm - 2.9 mm of pure bookkeeping error, rising
+  // to 17 mm by the 1800th frame and 29.9 mm in a gate.mjs run, and varying
+  // run to run with nothing but how many frames the loading screen happened
+  // to draw. The multiplicative decay is exact under the max-composite
+  // identity in this file's header; a subtraction is not, and cannot be
+  // mirrored in a closed form.
+  //
+  // Nothing accumulates without it: uDecay is < 1 whenever time advances, so
+  // a dead stamp shrinks geometrically and half-float flushes it to zero.
+  gl_FragColor = vec4(max(texture2D(uSrc, uv).xyz * uDecay, 0.0), 1.0);
 }
 `;
 

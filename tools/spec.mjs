@@ -89,7 +89,14 @@ const browser = await chromium.launch({
   args: ['--enable-unsafe-swiftshader', '--use-angle=default', '--disable-gpu-sandbox',
          '--disable-gpu-vsync', '--force-color-profile=srgb'],
 });
-const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+// 1920x1200 rather than 1280x800. The silhouette metric needs its 1.5 mm
+// sampling interval to span at least 2 px, and at 1280 the `profile` framing
+// gives 0.98 px/mm -- so every contour number taken at the old size was
+// measuring the render's resolution rather than the coat. 1920 gives ~1.48
+// px/mm, which is the smallest size that clears the bar. 2560 was tried
+// first and the page could not even reach ready inside 120 s under
+// concurrent agent load, which is not a trade worth making for headroom.
+const page = await browser.newPage({ viewport: { width: 1920, height: 1200 }, deviceScaleFactor: 1 });
 await page.route('**/*', (r) =>
   /^https?:\/\/(?!127\.0\.0\.1)/.test(r.request().url()) ? r.abort() : r.continue());
 
@@ -99,7 +106,7 @@ page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text(
 
 await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/`,
   { waitUntil: 'load', timeout: 120000 });
-await page.waitForFunction(() => window.__FOX_READY === true, null, { timeout: 120000, polling: 100 });
+await page.waitForFunction(() => window.__FOX_READY === true, null, { timeout: 240000, polling: 100 });
 
 // --- everything below runs in the page ------------------------------------
 const results = await page.evaluate(async () => {
@@ -822,10 +829,53 @@ const results = await page.evaluate(async () => {
     return { cov, W, H };
   }
 
-  /** Contour structure per height band, measured on a true coverage matte. */
+  /**
+   * Contour structure per height band, measured on a true coverage matte,
+   * NORMALISED TO MILLIMETRES OF FOX.
+   *
+   * The first version counted oscillations per PIXEL, which made it a
+   * function of how many pixels the subject happened to occupy. The fur agent
+   * measured exactly that, on one build with one coat, changing only the
+   * framing:
+   *
+   *              head    body    legs
+   *   profile @1280  1.000   1.073   1.000
+   *   profile @2560  1.195   1.409   1.775
+   *   frontal @1280  1.384   2.662   3.064
+   *   frontal  @640  1.000   2.618   1.766
+   *
+   * `frontal` is ~2.6x the pixels-per-metre of `profile`, so my conclusion
+   * that "frontal is the animal's best angle" was wrong -- it is simply the
+   * higher-resolution one. And a 1-5 px fringe of REAL coat reads as exactly
+   * 1.000 because 1-5 px cannot oscillate, which is why this reported bare
+   * mesh where a bare-mesh control measures a 0 px ramp against 5-14 px
+   * coated, and 84,305 px of coverage against 153,932.
+   *
+   * Box-filtering the profile to a fixed spatial scale before differencing
+   * fixes it by construction: the result counts oscillations per millimetre of
+   * animal, which is what "does the outline read as hair" actually means.
+   */
   function matteBands(m) {
     if (!m) return null;
     const { cov, W, H } = m;
+    // Pixel scale from the camera, the same way the macro probe gets it.
+    const subj = ctx.fox?.root
+      ? new THREE.Vector3().setFromMatrixPosition(ctx.fox.root.matrixWorld)
+      : new THREE.Vector3();
+    const dist = ctx.camera.getWorldPosition(new THREE.Vector3()).distanceTo(subj);
+    const pxPerMm = dist > 1e-4
+      ? (H / (2 * dist * Math.tan(ctx.camera.fov * Math.PI / 360))) / 1000
+      : 0;
+    // Sample at a fifth of the COAT'S OWN TUFT SCALE.
+    //
+    // My first choice was 0.35 mm, on the reasoning that a guard hair is
+    // 0.05-0.08 mm so anything finer is pointless. That was the wrong scale
+    // to pick: what breaks an outline at a normal framing is not an
+    // individual hair, it is a tuft, and `FUR_DEFAULTS.clumpFreq` puts those
+    // at ~7.4 mm. A fifth of that is 1.5 mm, which is fine enough to register
+    // a single tuft's shoulder and coarse enough to be resolvable.
+    const TUFT_MM = 7.4, SAMPLE_MM = TUFT_MM / 5;
+    const step = Math.max(1, Math.round(SAMPLE_MM * pxPerMm));
     let top = H, bot = 0;
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) if (cov[y * W + x] > 0.5) { if (y < top) top = y; if (y > bot) bot = y; break; }
@@ -845,18 +895,35 @@ const results = await page.evaluate(async () => {
         let xi = x;
         while (xi < W - 1 && cov[y * W + xi] < 0.90) xi++;
         if (xi >= W - 2) continue;
+        // Box-filter to the fixed spatial scale, then difference.
+        const prof = [];
+        for (let k = x; k <= xi; k += step) {
+          let sum = 0, cnt = 0;
+          for (let j = k; j < Math.min(k + step, xi + 1); j++) { sum += cov[y * W + j]; cnt++; }
+          prof.push(sum / Math.max(cnt, 1));
+        }
+        if (prof.length < 3) continue;
         let tv = 0;
-        for (let k = x; k < xi; k++) tv += Math.abs(cov[y * W + k + 1] - cov[y * W + k]);
-        const net = Math.abs(cov[y * W + xi] - cov[y * W + x]);
-        if (net > 0.3) { tvs.push(tv / net); ramps.push(xi - x); }
+        for (let k = 0; k < prof.length - 1; k++) tv += Math.abs(prof[k + 1] - prof[k]);
+        const net = Math.abs(prof[prof.length - 1] - prof[0]);
+        if (net > 0.3) { tvs.push(tv / net); ramps.push(+((xi - x) / Math.max(pxPerMm, 1e-6)).toFixed(2)); }
       }
       tvs.sort((a, b) => a - b); ramps.sort((a, b) => a - b);
-      res[name] = tvs.length >= 8
+      // The sampling interval must span at least 2 px, or the box filter is a
+      // no-op and the metric silently reverts to counting pixels. At 1280x800
+      // `profile` gave 0.98 px/mm -- one pixel per millimetre of fox -- and a
+      // 1-5 px fringe reads as exactly 1.000 because 1-5 px cannot oscillate.
+      // That is how this reported bare mesh on a coat a bare-mesh control
+      // measures at 0 px ramp against 5-14 px coated, and 84,305 px of
+      // coverage against 153,932. Unresolvable is a failure, not a pass.
+      const resolvable = step >= 2;
+      res[name] = tvs.length >= 8 && resolvable
         ? { n: tvs.length,
             tvMedian: +tvs[tvs.length >> 1].toFixed(3),
             tvP10: +tvs[Math.floor(tvs.length * 0.1)].toFixed(3),
-            rampMedian: ramps[ramps.length >> 1] }
-        : null;
+            rampMedianMm: ramps[ramps.length >> 1],
+            pxPerMm: +pxPerMm.toFixed(2), stepPx: step }
+        : { unresolvable: !resolvable, pxPerMm: +pxPerMm.toFixed(2), n: tvs.length };
     }
     return res;
   }
@@ -1331,13 +1398,21 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
     for (const band of ['head', 'body', 'legs']) {
       const v = results.matteProfile?.[band];
       const f = results.matteFrontal?.[band];
-      record(`matte silhouette is hair at profile: ${band}`, v && v.tvP10 >= 1.15,
-        v ? `outline path length over net crossing ${v.tvP10} at the 10th ` +
-            `percentile (median ${v.tvMedian}, ramp ${v.rampMedian}px) over ` +
-            `${v.n} rows. 1.0 is a single monotonic crossing, i.e. bare mesh. ` +
-            `Same band at \`frontal\` reads ${f ? f.tvP10 : 'n/a'}`
-          : 'too few usable rows in this band to measure — that is a failure, ' +
-            'not a pass');
+      record(`matte silhouette is hair at profile: ${band}`,
+        !!(v && v.tvP10 != null && v.tvP10 >= 1.15),
+        v && v.tvP10 != null ? `outline path length over net crossing ${v.tvP10} at the 10th ` +
+            `percentile (median ${v.tvMedian}, ramp ${v.rampMedianMm}mm of fox) ` +
+            `over ${v.n} rows, sampled every 1.5mm — a fifth of the coat's ` +
+            `own 7.4mm tuft scale (${v.stepPx}px at ` +
+            `${v.pxPerMm}px/mm). 1.0 means the fringe does not oscillate at ` +
+            `that scale. Same band at \`frontal\` reads ${f?.tvP10 ?? 'n/a'}`
+          : v?.unresolvable
+            ? `UNRESOLVABLE at ${v.pxPerMm} px/mm — the 1.5 mm sampling ` +
+              `interval lands under 2 px, so the box filter is a no-op and ` +
+              `this reverts to counting pixels. Raise the harness viewport; ` +
+              `do not tune the coat to this number`
+            : 'too few usable rows in this band to measure — that is a ' +
+              'failure, not a pass');
     }
 
     // Floor of 1.15 is derived, not tuned to pass: the fur-off control's own

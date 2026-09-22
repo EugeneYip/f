@@ -89,6 +89,19 @@ export class Footprints {
     ctx.renderer.setRenderTarget(prev);
     ctx.renderer.setClearColor(prevClear, prevAlpha);
 
+    // The targets are now empty, so the CPU model has to be empty too. On a
+    // tier change `onQuality` re-inits at a new resolution and the old trail
+    // is gone from the GPU; leaving the stamps in the CPU list would have
+    // `heightAt` reporting depressions the renderer is not drawing, which is
+    // the same float-or-sink disagreement from the other direction.
+    // Re-compositing them instead is NOT equivalent: the stamp shader writes
+    // the undecayed amplitude and the decay pass ages it from that moment,
+    // so replaying an old stamp would reset its age on the GPU while the CPU
+    // kept the original t0.
+    this.n = 0;
+    this._nPending = 0;
+    this._decayedTo = undefined;
+
     // --- decay + scroll pass -----------------------------------------------
     this._quad = new THREE.BufferGeometry();
     this._quad.setAttribute('position', new THREE.BufferAttribute(
@@ -100,6 +113,8 @@ export class Footprints {
       uniforms: {
         uSrc: { value: null },
         uShift: { value: new THREE.Vector2() },
+        uRes: { value: new THREE.Vector2(this.res, this.res) },
+        uInvRes: { value: new THREE.Vector2(1 / this.res, 1 / this.res) },
         uDecay: { value: new THREE.Vector3(1, 1, 1) },
       },
       depthTest: false, depthWrite: false,
@@ -280,11 +295,50 @@ export class Footprints {
     // translation — a fractional shift would blur the trail away in seconds.
     const tx = Math.round(subject.x / texel) * texel;
     const tz = Math.round(subject.z / texel) * texel;
-    const shiftX = (tx - this.origin.x) / this.size;
-    const shiftZ = (tz - this.origin.y) / this.size;
+    // In whole TEXELS, and rounded, because the decay pass addresses the
+    // source by integer index now. `tx` is already snapped to the texel
+    // lattice, so the round only removes float noise from the division.
+    const shiftX = Math.round((tx - this.origin.x) / texel);
+    const shiftZ = Math.round((tz - this.origin.y) / texel);
     this.origin.set(tx, tz);
 
-    const dt = Math.min(ctx.dt, 0.25);
+    // DECAY IS A FUNCTION OF ABSOLUTE SIM TIME, NOT OF RENDER COUNT.
+    //
+    // This used to be `Math.min(ctx.dt, 0.25)`, applied once per prerender —
+    // i.e. once per RENDERED FRAME. The CPU model in `heightAt` is the closed
+    // form `exp(-(ctx.time - t0)/tau)`. Those two agree only if exactly one
+    // render happens per sim advance of `dt`, and on this project that is
+    // simply not true:
+    //
+    //   * the review harness pauses the sim and then calls `D.render()` 20+
+    //     times per pose for TAA, so every one of those renders decayed the
+    //     field again at the last frame's dt with the clock standing still —
+    //     the fourteenth pose of a run was looking at a trail that had been
+    //     eroded by several hundred extra decay steps;
+    //   * the loading screen's own rAF ticks render before the sim is driven;
+    //   * `min(dt, 0.25)` silently DISCARDS decay after any hitch longer than
+    //     a quarter second, which pushes the error the other way.
+    //
+    // So the disagreement was a race with the frame counter, and the number
+    // it produced was a random variable. Measured at one identical sim state
+    // (t = 2.5 s, walk, the same 34 stamps, the same CPU value of -63.868 mm
+    // at (-0.10, -0.50)) the GPU came back at -55.8 mm on one run and
+    // -50.3 mm on the next; `tools/gate.mjs` has reported 0.8, 3.9, 4.0, 9.8
+    // and 29.9 mm for this check on builds that differ in no relevant way.
+    // It was blamed on a powder commit that does not touch the height field,
+    // and reverting that commit made it WORSE (9.8 mm against 3.9 mm), which
+    // is how a random variable behaves under bisection.
+    //
+    // Decaying by the sim time actually elapsed since the last decay restores
+    // the identity by construction: repeated renders at one `ctx.time` decay
+    // by zero, a sim that advanced three fixed steps between renders decays
+    // by all three, and nothing is clamped away. A backward jump in the clock
+    // (spec.mjs rewinds it) re-bases instead of inverting the decay.
+    if (this._decayedTo === undefined || ctx.time < this._decayedTo) {
+      this._decayedTo = ctx.time;
+    }
+    const dt = ctx.time - this._decayedTo;
+    this._decayedTo = ctx.time;
     const u = this._decayMat.uniforms;
     u.uSrc.value = this.rtA.texture;
     u.uShift.value.set(shiftX, shiftZ);
@@ -337,12 +391,21 @@ export class Footprints {
     this.uniforms.uFoot.value = this.rtA.texture;
 
     // Retire stamps that have faded or left the window.
+    //
+    // Retirement is the one place the CPU model can disagree with the GPU on
+    // purpose: the moment a stamp leaves this list `heightAt` stops counting
+    // it, while the texture still holds its residue and goes on decaying it.
+    // So the threshold IS the residual error, in units of the depth channel:
+    // 0.012 was 1.1 mm of S_FP_MAXDEPTH. Now that the subtractive epsilon is
+    // gone from FOOT_DECAY_FRAG and this is the only remaining term, take it
+    // down to 0.004 — 0.38 mm, comfortably inside the self-check's 2 mm — at
+    // a cost of a few more live slots out of 224.
     const time = ctx.time;
     const half = this.size * 0.5 - 0.5;
     for (let i = this.n - 1; i >= 0; i--) {
       const w = this._d[i] * Math.exp(-(time - this._t0[i]) / SNOW.FP_TAU_DEPTH);
       const out = Math.abs(this._x[i] - tx) > half || Math.abs(this._z[i] - tz) > half;
-      if (w < 0.012 || out) {
+      if (w < 0.004 || out) {
         const last = this.n - 1;
         if (i !== last) {
           this._x[i] = this._x[last]; this._z[i] = this._z[last];

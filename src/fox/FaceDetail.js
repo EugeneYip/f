@@ -364,9 +364,21 @@ export class FaceDetail {
 
     ctx.faceDetail = this;
     const ns = this.noseSize;
-    console.info(`[faceDetail] ${this.parts.length} parts · nose ` +
+    // The measured footprint is printed NEXT TO the drawn size because the
+    // clamp on it is a §4b judgement, not a measurement: the anatomy agent's
+    // nose REGION is wider than the rhinarium it stands for, so 0.8 x fit is
+    // an upper bound. Printing both is the only way to see whether the clamp
+    // is still saturated -- and it is the question that was asked when
+    // `nosePad` went 30.7 -> 21 mm, which a drawn-size-only line cannot
+    // answer.
+    console.info(`[faceDetail] ${this.parts.length} parts · nose drawn ` +
       (ns ? `${(ns.w * 1000).toFixed(1)}x${(ns.h * 1000).toFixed(1)} mm, ` +
-            `${(ns.d * 1000).toFixed(1)} mm proud` : 'MISSING'));
+            `${(ns.d * 1000).toFixed(1)} mm proud · footprint ` +
+            (ns.fitW ? `${(ns.fitW * 1000).toFixed(1)}x${(ns.fitH * 1000).toFixed(1)} mm ` +
+              `-> 0.8x = ${(ns.fitW * 800).toFixed(1)}x${(ns.fitH * 800).toFixed(1)} mm` +
+              `${ns.fitW * 0.8 > 0.01419 || ns.fitW * 0.8 < 0.01001 ? ' (CLAMPED)' : ''}`
+              : 'UNMEASURED')
+        : 'MISSING'));
   }
 
   // ------------------------------------------------------------------ nose --
@@ -454,7 +466,7 @@ export class FaceDetail {
     anchor.add(mesh);
     this.parts.push(mesh);
     this.nose = mesh;
-    this.noseSize = { w, h, d };
+    this.noseSize = { w, h, d, fitW: fit ? fit.w : null, fitH: fit ? fit.h : null };
   }
 
   /**
