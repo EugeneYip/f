@@ -191,6 +191,21 @@ per variant invented a fan of hard stripes around an eyelid that does not
 exist converged, and an agent published a wrong cause before catching it
 itself. Converge before you conclude.
 
+**Commit the first working increment before you keep investigating.** This
+project runs under session usage limits that kill agents mid-sentence with no
+warning. Across seven waves, **four produced nothing at all** — not because
+the agents were wrong, but because they were still verifying an instrument
+when the limit hit, and an uncommitted insight is worth zero to the next
+agent. The waves that produced the session's best work all committed
+something small early and refined it afterwards.
+
+This is in tension with the discipline above, and the resolution is ordering
+rather than compromise: verify the instrument, make the smallest real change
+it justifies, **commit it**, and then go deeper. A commit message is also the
+only channel that reliably survives to your successor — several of this
+session's findings reached the next agent solely because they were written
+into one.
+
 **And the rule that matters most:** if you are handed a diagnosis and the data
 disagrees with it, say so. Agents on this project have disproved a handed-down
 diagnosis at least eleven times and have been right **every single time** —

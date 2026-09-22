@@ -266,3 +266,52 @@ work on their behalf. Three agents' final edits survived that way this session,
 including a shader change that completed a uniform committed an hour earlier.
 Agents that were told to commit as they went lost minutes; the first wave,
 which was not, lost everything.
+
+---
+
+## 9. Wave survival, measured across seven waves
+
+| wave | agents | killed by limit | commits landed |
+|---|---|---|---|
+| 1 | 6 | 6 | 0 |
+| 2 | 5 | 5 | 0 |
+| 3 | 5 | 4 | 6 |
+| 4 | 5 | 5 | 6 (5 salvaged from the tree) |
+| 5 | 5 | 5 | 0 |
+| 6 | 4 | 0 | 12 |
+| 7 | 4 | 4 | 0 |
+
+**Twenty-nine of thirty-two agents were killed mid-flight**, and the
+distribution of what survived is the useful part: the waves that produced
+work are the ones whose agents committed something small early. Waves 1, 2,
+5 and 7 produced *nothing* — in each case every agent was still building or
+verifying an instrument when the limit hit.
+
+That is a direct cost of the instrument-verification discipline §8 identifies
+as the highest-leverage intervention, and both things are true at once. The
+resolution is ordering, not compromise, and it is now rule-shaped in
+`AGENTS.md`: verify the instrument, make the smallest real change it
+justifies, **commit**, then go deeper.
+
+### Salvage is a first-class orchestrator duty
+
+Wave 4 looks productive in the table only because five agents' final edits
+were sitting uncommitted in the shared tree and the orchestrator landed them
+on their behalf. One of those was a complete, correct eye rebuild that would
+not parse because of **a single backtick inside a GLSL comment**, reported by
+node fifty-two lines from the actual character. Recovering it took four
+minutes; rebuilding it would have taken an agent-hour.
+
+So the orchestrator's post-limit routine is: check the tree, syntax-check
+every modified file, render, gate, and commit what is coherent — attributing
+it to the agent that wrote it. Do that before re-fanning, or the next wave
+starts by silently reverting its predecessor's work.
+
+### What the briefs should carry
+
+Agents re-derive context expensively. The briefs that produced the best
+results named, in order: what the predecessor had established (so it is not
+re-measured), what had been **disproved** (so it is not re-tried), which
+specific instrument to use rather than build, and an explicit statement that
+disproving the brief is a success. Roughly half of this session's genuine
+findings came from an agent refusing the diagnosis it was handed.
