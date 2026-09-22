@@ -218,14 +218,17 @@ export async function buildFoxSurface(skeleton, {
       // §4c asks for a soft rounded apex, which 5 mm cannot give. 0.46 keeps
       // ~8.4 mm there and the taper still does its job (the pinna's furred
       // base-to-tip ratio is what §4c's wedge is measured on).
-      len *= 1.0 - 0.46 * t;
+      len *= 1.0 - EAR.tipTaper * t;
       // Rim fringe, applied AFTER the tip taper so the fringe tapers with the
       // pinna and the §4c wedge survives. Softer than the pinna face too: a
       // stiff fringe reads as bristle, and on the reference animal this hair
       // is long, fine and combed along the edge.
       if (earRim > 0) {
-        len *= 1 + 1.55 * earRim;
-        stiff -= 0.22 * earRim;
+        // `fringeTip` tapers the fringe along the pinna — see EAR in
+        // FoxAnatomy for the measurement that says why it is not constant.
+        const g = EAR.fringe * (1 - (1 - EAR.fringeTip) * t);
+        len *= 1 + g * earRim;
+        stiff -= EAR.fringeSoften * earRim;
       }
     }
 

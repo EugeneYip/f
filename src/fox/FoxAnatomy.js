@@ -148,6 +148,39 @@ for (const key of Object.keys(LANDMARKS)) {
 }
 
 /**
+ * ## Where the pinna is AIMED, as opposed to what shape it is
+ *
+ * 14cb891 measured the whole of §4b's outward lean onto the one axis a side
+ * view collapses — 25.5 deg in the frontal projection, 2.8 deg in profile —
+ * and the base sitting 8 mm caudal of the cranial apex, and left it alone
+ * because §4c's visible-height rule had been tuned on the frontal read.
+ * These are the two knobs that move it, in WORLD metres, applied after
+ * `skullXf` so they are not silently scaled by SKULL_SCALE. Both the bone
+ * chain (`FoxSkeleton` reads `LANDMARKS`) and the pinna geometry (`EAR`
+ * reads the same landmarks through `earFrame`) follow from here, so there is
+ * one source of truth for the pose.
+ *
+ * `caudal` slides the whole chain in -z and `lift` in +y. `pitch` adds +z at
+ * the TIP only, so it tilts the blade forward in the (z, y) plane without
+ * moving the root — which is the lean a side view can actually see, and the
+ * one 14cb891 measured at 2.8 deg. Pricked forward also keeps the apex over
+ * the skull's 34 mm coat instead of over the nape's 46-58 mm.
+ */
+export const EAR_POSE = { caudal: 0.0180, pitch: 0.0060, lift: 0.0000 };
+const EAR_CHAIN = ['earR01', 'earR02', 'earR03', 'earR_tip'];
+const EAR_REST = EAR_CHAIN.map((k) => LANDMARKS[k].slice());
+/** Re-derive the ear landmarks from `EAR_POSE`. Idempotent; see EAR.refresh. */
+export function refreshEarPose() {
+  EAR_CHAIN.forEach((k, i) => {
+    const t = i / (EAR_CHAIN.length - 1), r = EAR_REST[i];
+    const p = [r[0], r[1] + EAR_POSE.lift, r[2] - EAR_POSE.caudal + EAR_POSE.pitch * t];
+    LANDMARKS[k] = p;
+    LANDMARKS[k.replace('R', 'L')] = [-p[0], p[1], p[2]];
+  });
+}
+refreshEarPose();
+
+/**
  * Eyeball placement (RIGHT eye; mirrored for the left).
  *
  * `centre` is the eyeball centre and `look` the optical axis. Both are
@@ -606,12 +639,55 @@ export const EAR = {
   thickPower: 1.3,
   wide: 1.02,
   rim: 0.0112,        // blade left outside the concha on each side
+
+  /**
+   * ## The coat on the pinna, which `FoxSurface` applies and which is most
+   * of why the ear does not read at `profile`.
+   *
+   * `tipTaper` shortens the coat toward the apex (`len *= 1 - tipTaper * t`)
+   * and `fringe` then multiplies the RIM band — the edge-on strip that draws
+   * the ear's outline — by `1 + fringe`. Constant, that put 33 mm of coat on
+   * the pinna's own silhouette at mid-blade and 23 mm at the apex, against
+   * 16.7 mm on its face: the outline is the deepest-coated line on the ear.
+   *
+   * Measured with that term in the canopy model (it was NOT in 14cb891's,
+   * which is why that note has the pinna at "18 mm"), the ear's rostral
+   * notch on the canopy is 4.0 mm and moving the pose only takes it to 6.2.
+   * The fringe is the filler, not the pose and not the ruff.
+   *
+   * `fringeTip` is the share of `fringe` left at the apex, so the band can
+   * stay heavy where a real fox's ear fringe is heavy — sweeping up the
+   * leading edge out of the ruff — and thin out where it is blunting a
+   * 12.8 mm blade into a 36 mm arc. It must not go to 0: the fringe is what
+   * stops the rim rendering as the hardest line on the animal (the user's
+   * 2x crop of a stair-stepped blue-grey cutout), and that is a §4f.3
+   * failure worth more than a sharp tip.
+   */
+  tipTaper: 0.46,
+  fringe: 1.55,
+  fringeTip: 0.45,
+  fringeSoften: 0.22,
   // Concha: a cone, not a sphere, sized FROM the blade profile so it can never
   // outgrow it however the pinna is retuned.
   bowlU0: 0.12, bowlU1: 0.80, bowlWide: 0.85, bowlThick: 0.50, bowlK: 0.0080,
   bowlFloor0: 0.0022, bowlFloor1: 0.0108,
 
   ...earFrame(),
+
+  /**
+   * Re-derive the pinna frame and the coat-taper span from `EAR_POSE`.
+   * `buildField` calls this first, exactly as it does `CRANIUM.refresh`, so
+   * a probe that mutates `EAR_POSE` between builds sees the new pose and
+   * `FoxSurface` — which reads `EAR.project` and `EAR_SPAN` at mesh time,
+   * after the field is built — sees it too.
+   */
+  refresh() {
+    refreshEarPose();
+    Object.assign(this, earFrame());
+    EAR_SPAN.baseY = LANDMARKS.earR01[1];
+    EAR_SPAN.tipY = LANDMARKS.earR_tip[1];
+    return this;
+  },
 
   /** Blade half-radius at u (0 = root, 1 = the `earR_tip` landmark). */
   rAt(u) { return this.rBase * (1 - (1 - this.tipRatio) * Math.pow(u, this.power)); },
@@ -961,6 +1037,7 @@ function resampleChain(pts, sub, nInterp) {
  */
 export function buildField() {
   CRANIUM.refresh();
+  EAR.refresh();
   const f = new Field();
   const L = LANDMARKS;
 
