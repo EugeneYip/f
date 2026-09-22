@@ -74,13 +74,17 @@ export const CARD_SHAPE = {
 
   /*
    * Mean of the per-lock draw on that peak. The card vertex shader draws
-   * pow(hash, 1.5), whose mean is 1/(1 + 1.5) = 0.40; a lock's share of the
-   * peak is then uCardFloorLow + (1 - uCardFloorLow) * that. reachReport()
-   * reads this constant rather than repeating the exponent, so the guard's
-   * idea of the typical stand-off and the shader's cannot drift. If the
-   * exponent in the shader changes, change this with it.
+   * sqrt(hash), whose mean is 2/3; a lock's share of the peak is then
+   * uCardFloorLow + (1 - uCardFloorLow) * that. reachReport() reads this
+   * constant rather than repeating the exponent, so the guard's idea of the
+   * typical stand-off and the shader's cannot drift. If the exponent in the
+   * shader changes, change this with it.
+   *
+   * The pairing that matters: peak x (low + (1 - low) * this) must come out
+   * at the mean stand-off the coat had before the draw existed, or the
+   * silhouette pays for the variation. 0.012 x (0.50 + 0.50 x 0.6667) = 10 mm.
    */
-  floorDrawMean: 0.40,
+  floorDrawMean: 0.6667,
 
   /**
    * Clumping — bible §5, "fur must clump, not distribute evenly".
@@ -1168,19 +1172,21 @@ void main(){
   // too and leaves a dense fuzz. The needles are card tips, and their
   // uniformity is this term's.
   //
-  // So each LOCK draws its own share of the peak, skewed (pow 1.5) so that
-  // long guard locks are a minority and most of the coat sits shorter. On the
-  // 47 mm flank the shortest locks now come out at stand exactly 0 -- they do
-  // not clear the shells at all, which is what an undercoat is -- while the
-  // longest clear them by 7.3 mm, against 5.3 mm for every hair before.
+  // Each LOCK can draw its own share of that peak, and at uCardFloorLow 1.0 --
+  // the shipping value -- it draws all of it, so this is the constant floor.
+  // THE DRAW IS OFF ON MEASURED EVIDENCE, NOT BY OVERSIGHT: three settings of
+  // it, including one whose mean stand-off was identical to the constant's,
+  // each cost silhouette checks in tools/spec.mjs, and two of the three did it
+  // by tripping spec's blindness control and DELETING checks rather than
+  // failing them. The numbers are in FUR_DEFAULTS next to cardFloorLow. Read
+  // them before turning this on.
   //
   // Per LOCK, not per card: lrnd is aClump.w, shared by every card on a Worley
   // site, so a lock is long or short as a unit. Drawing this per card would
   // make neighbouring hairs disagree, which is the anti-clump that
   // CARD_SHAPE.clumpCell exists to undo.
   float coat  = furCoatLength(position, ra.y);
-  float fw    = hash11(lrnd * 61.7 + 4.3);
-  fw = fw * sqrt(fw);                       // pow(fw, 1.5) -- mean 0.40
+  float fw    = sqrt(hash11(lrnd * 61.7 + 4.3));   // mean 2/3, weighted long
   float stand = max(0.0, uCardFloor * (uCardFloorLow + (1.0 - uCardFloorLow) * fw)
                          * furSkinMask2(position).x
                          - coat * ${(CARD_SHAPE.reachBand[0] - 1).toFixed(3)});

@@ -219,9 +219,18 @@ export const REGION_TABLE = [
    * is a whip. 18 mm at the root is still deeper than the hock's 16.8 mm, so
    * it does not expose skin (bible 4f rule 3) -- verified on the matte.
    */
-  /* 24 tailBase      */ { a: [1.04, 0.40, 0.45, 0.34], b: [0.85, 0.95, 1.00, 1.70] },
-  /* 25 tailMid       */ { a: [1.06, 0.73, 0.30, 0.42], b: [0.78, 0.92, 1.00, 2.10] },
-  /* 26 tailTip       */ { a: [1.04, 1.00, 0.34, 0.36], b: [0.82, 0.95, 1.00, 1.85] },
+  /*
+   * freqScale (b[1]) follows the tail's new size, per this table's own rule:
+   * it exists so "the hairs stay in proportion to the body part". The brush
+   * went from 182 mm across to 120 mm and its hair field did not, so the
+   * strands were suddenly coarse relative to it -- spec's tail-detail probe
+   * read 1.17 levels before the resize and 1.06 after. 1.30 is the ratio the
+   * render supports: 1.70 resolves into noise rather than hair. clumpScale
+   * (b[0]) stays BELOW 1 on purpose; big locks are what a brush is.
+   */
+  /* 24 tailBase      */ { a: [1.04, 0.40, 0.45, 0.34], b: [0.85, 1.30, 1.00, 1.70] },
+  /* 25 tailMid       */ { a: [1.06, 0.73, 0.30, 0.42], b: [0.78, 1.30, 1.00, 2.10] },
+  /* 26 tailTip       */ { a: [1.04, 1.00, 0.34, 0.36], b: [0.82, 1.30, 1.00, 1.85] },
 ];
 
 /** Authoring defaults. Every one of these is live-tweakable via ctx.fur.set(). */
@@ -364,13 +373,38 @@ export const FUR_DEFAULTS = {
    * cuts both ways, and that is a different animal. 10 mm clears all three
    * with margin for 6% more area.
    */
-  // The PEAK absolute guard-hair stand-off, metres, and what the shortest lock
-  // gets as a fraction of it. See the card vertex shader: this used to be a
-  // constant 10 mm handed to every lock, which is what made the coat a halo of
-  // equal-length needles. 12 mm is CARD_SHAPE.standFloorMax exactly -- the cap
-  // is a ceiling on the longest hair and is now used as one.
-  cardFloor: 0.012,
-  cardFloorLow: 0.45,
+  /*
+   * Absolute guard-hair stand-off past the coat, metres, and the share of it
+   * the SHORTEST lock gets. cardFloorLow 1.0 means every lock gets all of it,
+   * i.e. the draw is OFF and this is the constant floor f1fb47a shipped.
+   *
+   * MEASURED NEGATIVE, recorded so it is not re-run. Making the stand-off
+   * vary per lock is the obvious fix for "no variation in length" and it
+   * looks right in a crop, and it costs the silhouette more than it buys.
+   * Three configurations against the constant, all on tools/spec.mjs:
+   *
+   *   peak 12 mm, low 0.45, pow-1.5 draw (mean 8.0 mm)
+   *       matte at profile  body 1.262 -> 1.100  legs 1.162 -> 1.045   FAIL
+   *       frontal leg band  1.208 -> 1.047                             FAIL
+   *   peak 12 mm, low 0.60, pow-1.5 draw (mean 9.1 mm)
+   *       spec's own blindness control tripped -- coated 1.462 against a
+   *       bare-mesh 1.224, needs 1.25x -- and SKIPPED five checks, so the
+   *       run returned 29 checks instead of 34 and read as an improvement.
+   *   peak 12 mm, low 0.50, sqrt draw: mean EXACTLY the 10 mm it replaces
+   *       control tripped again, 1.390 against 1.226. 28 checks.
+   *
+   * So it is not the mean. A per-lock draw lowers the 10th-percentile row by
+   * construction -- p10 finds the rows whose locks came up short -- and every
+   * silhouette check here is a p10. The knob is left in place with the draw
+   * off because the next agent will otherwise reach for it too; if it is to
+   * be revived, the variation has to be UPWARD of the current constant, and
+   * CARD_SHAPE.standFloorMax leaves only 20% of headroom for that.
+   *
+   * COUNT THE CHECKS in any spec run that touches this. Two of the three
+   * arms above deleted checks rather than failing them.
+   */
+  cardFloor: 0.010,
+  cardFloorLow: 1.00,
   cardInner: 0.17,
   /*
    * vEdge exponent at a card TIP. THE ONE KNOB for how much card stands over
