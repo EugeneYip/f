@@ -342,14 +342,13 @@ export class Footprints {
 
     // Retire stamps that have faded or left the window.
     //
-    // Retirement is the one place the CPU model can disagree with the GPU on
+    // Retirement is the ONLY place the CPU model and the GPU disagree on
     // purpose: the moment a stamp leaves this list `heightAt` stops counting
-    // it, while the texture still holds its residue and goes on decaying it.
-    // So the threshold IS the residual error, in units of the depth channel:
-    // 0.012 was 1.1 mm of S_FP_MAXDEPTH. Now that the subtractive epsilon is
-    // gone from FOOT_DECAY_FRAG and this is the only remaining term, take it
-    // down to 0.004 — 0.38 mm, comfortably inside the self-check's 2 mm — at
-    // a cost of a few more live slots out of 224.
+    // it, and prerender stops drawing it, but they stop at slightly different
+    // points within a frame. So the threshold is the residual error, in units
+    // of the depth channel: 0.012 was 1.1 mm of S_FP_MAXDEPTH. Now that the
+    // decay accumulation is gone and this is the last term left, take it down
+    // to 0.004 — 0.38 mm — at a cost of a few more live slots out of 224.
     const time = ctx.time;
     const half = this.size * 0.5 - 0.5;
     for (let i = this.n - 1; i >= 0; i--) {
