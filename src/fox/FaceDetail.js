@@ -705,12 +705,26 @@ export class FaceDetail {
         // section exactly where it is photographed, which is most of why
         // deepening the section did nothing the first time. Full section from
         // the midline back, closing only over the last third.
+        //
+        // AND IT DID NOT TAPER TO NOTHING. `0.30 + 0.70 * fade` floors the
+        // section at 30 % of its height, and `fade` is already 1.0 from the
+        // midline back to t = 0.58 — so the floor did no work at the midline
+        // it was written to protect and all of its work at the commissure,
+        // where the ribbon has to close. The band therefore ran to t = 1 at
+        // 31 % height and STOPPED, square. That is critic blocker 14's
+        // "abrupt ends", still plainly there at `chin` (900,1000)-(1600,1250)
+        // after the nine-row rebuild: the section was rebuilt and the
+        // termination was not.
+        //
+        // The constant 0.2 mm lift did not fade either, so even a zero-width
+        // last ring stood proud of the skin as a hard 0.2 mm ridge. Only the
+        // z-fight guard stays constant now.
         const ct = clamp((t - 1.02) / (0.58 - 1.02), 0, 1);
         const fade = (ct * ct * (3 - 2 * ct)) ** 0.8;
-        const hh = LIP_HALF * (0.30 + 0.70 * fade);
+        const hh = LIP_HALF * Math.max(fade, 0.02);
         for (const [v, z] of SECTION) {
           const off = z < 0 ? z * LIP_DEPTH * fade
-                            : 0.0002 + z * LIP_BULGE * fade;
+                            : 0.00006 + (0.00014 + z * LIP_BULGE) * fade;
           tmp.copy(p).addScaledVector(bin, v * hh).addScaledVector(nv, off).applyMatrix4(inv);
           pos.push(tmp.x, tmp.y, tmp.z);
           vv.push(v);
