@@ -110,7 +110,12 @@ export class SnowParticles {
    * @param time ctx.time at the moment of contact
    */
   puff(x, y, z, strength, time, heading = 0) {
-    if (!this._puff || !(strength > 0.02)) return;
+    // `strength` is the burst's peak alpha to within 0.81 (see vA below), so
+    // this floor is a visibility test, not a sanity test: anything under it
+    // costs a slot and draws nothing. It used to sit at 0.02, which was
+    // ABOVE what Terrain actually passed at a walk — the floor was rejecting
+    // the whole gait rather than the noise.
+    if (!this._puff || !(strength > 0.012)) return;
     const s = this._puff;
     // Re-arm a slot that is already spent, or the oldest one.
     let slot = -1, oldest = 0, oldestT = Infinity;
@@ -128,7 +133,7 @@ export class SnowParticles {
   }
 
   _buildPuffs(ctx) {
-    const SLOTS = 14, GRAINS = 26;
+    const SLOTS = 14, GRAINS = 44;   // 616 instances, one draw
     const geo = new THREE.InstancedBufferGeometry();
     const quad = new THREE.PlaneGeometry(1, 1);
     geo.index = quad.index;

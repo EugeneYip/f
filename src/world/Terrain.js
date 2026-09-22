@@ -285,6 +285,30 @@ export class Terrain {
    * fog round a standing animal rather than a kick. `Footprints.press`
    * returns the slot it used and bumps `pressCount` only on a fresh one, so
    * that counter is the edge detector.
+   *
+   * THE AMPLITUDE IS NOT THE STAMP'S DEPTH, and that was the bug. Measured at
+   * a walk: 5, 6, 4, 0, 0, 0, 0 live bursts at t = 0.5 .. 4.0 s. Powder simply
+   * stopped. The two callers of press() interact with the edge detector in a
+   * way that guarantees it:
+   *
+   *   * `Locomotion._pressSnow` ramps a foot's depth through stance
+   *     (`want = maxDepth * (0.34 + 0.66*load)`) and only re-presses when it
+   *     has grown by 0.022. The FIRST press of a footfall makes the new stamp
+   *     — at `load = 0`, i.e. the SHALLOWEST depth of the whole contact — and
+   *     every deeper press after it merges into that slot and is suppressed
+   *     here as a repeat.
+   *   * `Fox._pressFootprints` presses a flat 0.10 on a timer, and those merge
+   *     too.
+   *
+   * So the old `strength = depth * ...` was evaluated at the one moment in the
+   * contact when depth is smallest: 0.05 x 0.34 x 0.88 = 0.015 at a walk,
+   * under `puff()`'s own 0.02 floor, so most footfalls threw nothing and the
+   * rest threw a burst whose peak alpha was 0.024. Invisible either way.
+   *
+   * What actually decides how much snow leaves the ground is the SPEED of the
+   * contact and the area of the paw. Depth stays in as a weak gate only — it
+   * separates a paw set down on crust from one punching in — with a floor, so
+   * the shallow leading edge of a footfall still throws its share.
    */
   _powder(x, z, radius, depth, slot) {
     if (slot < 0) return;
@@ -293,8 +317,9 @@ export class Terrain {
     this._lastPress = n;
     const sp = this.ctx.subjectSpeed ?? this._speed ?? 0;
     // Slow contacts barely lift anything; a running paw throws a lot.
-    const strength = Math.min(1, depth * (0.22 + 0.55 * Math.min(sp / 3.2, 1.6))
-      * (radius / 0.05));
+    const gait = 0.30 + 0.70 * Math.min(sp / 2.6, 1);
+    const bite = 0.55 + 0.45 * Math.min(depth / 0.12, 1.4);
+    const strength = Math.min(1, gait * bite * (radius / 0.047));
     this.ctx.snowParticles?.puff(x, this.heightAt(x, z) + 0.01, z,
       strength, this.ctx.time, this._heading);
   }
