@@ -10,6 +10,22 @@
 // onto the coarser lattice so the T-junctions cannot crack, and the rim drops
 // into a skirt so no gap can show against the sky.
 //
+// THE HARD HORIZONTAL EDGE ON THE RIGHT OF `profile` IS A DRIFT CREST, NOT A
+// SEAM. It runs y 751 at x 1750 down to y 728 at x 2075 (2100x1350), peak
+// |dL/dy| 4.7 levels/row at y 734. Tested by TRANSLATING THE CLIPMAP under a
+// stationary field: the height field is a function of world xz, so moving
+// `mesh.position.x` moves every ring boundary through the world and leaves the
+// surface where it was. Shifted +1 m and +2 m, the edge stayed at y 734/732
+// and y 728/727 -- a seam would have moved with the lattice. It also survives
+// postfx.ao.intensity = 0 (2.18 against 2.21). Ray-marching `heightAt` through
+// those pixels puts the ground 9.52 m out just above the line and 7.23 m just
+// below it, which is the occlusion step of a crest hiding the ground behind.
+// One real caveat: the edge is 2x softer with the lattice shifted (4.66 ->
+// 2.45), so the crest is being SHARPENED by the current band-limiting phase.
+// Several ring boundaries do project into that screen band (level 3's edge at
+// x = -3.76 lands at y 739), which is why it looks like a seam; they are not
+// what draws the line.
+//
 // Displacement is evaluated in the vertex shader from `sn_field()` and in JS
 // from `_fieldRaw()` below. THOSE TWO MUST STAY IN LOCKSTEP — the foot IK calls
 // `heightAt()` several times a frame and any disagreement makes the fox float
