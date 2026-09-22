@@ -989,6 +989,44 @@ const TRUNK = TRUNK_PROFILE.map(([z, top, bot, sx, reg]) =>
 // mesher's ~1.5-cell watertightness floor, never mind its ability to round
 // anything. 9.5 mm is 1.6 cells and still tapers, and it is invisible in the
 // silhouette because the tail tip carries 42 mm of coat over it.
+//
+// ## Does the SKIN constrict where the tail leaves the croup? Measured.
+//
+// Asked because the coat cannot reveal a root that is not there. Lateral
+// half-width, marched along +x from the tail's own centre line (the ONLY
+// honest axis here: a vertical ray at z = -272 is 49 deg off the chain, so
+// it reads 37 mm where the true radius is 29.5, and that is not a taller
+// cross-section, it is a longer chord):
+//
+//     z (mm)   -176  -182  -188  -194  -200  -206  -224  -242  -260  -296
+//     skin      59.0  53.5  44.5  29.5  27.5  27.5  29.5  30.0  30.0  28.5
+//     canopy   101.0  95.7  87.6  75.5  44.7  45.0  47.4  48.5  65.0  65.2
+//
+// Two separate answers, and they point at different owners:
+//
+//  1. THE CROUP STEP IS REAL AND SHARP. The skin loses 53 % of its width in
+//     the 24 mm from z = -176 to -200. The SDF does not run the croup
+//     smoothly into the tail, and the coat does reveal it: the canopy drops
+//     87.6 -> 44.7 mm across one 6 mm station.
+//  2. THE TAIL ITSELF HAS NO WAIST. Behind that step the skin is a plain
+//     cylinder — 27.5 mm at the root against a 30.0 mm maximum at z = -242,
+//     i.e. 9 % of swell over the whole brush. `TAIL_R` authors 26.6 / 27.8 /
+//     27.4 and then only ever tapers, so there is no root-to-brush
+//     narrowing for a coat to sit in.
+//
+// Which means the tail-base notch is 32.5 of its 35.0 mm the COAT's: root
+// coat 17.2 mm against 35.0 at mid-tail. And its POSITION is not geometry
+// at all — the canopy steps 48.9 -> 65.0 mm in the single station between
+// z = -254 and -260, which is where `tailBase` becomes `tailMid` and where
+// `uRegionA.y` goes 0.40 -> 0.73 (FurMaterial, 7df3911). So the notch sits
+// 55 mm down the tail because a region boundary is there, not because the
+// animal narrows there.
+//
+// If the notch is wanted at the anatomical root instead, the lever is where
+// `tailBase` ends. If the skin should help, this array needs an actual
+// waist; it does not have one today. Left alone deliberately — the fur agent
+// is mid-run on the tail's coat and a simultaneous skin change would make
+// their A/B unreadable.
 const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0224, 0.0196, 0.0162, 0.0126, 0.0095];
 
 
