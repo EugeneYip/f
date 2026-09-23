@@ -111,7 +111,17 @@ function defaults() {
       brightRelief: 0.35, reliefLo: 3.0, reliefHi: 14.0,
       fadeStart: 6, fadeEnd: 22,
       maxScreenRadius: 44, minScreenRadius: 2.5,
-      denoiseRadius: 2.2, denoiseDepthSigma: 0.035,
+      /* 2.2 half-res px could not remove its own noise. The GTAO kernel's
+         step pattern is screen-locked with a pitch of pxRadius/AO_STEPS,
+         which lands around 10 half-res px, so a 2.2 px bilateral filter runs
+         entirely INSIDE one period of the thing it exists to smooth -- which
+         is how a 5x local-contrast spike over two scanlines survived into
+         profile.png as a picket fence. Swept against that band, high-passed
+         rms: 2.2 -> 3.185, 4 -> 2.122, 7 -> 2.200, 10 -> 2.187, 14 -> 2.743
+         (the Poisson ring starts to alias), against 1.401 with AO off
+         entirely. The depth-relative bilateral weight is what keeps a radius
+         this size from leaking occlusion across the fox/snow boundary. */
+      denoiseRadius: 5.0, denoiseDepthSigma: 0.035,
     },
     dof: {
       // f/4 rather than f/2.8: the review poses focus at 0.13-1.6 m, where a
@@ -149,7 +159,13 @@ function defaults() {
       threshold: 0.45, maskFalloff: 1.5, sunDisc: 0.25, shaftDensity: 0.045,
       blurGain: 4.0,
     },
-    taa: { clampGamma: 1.25, clampLoosen: 1.5, antiGhost: 1.0, feedbackFrames: 12 },
+    taa: {
+      clampGamma: 1.25, clampLoosen: 1.5, antiGhost: 1.0, feedbackFrames: 12,
+      // Reproject through the unjittered projection. `false` restores the
+      // pre-fix behaviour and exists so the defect stays A/B-able in one page
+      // session; it is not a look knob and there is no reason to ship it off.
+      dejitterReproject: true,
+    },
     debug: 'off',   // off | ao | bloom | rays | coc | hdr | depth
   };
 }
@@ -175,6 +191,7 @@ export class PostFX {
     // Scratch — renderFrame runs 60x a second and must not allocate.
     this._viewProjJ = new THREE.Matrix4();
     this._invViewProjJ = new THREE.Matrix4();
+    this._invViewProjU = new THREE.Matrix4();
     this._invProjJ = new THREE.Matrix4();
     this._prevViewProj = new THREE.Matrix4();
     // Set only by _profile(), to cost each stage by difference.
@@ -522,6 +539,26 @@ export class PostFX {
     const invViewProjJ = this._invViewProjJ.copy(viewProjJ).invert();
     const invProjJ = this._invProjJ.copy(cam.projectionMatrixInverse);
 
+    /* The matrix TAA reprojects through must be the UNJITTERED one.
+     *
+     * `storePrevViewProj` deliberately stores the previous frame's projection
+     * without its jitter, so unprojecting the current pixel through the
+     * JITTERED inverse and projecting that back leaves the jitter in the
+     * result: prevUv - vUv comes out as exactly this frame's Halton offset,
+     * up to 0.47 px, over the whole screen and independent of depth. Measured,
+     * not deduced. The resolve then resamples its own history bilinearly by
+     * that offset EVERY frame, so each accumulated sample ends up at a
+     * different cumulative displacement and a thin bright hair is integrated
+     * as a comb of axis-aligned echoes of itself. That is REVIEW-4 blocker 6.
+     *
+     * It also falsifies the convergence contract at the top of TAA.js: with a
+     * frozen camera the history fetch is supposed to be the identity, and it
+     * never was. Jitter is not motion; it must not appear in a motion vector.
+     */
+    const invViewProjU = cfg.taa.dejitterReproject === false
+      ? invViewProjJ
+      : this._invViewProjU.multiplyMatrices(projU, cam.matrixWorldInverse).invert();
+
     if (taaOn) {
       cam.projectionMatrix.copy(projU);
       cam.projectionMatrixInverse.copy(projU).invert();
@@ -573,7 +610,7 @@ export class PostFX {
     if (taaOn && !skip.taa) {
       colour = this.taa.render({
         current: this.rtComposite.texture, depth: depthTex,
-        invViewProjJ, near, far, static_: isStatic, cfg: cfg.taa,
+        invViewProj: invViewProjU, near, far, static_: isStatic, cfg: cfg.taa,
       });
       if (cfg.sharpen * this.sharpenScale > 0.001) {
         // rtComposite has been consumed; reuse it instead of a 4th full-res

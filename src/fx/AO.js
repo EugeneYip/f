@@ -59,19 +59,52 @@ void main() {
   n = nl > 1e-12 ? n / nl : V;
   if (n.z < 0.0) n = -n;
 
-  float pxRadius = clamp(uRadius * uProjScale / max(viewDist, 1e-3), uMinPx, uMaxPx);
-  float stepPx = pxRadius / float(AO_STEPS);
+  // THE PICKET FENCE IN THE NEAR SNOW WAS THIS LINE.
+  //
+  // It used to be one screen radius for every slice:
+  //   pxRadius = clamp(uRadius * uProjScale / viewDist, uMinPx, uMaxPx)
+  // with the range falloff still keyed to the FULL uRadius. On a surface seen
+  // at a grazing angle those two disagree badly. At the profile pose the
+  // camera is 0.205 m above the snow and the band is 1.27 m away, so the
+  // world size of one pixel is 2.46 mm along view and 0.412 mm across: the
+  // same 0.085 m radius is 35 px one way and 206 px the other. Every slice
+  // got the clamped 44, so the vertical slices reached 0.108 m -- past the
+  // falloff -- and their outer samples switched on and off with the STEP
+  // pattern, which is screen-locked. Pitch measured 21 px at dsf 1.5 and
+  // 23 px at dsf 1.0, i.e. constant in device pixels: stepPx = 44/AO_STEPS.
+  // That is the ladder the terrain agent already proved with a positive
+  // control was coming from this pass and not from the snow.
+  //
+  // So measure the surface instead of assuming it. dx and dy are the same
+  // per-texel view-space deltas the normal came from, so they carry the real
+  // anisotropy for free. Per slice, convert uRadius into pixels ALONG THAT
+  // SLICE, and when the screen cap bites, shrink the falloff radius to match
+  // what the kernel can actually reach. The falloff then always lands on the
+  // last step and the step pattern has nothing to quantise.
+  //
+  // Floors and ceilings on the stretch matter: at a silhouette dx spans the
+  // whole depth gap, which would collapse the kernel to nothing exactly where
+  // contact occlusion is wanted. A surface can only ever stretch a pixel past
+  // its head-on size, never shrink it, so that is the floor; 24x is the cap.
+  float wMin = viewDist / max(uProjScale, 1e-4);
+  float wx = clamp(length(dx), wMin, wMin * 24.0);
+  float wy = clamp(length(dy), wMin, wMin * 24.0);
 
   float noise  = fxIGN(gl_FragCoord.xy + uNoiseOffset * 7.0);
   float noise2 = fxIGN(gl_FragCoord.yx * 1.371 + uNoiseOffset * 3.17 + 11.0);
 
-  float invR = 1.0 / max(uRadius, 1e-4);
   float visibility = 0.0;
 
   for (int s = 0; s < AO_SLICES; s++) {
     float phi = (float(s) + noise) * (FX_PI / float(AO_SLICES));
     vec2 dir = vec2(cos(phi), sin(phi));
     vec3 sliceDir = vec3(dir, 0.0);
+
+    // World metres per pixel along THIS slice, and the radius that buys.
+    float wPerPx = max(abs(dir.x) * wx + abs(dir.y) * wy, 1e-6);
+    float pxRadius = clamp(uRadius / wPerPx, uMinPx, uMaxPx);
+    float stepPx = pxRadius / float(AO_STEPS);
+    float invR = 1.0 / max(pxRadius * wPerPx, 1e-4);
 
     vec3 orthoDir = sliceDir - dot(sliceDir, V) * V;
     vec3 axis = cross(sliceDir, V);

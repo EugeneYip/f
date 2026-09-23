@@ -19,6 +19,14 @@
 // reproject through depth with the previous unjittered view-projection, which
 // is exact for everything static (all of the terrain, sky and snow), and let
 // variance clipping handle the animal.
+//
+// BOTH ENDS OF THAT REPROJECTION MUST BE UNJITTERED. For four rounds the
+// current end was the jittered inverse, which put this frame's sub-pixel
+// offset into the motion vector: prevUv - vUv measured exactly the Halton
+// jitter, up to 0.47 px, at every depth and every pixel, so a frozen camera
+// resampled its own history bilinearly on every accumulated frame instead of
+// fetching it back unchanged. The contract above was simply false, and the
+// coat's contour paid for it -- see the comment at the reprojection itself.
 import * as THREE from 'three';
 import { FxPass, makeRT, disposeRT } from './Pass.js';
 import { FX_CATMULL_ROM } from './glsl/common.js';
@@ -36,7 +44,7 @@ uniform sampler2D tHist;
 uniform sampler2D tDepth;
 uniform vec2  uTexel;
 uniform vec2  uRes;
-uniform mat4  uInvViewProjJ;   // current frame, WITH jitter
+uniform mat4  uInvViewProj;    // current frame, WITHOUT jitter
 uniform mat4  uPrevViewProj;   // previous frame, WITHOUT jitter
 uniform float uNear;
 uniform float uFar;
@@ -97,7 +105,16 @@ void main() {
   vec3 hi = min(cmax + pad, m1 + uClampGamma * (1.0 + uLoosen * detail) * sigma);
 
   // --- reprojection --------------------------------------------------------
-  vec3 wp = fxWorldPos(vUv, d, uInvViewProjJ);
+  // BOTH matrices are jitter-free, so this is a pure motion vector. Feeding
+  // the JITTERED inverse in here (which is what this pass used to do) makes
+  // prevUv - vUv equal the current Halton offset everywhere on screen --
+  // measured at up to 0.47 px, identical at every depth -- so the history was
+  // resampled bilinearly by the jitter on every single frame. Each accumulated
+  // sample then sat at a different cumulative displacement and a thin bright
+  // hair integrated into an axis-aligned comb of echoes of itself: REVIEW-4
+  // blocker 6, the "pixel lattice" on the coat's contour. Jitter is not
+  // motion. See PostFX._chain for the matrix that is handed in.
+  vec3 wp = fxWorldPos(vUv, d, uInvViewProj);
   vec4 pp = uPrevViewProj * vec4(wp, 1.0);
   vec2 prevUv = (pp.xy / pp.w) * 0.5 + 0.5;
 
@@ -214,7 +231,7 @@ export class TAA {
       tDepth: { value: null },
       uTexel: { value: new THREE.Vector2(1 / w, 1 / h) },
       uRes: { value: new THREE.Vector2(w, h) },
-      uInvViewProjJ: { value: new THREE.Matrix4() },
+      uInvViewProj: { value: new THREE.Matrix4() },
       uPrevViewProj: { value: new THREE.Matrix4() },
       uNear: { value: 0.05 },
       uFar: { value: 900 },
@@ -290,7 +307,7 @@ export class TAA {
     return { cut, still };
   }
 
-  /** @param p {{ current, depth, invViewProjJ, near, far, static_, cfg }} */
+  /** @param p {{ current, depth, invViewProj, near, far, static_, cfg }} */
   render(p) {
     const r = this.renderer;
     const reset = this.needsReset;
@@ -304,7 +321,8 @@ export class TAA {
     u.tCurr.value = p.current;
     u.tHist.value = this.histB.texture;
     u.tDepth.value = p.depth;
-    u.uInvViewProjJ.value.copy(p.invViewProjJ);
+    if (!p.invViewProj) throw new Error('TAA.render: invViewProj is required');
+    u.uInvViewProj.value.copy(p.invViewProj);
     u.uPrevViewProj.value.copy(this._prevViewProj);
     u.uNear.value = p.near;
     u.uFar.value = p.far;
