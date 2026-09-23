@@ -28,6 +28,26 @@
  *   16 croup        17 haunch       18 legFrontUpper 19 legFrontLower
  *   20 pawFront     21 legHindUpper 22 hock         23 pawHind
  *   24 tailBase     25 tailMid      26 tailTip
+ *
+ * ## What the b4b7079 + 96e9f02 round cost, measured as a PAIRED A/B
+ *
+ * Both commits add geometry (the paw, the withers and the croup) and remove
+ * coat (paw, distal leg, neck crest), so the sign was not obvious and the
+ * gate is 0.4 ms from its budget. Measured in a detached worktree at one
+ * HEAD, alternating the two anatomy files between the old and new revisions
+ * and running `tools/audit.mjs` after each swap -- five clean passes, plus
+ * two discarded for contention (both arms 1.5-1.9x inflated, low/medium/ultra
+ * disagreeing wildly, which is how you tell):
+ *
+ *     high, ms    old  16.33  16.34        new  16.50  16.46  16.41
+ *     triangles   758k -> 781k (+3.0 %)    budget 3.5M, so not binding
+ *     coat coverage at `paws` 370 069 -> 352 482 px (-4.8 %), i.e. FILL
+ *     went down while triangles went up
+ *
+ * +0.12 ms at `high` against a 16.7 ms budget. The gate run that reported
+ * 19.18 ms and FAILED that check was contended: the same tree reads 16.33-
+ * 16.50 in the paired passes, and 16.3 is where REVIEW-4's own two tools put
+ * it before any of this landed.
  */
 import { Field } from './AnatField.js';
 
