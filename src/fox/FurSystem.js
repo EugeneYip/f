@@ -608,6 +608,23 @@ export class FurSystem {
 
     // Gravity acts in world space and adds to reach wherever the surface faces
     // down — the belly and chest, which is where the "Afghan skirt" came from.
+    //
+    // uCardDroop is a SECOND gravity term, applied to cards only and NOT
+    // routed through droopBoost (see the card vertex shader). It is reported
+    // and deliberately NOT added to `extra`, and the reason is a property of
+    // the shader rather than an opinion about the threshold: the card vertex
+    // shader projects the OUTWARD-normal component out of that sag, so it
+    // cannot add perpendicular reach on any surface, which is the only thing
+    // this clause bounds.
+    //
+    // It was added raw first, and this guard is what caught it — with the
+    // term in `extra`, the belly (region 15, the shallowest trunk coat at
+    // 22.2 mm, so the worst region for any ratio-of-coat rule) went 1.228 ->
+    // 1.903 against a 1.3125 ceiling, and every value above 0.07 failed. The
+    // fix went into the shader. Nothing here was widened to admit it; if the
+    // projection is ever removed, put `cardDroop` back into `extra` on the
+    // same line and expect it to fail.
+    const cardDroop = u.uCardDroop?.value ?? 0;
     const STIFF = { 11: 0.46, 13: 0.86, 14: 0.62, 15: 0.24 };
     const detail = [];
     let min = Infinity, max = -Infinity, meanSum = 0;
@@ -619,6 +636,10 @@ export class FurSystem {
       const rMin = reach(lo, s), rMean = reach(mid, s), rMax = reach(lo + sp, s);
       const soft = 1 - (STIFF[i] ?? 0.62);
       const extra = droop * (s * cardLen * mid) * (0.30 + soft) * droopBoost;
+      // What uCardDroop WOULD add if the shader did not project it out. Kept
+      // in the per-region detail so the number stays visible and a future
+      // reader can check the projection is still there.
+      const cardSag = cardDroop * (s * cardLen * mid) * (0.30 + soft);
       min = Math.min(min, rMin); max = Math.max(max, rMax);
       meanSum += rMean;
       worstDroop = Math.max(worstDroop, rMean + extra);
@@ -634,7 +655,9 @@ export class FurSystem {
                     totalRatio: c > 0 ? +(1 + standM / c).toFixed(3) : null,
                     floorBinds: floor > c * PROP,
                     vsShell: +(rMean / shell).toFixed(3),
-                    droopTotal: +(rMean + extra).toFixed(3) });
+                    droopTotal: +(rMean + extra).toFixed(3),
+                    cardSagUnprojected: +cardSag.toFixed(3),
+                    cardSagMm: +(cardSag * c * 1000).toFixed(2) });
     }
 
     // Clause B: the absolute floor may add no more stand-off than the

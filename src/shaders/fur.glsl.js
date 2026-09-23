@@ -1284,7 +1284,20 @@ void main(){
   // vertical -- which is why it is nearly free on row-scan silhouette
   // metrics. It rides v*v with the rest of W: a cantilever pinned at the
   // root, so the sag is all in the outer half.
-  W += uGravity * (uCardDroop * L * (0.30 + 1.0 * soft));
+  //
+  // AND IT MAY NOT LENGTHEN THE HAIR. A hair that hangs does not also reach
+  // further from the skin, and reachReport's droop clause exists because a
+  // term that let it once did -- it is where the "Afghan skirt" came from.
+  // Adding this sag raw took the belly (region 15, the shallowest trunk coat
+  // at 22.2 mm) from 1.228 to 1.903 x its own coat against a 1.3125 ceiling.
+  // Projecting out the OUTWARD-normal component makes gravity a rotation of
+  // the hair rather than an extension of it: it can comb a flank hair down
+  // and pull a dorsal hair toward the back, and on a surface already facing
+  // straight down it does nothing, because there the hair is already hanging.
+  // So the clause is satisfied by construction instead of by a wider cap.
+  vec3 sag = uGravity * (uCardDroop * L * (0.30 + 1.0 * soft));
+  sag -= wn * max(0.0, dot(sag, wn));
+  W += sag;
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
 
