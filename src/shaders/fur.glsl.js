@@ -1425,6 +1425,8 @@ uniform float uCardTipEdge;    // vEdge exponent at a card's TIP; see below
 uniform float uCardOpacity;
 uniform float uCardCut;         // alpha below which a card fragment is discarded
 uniform float uCardHairs;      // hairs per card, x the authored 2-5; see below
+uniform float uCardHairAlign;  // 1 = the hair lattice lands on the card's edges
+uniform float uCardRootRag;    // per-hair root fade depth; 0 = one straight spine
 
 varying vec4  vCard;
 varying float vEdge;
@@ -1442,8 +1444,34 @@ void main(){
   // budget is now a performance budget (16.63 ms against 16.7 at the high
   // tier), so
   // more cards is not available and more hairs is free.
-  float n  = uCardHairs * (2.0 + floor(rnd * 3.99));
-  float s  = vCard.x * n + rnd * 7.31;
+  float nRaw = uCardHairs * (2.0 + floor(rnd * 3.99));
+  /*
+   * THE CARD'S TWO LONG SIDES ARE THE CHEVRONS, and this is why they are
+   * hard. Review blocker 6: "right-angled brackets / staples at macro_eye".
+   * The postfx agent attributed them in one session -- hiding cardMesh
+   * removes every bracket, hiding shellMesh leaves the brackets as the whole
+   * image -- and this file's own comment above already said the cards "read
+   * as flat bright ribbons with hard rectangular ends, a card SHAPE and card
+   * ALPHA problem".
+   *
+   * It is the ALPHA, and specifically the hair lattice's phase. n is
+   * uCardHairs x an integer, so at the shipping 2.4 it is 4.8 / 7.2 / 9.6 /
+   * 12, and the lattice was then shifted by rnd * 7.31. Neither lands on the
+   * card's edge, so the outermost hair is CUT by the geometry at vCard.x = 0
+   * and 1 -- a full-opacity hair ending exactly on the quad boundary, which
+   * is a perfectly straight hard alpha step running the whole length of the
+   * card. Two of those plus the 3-segment polyline's kink is a bracket.
+   *
+   * Round n and drop the phase, and the lattice starts and ends on the card's
+   * own edges: at vCard.x = 0 and 1, fr = 0, d = 1, and since rad <= 0.6 the
+   * alpha there is 0 by construction. The card's silhouette becomes the
+   * outermost HAIR's silhouette instead of the quad's. Per-hair radius,
+   * length and shading still key off rnd and fi, so nothing about the
+   * variation between cards is lost -- only the phase, which was never
+   * visible except as this edge.
+   */
+  float n  = mix(nRaw, max(1.0, floor(nRaw + 0.5)), uCardHairAlign);
+  float s  = vCard.x * n + rnd * 7.31 * (1.0 - uCardHairAlign);
   float fi = floor(s);
   float fr = fract(s);
   float hr = hash11(fi * 1.7 + rnd * 31.0);
@@ -1457,7 +1485,24 @@ void main(){
   float hlen = 0.42 + 0.58 * hash11(fi * 3.3 + rnd * 11.0);
   float tipFade = 1.0 - smoothstep(hlen - 0.30, hlen, v);
   a *= tipFade;
-  a *= smoothstep(0.0, 0.12, v);           // hide the root inside the shells
+  /*
+   * THE CARD'S ROOT EDGE IS THE SPINE OF THE STAPLE.
+   *
+   * This was a constant smoothstep(0.0, 0.12, v): every hair in the card
+   * started at the same v, so the card's root end was one straight line
+   * across its whole width, ramping over 12% of the card. At macro_eye a
+   * card is 100-270 px wide and that line is the crossbar the parallel hairs
+   * hang off -- which is the shape review blocker 6 calls a staple. Rendered
+   * with the shells hidden, the isolated cards at that framing are combs:
+   * parallel bars on a straight spine.
+   *
+   * Per hair, and deeper. The spine becomes a ragged edge rather than a
+   * line, and the ramp is long enough that no single hair contributes a hard
+   * step. It cannot cost the outline -- this is the end of the card BURIED
+   * in the shells, and the tip is untouched.
+   */
+  float hroot = max(0.02, uCardRootRag * (0.35 + 0.65 * hash11(fi * 5.7 + rnd * 17.0)));
+  a *= smoothstep(0.0, hroot, v);
 
   // Sub-pixel cards dissolve to their mean instead of flickering.
   //

@@ -955,7 +955,32 @@ export const FUR_DEFAULTS = {
    * `tail` is softer and denser after, not flatter: shots/fur-before/tail.png
    * against shots/fur-after/tail.png.
    */
-  cardHairs: 2.4,
+  /*
+   * 2.4 -> 5.0. 250d67e took this 1.0 -> 2.4 and stopped there on the grounds
+   * that "at macro the hairs go sub-pixel and the card LOD dissolves them to
+   * a flat ribbon". Re-measured in both places at once, that cost does not
+   * appear and the benefit does, in three independent directions:
+   *
+   *   `profile`, 2100x1350, one session, one instant, four-direction contour:
+   *     uCardHairs   coverage   left    right    top    bottom
+   *       2.4         416 160   1.529   1.807   1.730   1.607
+   *       3.5         416 126   1.541   2.020   1.915   1.655
+   *       5.0         416 496   1.562   2.156   1.917   1.856
+   *
+   *   `macro_eye`, whole frame, Sobel on luminance, ppm above 40 levels and
+   *   the 99.9th percentile -- the hard-edge density review blocker 6 is
+   *   about, with `nocards` as the floor:
+   *     2.4   6292 ppm   p99.9 60.3        1 px detail 5.485
+   *     3.5   6673       p99.9 59.7                    5.558
+   *     5.0   5783       p99.9 55.7                    5.584
+   *     NO CARDS AT ALL  3239 ppm  p99.9 47.6          5.467
+   *
+   * So the 1 px band -- the thing the dissolve was supposed to eat -- goes
+   * UP, not down, and every contour edge improves. The cost is zero in the
+   * fragment shader: `n` only scales the coordinate the hair lattice is
+   * sampled at, so the instruction count does not depend on it.
+   */
+  cardHairs: 5.0,
   /*
    * ALPHA BELOW WHICH A CARD FRAGMENT IS DISCARDED. Shipped unchanged at the
    * 0.004 it was hard-coded at; it is a knob now because it is one of the two
@@ -1005,6 +1030,23 @@ export const FUR_DEFAULTS = {
    * reprojection, which is postfx's file. Handing it over with the controls
    * above rather than paying for it here.
    */
+  /*
+   * 1 = the per-hair lattice inside a card lands on the card's own two long
+   * edges, so the outermost hair is not cut by the quad boundary. See the
+   * long note in the card fragment shader: an uncut hair against the
+   * geometry edge is a straight hard alpha step the whole length of the
+   * card, and that step is review blocker 6's "right-angled brackets".
+   * 0 restores the shipped-before behaviour for A/B.
+   */
+  cardHairAlign: 1.0,
+
+  /**
+   * Depth of the per-hair root fade inside a card, as a fraction of the card.
+   * It replaces a constant 0.12 that every hair shared, which drew the card's
+   * root end as one straight crossbar. 0.12 reproduces the old behaviour.
+   */
+  cardRootRag: 0.45,
+
   cardCut: 0.004,
 };
 
@@ -1225,6 +1267,8 @@ export function buildFurUniforms(ctx) {
     uCardDroop: { value: d.cardDroop },
     uCardOpacity: { value: d.cardOpacity },
     uCardHairs: { value: d.cardHairs },
+    uCardHairAlign: { value: d.cardHairAlign },
+    uCardRootRag: { value: d.cardRootRag },
     uCardInteriorLen: { value: d.cardInteriorLen },
     uCardEdgeLen: { value: new THREE.Vector2(d.cardEdgeLen[0], d.cardEdgeLen[1]) },
     uCardIntMix: { value: intMix },
