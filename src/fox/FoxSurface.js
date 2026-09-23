@@ -23,7 +23,7 @@
 import * as THREE from 'three';
 import { smoothstep, saturate } from '../util/math.js';
 import {
-  buildField, REGION as R, FUR, TORSO_REGIONS, CRANIUM, EAR, EAR_NORMAL, EAR_SPAN,
+  buildField, REGION as R, FUR, NECK_CREST, TORSO_REGIONS, CRANIUM, EAR, EAR_NORMAL, EAR_SPAN,
 } from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
@@ -153,6 +153,25 @@ export async function buildFoxSurface(skeleton, {
         len = FUR[R.belly][0]; stiff = FUR[R.belly][1];
       } else if (reg === R.croup && wBack > 0.6) {
         reg = R.back;
+      } else if ((reg === R.neck || reg === R.ruff) && !CRANIUM.contains(x, y, z)) {
+        // The NECK CREST. 55a9475 measured that no per-region depth moves the
+        // profile topline and named the prerequisite: "a dorsal region split".
+        // This is it. The ruff's 58 mm is authored for the cheek-throat mane,
+        // which is lateral and ventral; left on the dorsal midline it puts a
+        // 17 mm coat STEP in front of the withers pointing the wrong way, and
+        // that step is most of why the topline had no withers to find.
+        // The cranium is excluded so the crown band stays at its own depth.
+        //
+        // The weight is NOT `wBack`. `wBack` opens at ny = 0.30, i.e. 72 deg
+        // off vertical, which reaches most of the way down the sides of the
+        // neck -- and measured at `paws`, where the camera is 55 mm off the
+        // snow and the frame crops the back, that cost five sub-1.15-tv
+        // contour scans on the LEFT edge (rows y 8-26, all new). A crest is
+        // the midline strip, so this opens at ny = 0.62 and is only fully on
+        // at ny = 0.93. The lateral ruff keeps its authored 58 mm, which is
+        // what that number was written for.
+        const wCrest = smoothstep(0.62, 0.93, ny);
+        len = len + (NECK_CREST - len) * wCrest;
       }
       // Guard hair sweeps down the flanks and under the belly.
       const down = 0.44 * wSide + 0.30 * wBelly;

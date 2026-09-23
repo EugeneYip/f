@@ -166,7 +166,34 @@ for (const key of Object.keys(LANDMARKS)) {
  * one 14cb891 measured at 2.8 deg. Pricked forward also keeps the apex over
  * the skull's 34 mm coat instead of over the nape's 46-58 mm.
  */
-export const EAR_POSE = { caudal: 0.0180, pitch: 0.0060, lift: 0.0000 };
+/**
+ * ## `lift` is no longer 0, and the frontal measurement that moved it
+ *
+ * Review 4 blocker 12 reads the frontal ear as "semicircular lobes ... 1.86:1
+ * against §4c's 1:1". Measured on the true-coverage matte at 1400x900, with
+ * runs merged across gaps <= 6 px so the outer fringe specks do not invent a
+ * tip (they do: an unmerged scan puts the tip 6 rows and 40 px of width away
+ * from the real one), the LEFT ear is:
+ *
+ *     tip y=221 · merges into the head outline y=310 · base width 149 px
+ *     visible height 89 px = 31 mm · base 149 px = 52 mm · ratio 0.60 : 1
+ *     proud over the midline dome 75 px = 26 mm
+ *     width 6 px below the tip 60 px, i.e. a 60 % narrowing base-to-tip
+ *
+ * So the ratio is wrong in the OTHER direction -- the ear is a LOW WIDE lobe,
+ * 52 mm across and 31 mm tall -- and the blade does taper: 0363d6a's
+ * `power` 1.8 -> 1.0 did reach the frontal read, 60 % of narrowing is a
+ * wedge, and the review's "34 % narrowing" does not reproduce at any tip row
+ * this scan can find. §4c's own numeric target is "near 37 mm proud on a
+ * 52 mm base"; the base is already exactly 52 and the proud height is 26.
+ *
+ * `lift` 0 -> 0.011 m buys the missing 11 mm at the only landmark that is
+ * short. It is 11 mm of world y on the whole chain, applied after `skullXf`,
+ * and it does not touch `rBase` -- so the base stays at §4c's 52 mm and only
+ * the height moves. The ear root stays buried: earR01 sits 33 mm under the
+ * skull's canopy today, 22 mm after.
+ */
+export const EAR_POSE = { caudal: 0.0180, pitch: 0.0060, lift: 0.0110 };
 const EAR_CHAIN = ['earR01', 'earR02', 'earR03', 'earR_tip'];
 const EAR_REST = EAR_CHAIN.map((k) => LANDMARKS[k].slice());
 /** Re-derive the ear landmarks from `EAR_POSE`. Idempotent; see EAR.refresh. */
@@ -777,9 +804,18 @@ export const EAR = {
    * 2x crop of a stair-stepped blue-grey cutout), and that is a §4f.3
    * failure worth more than a sharp tip.
    */
-  tipTaper: 0.46,
+  // 0.46 -> 0.38 and fringeTip 0.45 -> 0.62 are the price of EAR_POSE.lift.
+  // Lifting the pinna 11 mm exposes apex that used to be inside the skull's
+  // canopy, and the apex is the shortest-coated point on the ear -- measured
+  // on `tools/matte.mjs --poses profile,frontal`, the lift alone added
+  // sub-1.15-tv contour scans at exactly the ear: left y 292-304, right
+  // y 292-300, top x 494-514, all of them new. 0363d6a said this would
+  // happen in advance ("the fringe is what stops the rim rendering as the
+  // hardest line on the animal") and the remedy is the one it names: more
+  // hair on the RIM at the tip, which is `fringeTip`, not a wider blade.
+  tipTaper: 0.28,
   fringe: 1.55,
-  fringeTip: 0.45,
+  fringeTip: 0.62,
   fringeSoften: 0.22,
   // Concha: a cone, not a sphere, sized FROM the blade profile so it can never
   // outgrow it however the pinna is retuned.
@@ -927,6 +963,18 @@ export const FUR = {
   [R.throat]: [0.0310, 0.28],
   [R.neck]: [0.0455, 0.58],
   [R.ruff]: [0.0580, 0.50],
+  // NOT a region: the DORSAL strip of `neck` and `ruff` only, blended in by
+  // FoxSurface's normal test (the cranium is excluded, so the crown band the
+  // 124c41c check watches is untouched). 55a9475 measured that no value in
+  // this table moves the profile topline, because shoulder and croup are
+  // LATERAL regions that are barely on the profile outline, and concluded:
+  // "If the coat is ever to carry the topline, the prerequisite is a dorsal
+  // region split." This is that split, and it is the half of the §B-4 fix
+  // that the skin cannot do: the ruff's 58 mm sits on the neck's dorsal
+  // midline at z = 111 mm, 17 mm deeper than the chest's coat 25 mm behind
+  // it, and it buried the withers under a coat step pointing the wrong way.
+  // A real fox's ruff is the cheek-throat mane -- lateral and ventral. The
+  // LATERAL ruff keeps its 58 mm; only the crest comes down.
   [R.chest]: [0.0410, 0.46],
   [R.shoulder]: [0.0395, 0.66],
   [R.back]: [0.0440, 0.86],
@@ -941,7 +989,7 @@ export const FUR = {
   [R.croup]: [0.0460, 0.80],
   [R.haunch]: [0.0415, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
-  [R.legFrontLower]: [0.0140, 0.68],
+  [R.legFrontLower]: [0.0160, 0.68],
   /**
    * ### 22 -> 9.5 mm, and why f708e0d's reading of the source was right while
    * its number made the animal footless.
@@ -988,12 +1036,19 @@ export const FUR = {
    */
   [R.pawFront]: [0.0095, 0.88],
   [R.legHindUpper]: [0.0380, 0.60],
-  [R.hock]: [0.0120, 0.54],
+  [R.hock]: [0.0170, 0.54],
   [R.pawHind]: [0.0095, 0.88],
   [R.tailBase]: [0.0480, 0.78],
   [R.tailMid]: [0.0540, 0.80],
   [R.tailTip]: [0.0420, 0.72],
 };
+
+/**
+ * Dorsal coat depth on the neck crest — see the note inside `FUR` and the
+ * TRUNK_PROFILE docstring. 43 mm sits between the back's 44 and the distal
+ * regions; it is a crest, not a shaved strip.
+ */
+export const NECK_CREST = 0.0430;
 
 const TINT_FUR = 0xffffff;      // neutral: base albedo lives on the material
 const TINT_SKIN = 0x171a20;     // bible "skin / nose"
@@ -1117,19 +1172,62 @@ const mirrorX = (p) => [-p[0], p[1], p[2]];
  * ratio that is RUFF, H being 338.1 at the neck crest against 324.9 at the
  * withers.
  */
+/**
+ * ## §B-4: the back was a ruler, and the TOP column is why
+ *
+ * Review 4: "ear tip y=258, then a monotonic descent to y=331 at x=608, then
+ * y = 317 +- 6 across the whole 177 px from x=616 to x=793." 55a9475 then
+ * measured the same contour on the BARE MESH and found no withers there
+ * either -- "in every arm the highest point inside the withers window lands
+ * exactly on the window's LEFT EDGE, which is what a window maximum does when
+ * the curve through it is still descending" -- and closed with the routing
+ * note that a region table cannot carve a withers, only this table can.
+ *
+ * Here is the flat curve, as the canopy this table actually produces
+ * (TOP + dorsal coat x uCoatScale 0.93, the dorsal depth being what
+ * FoxSurface's normal blend lands on: neck 45.5, ruff 58, chest 41,
+ * flank->back 44, croup 46):
+ *
+ *     z (mm)    145   130   111    86    50     0   -52  -100  -142  -170
+ *     BEFORE  343.3 331.8 329.3 310.1 300.1 297.9 303.4 304.9 300.8 282.3
+ *     AFTER   340.5 326.0 310.0 321.1 304.1 295.0 298.0 301.0 312.8 287.8
+ *
+ * BEFORE is monotone from the poll to z = 0 and then flat: one 7 mm rise over
+ * the loin is the whole of the back's relief, which is the ruler. AFTER has
+ * the four turning points a canid profile is made of -- poll 340, cervico-
+ * thoracic DIP 310, WITHERS 321, saddle 295, CROUP 313, tail drop -- with a
+ * 26 mm withers-to-saddle fall and an 18 mm saddle-to-croup rise.
+ *
+ * TWO THINGS PAY FOR IT AND BOTH ARE NAMED:
+ *
+ *  1. The dip at z = 111 is 17 mm below where it was, which is §4f.4's "the
+ *     furred silhouette must not shrink" broken at one station. It is broken
+ *     deliberately: a dip IS a place where the silhouette has to come in, and
+ *     there is nowhere else to put the poll dip the review asks for. 13 mm of
+ *     the 17 is coat, not skin, and it comes from NECK_CREST -- see FUR.
+ *  2. The withers rises 11 mm of skin, so shoulder height over the coat goes
+ *     310 -> 321 mm against §4b's sourced 0.28 m. It was already 30 mm over;
+ *     this makes it 41. The alternative was to cut the saddle by the same
+ *     11 mm, and spine03 sits 12 mm under TOP at z = 0 -- so that door is
+ *     3 mm wide, not 11. Clearance after this edit: spine03 9 mm, spine02
+ *     11.5 mm, spine01 17 mm, hips 32.5 mm; all still inside the flesh.
+ *
+ * The BOTTOM column is untouched. 072e93d shaped it (brisket holds, loin
+ * lifts 17 mm) and nothing here needs the belly.
+ */
 // z, TOP, BOTTOM, sqx, region  — silhouette-first authoring; see below.
 const TRUNK_PROFILE = [
-  [-0.1880, 0.2260, 0.1960, 0.90, R.croup],
-  [-0.1700, 0.2395, 0.1860, 0.92, R.croup],
-  [-0.1420, 0.2580, 0.1630, 0.95, R.croup],
-  [-0.1000, 0.2640, 0.1560, 0.95, R.flank],
-  [-0.0520, 0.2625, 0.1440, 0.94, R.flank],
-  [0.0000, 0.2570, 0.1330, 0.93, R.flank],
-  [0.0500, 0.2620, 0.1245, 0.91, R.chest],
-  [0.0860, 0.2720, 0.1405, 0.89, R.chest],
-  [0.1110, 0.2754, 0.1650, 0.89, R.ruff],
-  [0.1300, 0.2895, 0.1835, 0.91, R.neck],
-  [0.1450, 0.3010, 0.2005, 0.93, R.neck],
+  [-0.1880, 0.2270, 0.1960, 0.90, R.croup],
+  [-0.1700, 0.2450, 0.1860, 0.92, R.croup],
+  [-0.1420, 0.2700, 0.1630, 0.95, R.croup],   // croup crest, over the hip
+  [-0.1000, 0.2600, 0.1560, 0.95, R.flank],
+  [-0.0520, 0.2570, 0.1440, 0.94, R.flank],
+  [0.0000, 0.2540, 0.1330, 0.93, R.flank],    // saddle, the back's low point
+  [0.0500, 0.2660, 0.1245, 0.91, R.chest],
+  [0.0860, 0.2830, 0.1405, 0.89, R.chest],    // WITHERS, the trunk's high point
+  [0.1110, 0.2710, 0.1650, 0.89, R.ruff],     // cervicothoracic dip
+  [0.1300, 0.2860, 0.1835, 0.91, R.neck],
+  [0.1450, 0.3005, 0.2005, 0.93, R.neck],
 ];
 // (z, centre-y, radius, squash-x, region) — what the field builder consumes.
 const TRUNK = TRUNK_PROFILE.map(([z, top, bot, sx, reg]) =>
