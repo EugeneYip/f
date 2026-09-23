@@ -859,6 +859,17 @@ export class PostFX {
    * here -- they share the same penalty and cancel -- and take the post total
    * from an enabled/disabled pair instead.
    *
+   * AND THE LESSON FROM USING IT: on this machine a decaying 1-minute load
+   * average is enough to move the whole-frame number by a millisecond while
+   * audit.mjs's own contention detector reports `contended: false`. Two
+   * standalone audit runs taken with load average still falling through 10-15
+   * read [high] at 17.47 and 17.41; the same audit inside tools/gate.mjs with
+   * the machine actually idle reads 16.22-16.23, and a clean-page paired probe
+   * reads 16.25-16.52 with a MAD as low as 0.005. The detector fires only when
+   * frame time barely MOVES ACROSS TIERS, and a uniform 7% inflation moves all
+   * four tiers together, so it passes. Check `uptime` before believing an
+   * absolute; trust paired deltas otherwise.
+   *
    * PAIRED AND REPEATED, because a single baseline is not survivable here.
    * Several agents drive headless Chromium against this GPU at once, and the
    * load is BURSTY -- one audit run read `low` at 11.78 ms and `medium` at
