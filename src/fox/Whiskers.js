@@ -101,6 +101,10 @@ export class Whiskers {
       (tier === 'low' ? 6 : tier === 'medium' ? 10 : 14);
     const density = ctx.quality.get('whiskerDensity') ?? (tier === 'low' ? 0.55 : 1.0);
 
+    // kept, missed-skin, eye-guarded, and WHY the last guarded one was cut.
+    // "Probe returned no samples" is the least useful thing an instrument can
+    // say (AGENTS.md); a rejection count with no reason is the same failure.
+    this.tally = { mystacial: [0, 0, 0, ''], genal: [0, 0, 0, ''], brow: [0, 0, 0, ''] };
     const strands = this._layout(ctx, fox, inv, density);
     if (!strands.length) throw new Error('Whiskers: no follicles could be placed on the muzzle');
 
@@ -115,8 +119,15 @@ export class Whiskers {
     this.head = head;
     this.probe = fox.anchors.nose;
     ctx.whiskers = this;
+    // PER-ROW, because the total hides the failure. §4b asks for three things
+    // and one of them is the brow row; a healthy total with `brow 0/0/8` is a
+    // missing feature that a single number reports as a success.
+    const t = this.tally;
     console.info(`[whiskers] ${strands.length} strands · ${segs} segments · ` +
-      `${strands.length * segs * 2} tris · 1 draw call`);
+      `${strands.length * segs * 2} tris · 1 draw call · ` +
+      Object.keys(t).map((k) => `${k} ${t[k][0]} kept` +
+        (t[k][1] ? `/${t[k][1]} missed skin` : '') +
+        (t[k][2] ? `/${t[k][2]} EYE-GUARDED (${t[k][3]})` : '')).join(' · '));
   }
 
   // ------------------------------------------------------------------ layout --
@@ -196,41 +207,80 @@ export class Whiskers {
     const apexZ = ctx.eyes?.eyes?.[0]?.apexZ ?? eyeR * 0.85;
     const apex = eyeBalls.map((p, i) => (eyeAxis[i]
       ? p.clone().addScaledVector(eyeAxis[i], apexZ) : p.clone()));
+    // THE BROW ROW WAS BEING DELETED IN ITS ENTIRETY, and no number said so.
+    // Measured with the per-row tally now printed at init: `brow 0 kept /
+    // 8 EYE-GUARDED` — which is review 4's "there are no brow whiskers",
+    // exactly, and §4b asks for the row by name.
+    //
+    // The cause is that the mystacial rule is the wrong rule for this row. A
+    // superciliary follicle ROOTS on the orbital rim a few millimetres above
+    // the aperture: at t = 0, before the strand has gone anywhere, it is
+    // already inside the lash-inflated globe ball (R + 2.2 mm = 13.1 mm on a
+    // 10.9 mm globe, and the brow skin is nearer than that) and inside the
+    // 15.0 mm sight cylinder. Both tests fire on the follicle itself.
+    //
+    // What actually has to be prevented here is a brow whisker DROOPING
+    // across the eye. So this row gets: the globe test without the lash
+    // margin and skipping the first fifth of the strand (which hugs the skin
+    // and is occluded by the globe anyway, since whiskers depth-test), and
+    // in place of the sight cylinder a one-sided rule — the strand may never
+    // descend more than a millimetre below its own follicle. That is
+    // view-independent, unlike the cylinder, and it is the anatomy.
+    const BROW_SAG = 0.0012;
     const eyeGuard = (root, dir, curve, len, kind) => {
-      if (!eyeBalls.length) return false;
-      const ball = kind === 'brow' ? 0 : SIGHT_BALL;
+      if (!eyeBalls.length) return null;
+      const brow = kind === 'brow';
+      const ball = brow ? 0 : SIGHT_BALL;
+      const globeR = brow ? eyeR - 0.0022 : eyeR;
+      const rootUp = root.dot(U);
       for (let i = 0; i <= 12; i++) {
         const t = i / 12;
         probe.copy(root).addScaledVector(dir, len * t).addScaledVector(curve, t * t);
+        if (brow) {
+          // (b') a brow whisker sweeps up and back; one that sags onto the
+          // aperture is the only way this row can reach the eye at all.
+          if (probe.dot(U) < rootUp - BROW_SAG) return `sag t=${t.toFixed(2)} ${((probe.dot(U) - rootUp) * 1000).toFixed(1)}mm`;
+          if (t < 0.2) continue;
+        }
         for (let e = 0; e < eyeBalls.length; e++) {
           // (a) never enter the globe itself
-          if (probe.distanceTo(eyeBalls[e]) < eyeR) return true;
+          if (probe.distanceTo(eyeBalls[e]) < globeR) return `globe t=${t.toFixed(2)} d=${(probe.distanceTo(eyeBalls[e]) * 1000).toFixed(1)}mm<${(globeR * 1000).toFixed(1)}`;
           // (a2) ...nor the ball in front of the aperture, for the rows that
           // have no anatomical business there.
-          if (ball > 0 && probe.distanceTo(apex[e]) < ball) return true;
+          if (ball > 0 && probe.distanceTo(apex[e]) < ball) return `apexBall t=${t.toFixed(2)}`;
           // (b) never cross the eye's line of sight close in. Clearing the
           // globe in 3D is not sufficient: at `macro_eye` the camera looks
           // straight down the optical axis from 0.13 m, so a strand that
           // misses the eyeball by a few millimetres still projects straight
           // across the iris. This is the one the critic could see.
+          //
+          // NOT for the brow row, which (b') replaces. Measured: with (b')
+          // added and this test still running, the tally still read
+          // `brow 0 kept / 8 EYE-GUARDED (sight t=0.25)` — the cylinder is
+          // 15.0 mm in radius and the brow skin stands about 12 mm off the
+          // optical axis, so the follicle is inside it before the strand has
+          // left the face. A test that cannot be passed by correct anatomy
+          // is not a guard, it is a deletion.
+          if (brow) continue;
           const ax = eyeAxis[e];
           if (!ax) continue;
           rel.subVectors(probe, eyeBalls[e]);
           const along = rel.dot(ax);
           if (along > 0 && along < SIGHT_D &&
-              rel.addScaledVector(ax, -along).length() < SIGHT_R) return true;
+              rel.addScaledVector(ax, -along).length() < SIGHT_R) return `sight t=${t.toFixed(2)}`;
         }
       }
-      return false;
+      return null;
     };
 
     /** Drop a follicle: seed outside the skin, march in, keep the hit. */
     const place = (seed, outDir, len, spread, kind, jitter, droop = 1) => {
-      if (!f?.raycast) return;
+      const tally = this.tally?.[kind];
+      if (!f?.raycast) { if (tally) tally[1]++; return; }
       const d = outDir.clone().normalize();
       const o = tmp.copy(seed).addScaledVector(d, 0.055);
       const t = f.raycast(o.x, o.y, o.z, -d.x, -d.y, -d.z, 0.11);
-      if (!(t > 0)) return;                      // missed the animal entirely
+      if (!(t > 0)) { if (tally) tally[1]++; return; }   // missed the animal
       const root = o.clone().addScaledVector(d, -t);
 
       // True surface normal at the follicle — a whisker leaves the skin
@@ -276,7 +326,9 @@ export class Whiskers {
       // Tested in FIELD space, where root/dir/curve all still live — the push
       // below converts them to bone space, and mixing the two frames here
       // would test a strand that does not exist.
-      if (eyeGuard(root, dir, curveField, len, kind)) return;
+      const why = eyeGuard(root, dir, curveField, len, kind);
+      if (why) { if (tally) { tally[2]++; tally[3] = why; } return; }
+      if (tally) tally[0]++;
 
       strands.push({
         root: root.clone().applyMatrix4(inv),
