@@ -191,6 +191,30 @@ per variant invented a fan of hard stripes around an eyelid that does not
 exist converged, and an agent published a wrong cause before catching it
 itself. Converge before you conclude.
 
+**The dangerous instrument failure is the ABSENT measurement, not the wrong
+one.** Four times this session an instrument failed by removing a number
+rather than reporting a bad one, and each took far longer to notice than any
+wrong value would have:
+
+- a null probe made two `record()` calls disappear, so the report came back
+  with 22 checks instead of 24 and the gate had silently deleted itself;
+- `audit.mjs`'s fur-reach check replaced itself with a *differently named*
+  warning when it could not measure, so the named check vanished from the
+  report and the gate still passed with the silhouette unguarded;
+- `{ frameMs: <measured>, ...D.stats() }` let a spread overwrite a correct
+  measurement with a frozen one, and the resulting constant then fired a
+  "GPU contention" detector that suppressed budget enforcement on every run
+  for a whole session;
+- a "too few samples to measure" filter in the contour metric dropped exactly
+  the hardest edges, because a cliff is the row with the fewest samples — so
+  a bare muzzle scored a clean pass on the rows that survived.
+
+So: never let a check disappear when it cannot measure. Record it as a
+failure under its own name. If a value is unmeasurable, say which and why in
+the message. And when you add a filter, ask what it removes *preferentially*
+— a filter that is uncorrelated with the defect is fine, one that correlates
+with it is an eraser.
+
 **Commit the first working increment before you keep investigating.** This
 project runs under session usage limits that kill agents mid-sentence with no
 warning. Across seven waves, **four produced nothing at all** — not because
