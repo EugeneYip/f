@@ -152,7 +152,27 @@ const results = await page.evaluate(async () => {
 
   /** Project a rig anchor to backbuffer pixels. */
   function project(name) {
-    const a = ctx.fox?.anchors?.[name];
+    // Fall back to the BONE of the same name.
+    //
+    // Only six anchors exist -- nose, eyeL, eyeR, mouth, chest, tailTip -- and
+    // this returned null for anything else, silently. Two callers were asking
+    // for names that are bones rather than anchors, and both degraded quietly
+    // instead of failing:
+    //
+    //   `hips`     the lit-coat probe walks chest->hips looking for the
+    //              brightest point on the trunk. With hips null it took the
+    //              fallback branch every time and sampled ONE point 30 px
+    //              above the chest -- so the search I added to answer "is this
+    //              probe on the shaded side?" has never actually run, and my
+    //              report that it "returns the identical value" described a
+    //              search that did not happen.
+    //   `earTipR`  the macro fur probe's brow reference. With it null the
+    //              direction fell back to screen-up, which is only the brow
+    //              when the head happens to be level.
+    //
+    // Debug.js's own `resolvePose` has always fallen back to bones. This did
+    // not, and the asymmetry is what hid it.
+    const a = ctx.fox?.anchors?.[name] ?? ctx.fox?.bone?.(name);
     if (!a) return null;
     a.updateWorldMatrix(true, false);
     const v = new THREE.Vector3().setFromMatrixPosition(a.matrixWorld).project(ctx.camera);

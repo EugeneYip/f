@@ -344,15 +344,24 @@ const main = async () => {
     // Its constants are injected into the shader from one place, so the guard
     // cannot drift from what is actually drawn.
     const reach = await page.evaluate(() => window.FoxDebug.ctx().fur?.reachReport?.() ?? null);
-    if (reach) {
-      report.furReach = reach;
-      record('fur card reach in band', reach.ok === true,
-        `band ${JSON.stringify(reach.band)} — min ${reach.min}, mean ${reach.mean}, ` +
-        `max ${reach.max}, worst with droop ${reach.worstDroop}`);
-    } else {
-      record('fur reach guard available', false,
-        'ctx.fur.reachReport() missing — silhouette extent is unguarded', 'warn');
-    }
+    // ONE check name, always recorded, always an error when it cannot report.
+    //
+    // This used to record a DIFFERENTLY NAMED warning when `reachReport()`
+    // returned null, so the check called `fur card reach in band` simply
+    // vanished from the report and the gate still passed -- the silhouette
+    // extent went unguarded and nothing said so. A fur agent hit exactly this
+    // twice while sweeping a per-lock stand-off and wrote that the experiment
+    // "deleted the checks instead of failing them". An instrument that
+    // disappears when it cannot measure is worse than one that is merely
+    // wrong, because nobody notices its absence.
+    report.furReach = reach;
+    record('fur card reach in band', !!reach && reach.ok === true,
+      reach
+        ? `band ${JSON.stringify(reach.band)} — min ${reach.min}, mean ${reach.mean}, ` +
+          `max ${reach.max}, worst with droop ${reach.worstDroop}`
+        : 'ctx.fur.reachReport() returned null or threw — silhouette extent is ' +
+          'UNGUARDED. This is a failure, not a warning: the check it replaces ' +
+          'is the only thing bounding how far cards may reach past the coat');
 
     const rf = await page.evaluate(() => window.FoxDebug.stats());
     record('post-processing actually running', !rf.renderFrameDropped,
