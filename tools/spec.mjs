@@ -935,10 +935,20 @@ const results = await page.evaluate(async () => {
           for (let j = k; j < Math.min(k + step, b + 1); j++) { sum += at(i, j); cnt++; }
           prof.push(sum / Math.max(cnt, 1));
         }
-        // A ratio over fewer than six samples is not a statistic; the fur
-        // agent showed bare mesh outscoring the coat where rows were that
-        // short. Dropped rows are counted and reported, never hidden.
-        if (prof.length < 6) { short++; continue; }
+        // A SHORT RAMP IS A CLIFF. Score it 1.0; never drop it.
+        //
+        // This used to drop rows with fewer than six samples as "too short to
+        // support the ratio", which sounded careful and was exactly backwards:
+        // the hardest edges are precisely the ones with the fewest samples
+        // between 2% and 90% coverage, so the filter **systematically deleted
+        // the worst defects**. The fur agent found the consequence — a
+        // perfectly bare muzzle scored a clean p10 on the handful of rows that
+        // survived, because every genuine cliff had been filtered out first.
+        //
+        // A ramp shorter than two sampling intervals is not an unmeasurable
+        // row, it is a monotonic crossing: the worst value the metric can
+        // express. Record it as such.
+        if (prof.length < 3) { short++; tvs.push(1.0); continue; }
         let tv = 0;
         for (let k = 0; k < prof.length - 1; k++) tv += Math.abs(prof[k + 1] - prof[k]);
         const net = Math.abs(prof[prof.length - 1] - prof[0]);
@@ -1473,8 +1483,9 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
         v && v.worstP10 != null ? `WORSE SIDE ${v.worstP10} (left ${v.leftP10}, ` +
             `right ${v.rightP10}); combined path length over net crossing ${v.tvP10} at the 10th ` +
             `percentile (median ${v.tvMedian}, ramp ${v.rampMedianMm}mm of fox) ` +
-            `over ${v.n} scans (${v.shortRows} dropped as too short to support ` +
-            `the ratio — see the comment in matteBands), sampled every 1.5mm — a fifth of the coat's ` +
+            `over ${v.n} scans, of which ${v.shortRows} were CLIFFS scored 1.0 ` +
+            `(a ramp under two sampling intervals is a monotonic crossing, not ` +
+            `an unmeasurable row). Sampled every 1.5mm — a fifth of the coat's ` +
             `own 7.4mm tuft scale (${v.stepPx}px at ` +
             `${v.pxPerMm}px/mm). 1.0 means the fringe does not oscillate at ` +
             `that scale. Same band at \`frontal\` reads ${f?.tvP10 ?? 'n/a'}`

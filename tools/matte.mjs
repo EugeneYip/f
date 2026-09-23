@@ -166,6 +166,11 @@ const result = await page.evaluate(async ({ POSES, SETTLE }) => {
         let b = a;
         while (b < len - 1 && at(i, b) < 0.90) b++;
         if (b >= len - 2) continue;
+        // A SHORT RAMP IS A CLIFF -- score it 1.0, never drop it. The
+        // hardest edges have the fewest samples between 2% and 90% coverage,
+        // so any "too few samples to measure" filter deletes exactly the
+        // defects this exists to find. See the longer note in spec.mjs.
+        if (b - a < 2) { tvs.push(1.0); ramps.push(b - a); continue; }
         let tv = 0;
         for (let k = a; k < b; k++) tv += Math.abs(at(i, k + 1) - at(i, k));
         const net = Math.abs(at(i, b) - at(i, a));
