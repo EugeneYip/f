@@ -140,6 +140,25 @@ const IRIS_R = 0.90;        // iris radius / limbus radius (cornea magnifies it 
 // CONVERGE_MAX_OFF below.
 const AP_W_CEIL = 1.10;     // never wider than this, whatever the socket allows
 const AP_W_FLOOR = 0.62;    // ...nor narrower; below this the eye is a slit
+
+// AND THE CEILING THAT ACTUALLY BINDS IS THE LIMBUS, NOT A CONSTANT.
+//
+// The sourced ordering above ("fissure > cornea") says the lid margins must
+// clear the limbus horizontally. It does not say BY HOW MUCH, and that turns
+// out to be the whole of blocker 11. Measured off the live rig: the socket
+// opens T 60.2 / N 67.5 degrees, so `apTh` was pinned at its 1.10 ceiling —
+// canthi at +/-47.7 degrees against a limbus at 39.5 — leaving 8.2 degrees of
+// bare pigmented sclera standing at EACH canthus. In the render that is
+// 85-100 px of near-black on a 575 px aperture at `macro_eye` row 646, i.e.
+// nearly a third of the opening is black, and §4b's amber iris reads as a
+// bead sitting in a hole. A canid's iris nearly fills its fissure.
+//
+// So the clearance is authored directly, in degrees outside the limbus, and
+// the ceiling follows the cornea wherever the anatomy agent puts it. 3
+// degrees keeps the ordering (fissure 14.7 mm over a 13.8 mm cornea, f/c
+// 1.07) and leaves a sliver at the corner instead of a wedge. It must stay
+// above CONVERGE_RECESS or `convMax` goes to the follow angle alone.
+const SCLERA_CLEAR = 3.0 * Math.PI / 180;
 const AP_WALL_MARGIN = 1.5 * Math.PI / 180;  // keep the canthus off the wall
 const AP_UP = 0.477;        // upper margin height at u = 0
 const AP_DN = 0.413;        // lower margin depth  at u = 0
@@ -249,7 +268,15 @@ const RIM_FUR_1 = 0.00320;       // ...and owns the surface from here out
 // furry part of the band keeps, as a multiplier on the sky/bounce hemisphere;
 // it is masked to zero on the margin so the black line stays black. Swept
 // against the coat next to the socket — see the commit.
-const LID_SCATTER = 2.15;
+// MEASURED AGAIN, AND 2.15 OVERSHOT. Swept in one page session at one sim
+// instant (5 arms, 22 TAA frames each, macro_eye column 985): the band's peak
+// against the coat 130-210 px outside it reads +5.3 % at 2.15, +0.5 % at 1.70,
+// -4.9 % at 1.35, -11.4 % at 1.00. The band is short white fur over skin and
+// must DISAPPEAR into the coat, so anything above parity turns §4b's near-
+// black rim into a bright ring with a black hole in it — which is exactly
+// what review 4 blocker 11 is looking at. 1.62 lands it a couple of levels
+// under the coat, where periocular skin belongs.
+const LID_SCATTER = 1.62;
 
 /** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
 const chord = (t) => t / Math.sqrt(1 + t * t);
@@ -734,9 +761,13 @@ export class Eyes {
     const follow = win
       ? clamp(Math.min(Math.abs(restYawRaw), Math.max(0, nasalRoom - minHalf)), 0, 0.45)
       : 0;
+    // The ceiling is whichever is TIGHTER: the absolute cap, or the limbus
+    // plus the authored scleral clearance. See SCLERA_CLEAR — the absolute
+    // cap was the binding one and it put 8.2 degrees of black at each canthus.
+    const apCeil = Math.min(Math.atan(AP_W_CEIL), limbusTh + SCLERA_CLEAR);
     const apTh = win
       ? clamp(Math.min(nasalRoom - follow, tempRoom + follow),
-        Math.atan(AP_W_FLOOR), Math.atan(AP_W_CEIL))
+        Math.min(Math.atan(AP_W_FLOOR), apCeil), apCeil)
       : Math.atan(0.78);
     const apW = Math.tan(apTh);
     // The globe may converge as far as the fissure has followed it, PLUS
@@ -1254,9 +1285,15 @@ export class Eyes {
   float eyDz = max(eyD.z, 1e-3);
   float eyGu = clamp((eyD.x / eyDz) / uApW, -1.0, 1.0);
   float eyGy = eyD.y / eyDz;
-  float eyShU = smoothstep(-0.30, 0.02, eyGy - feLidUpY(eyGu));
-  float eyShD = smoothstep(-0.22, 0.02, feLidDnY(eyGu) - eyGy);
-  eyCol *= mix(1.0, 0.48, max(eyShU, eyShD * 0.55));
+  // WIDTH IS THE DEFECT HERE, not depth. 0.30 in gnomonic y is 17 degrees of
+  // arc, 3.2 mm on this globe and a quarter of the corneal diameter, so the
+  // contact shadow was not a contact shadow: it was a soft black wash laid
+  // over the top third of the iris, and at macro_eye it is most of the dark
+  // crescent above the amber. A lid margin resting on a wet globe occludes
+  // about a millimetre. 0.145 is 8.3 degrees, 1.6 mm.
+  float eyShU = smoothstep(-0.145, 0.02, eyGy - feLidUpY(eyGu));
+  float eyShD = smoothstep(-0.110, 0.02, feLidDnY(eyGu) - eyGy);
+  eyCol *= mix(1.0, 0.55, max(eyShU, eyShD * 0.55));
 
   diffuseColor.rgb = eyCol;
 `)
@@ -1307,8 +1344,13 @@ export class Eyes {
   // Ramped on radius rather than on the corneal mask: the mask's transition
   // is only 9 % of the limbal radius wide and an occlusion step that sharp
   // would draw a ring of its own.
-  float eyAO = mix(1.0, 0.30,
-    smoothstep(0.86, 1.34, eyRho / max(uLimbusR, 1e-6)));
+  // Started at 0.86 of the limbal radius, which is INSIDE the cornea — the
+  // occlusion was already at 0.79 by the limbus itself and 0.71 at the
+  // canthus, on top of the contact shadow and the scleral falloff. Three
+  // multiplicative darkeners stacked on a 0.058 albedo is how you get a
+  // dead-matte annulus. Hold it off the cornea and stop it a shade higher.
+  float eyAO = mix(1.0, 0.36,
+    smoothstep(0.98, 1.40, eyRho / max(uLimbusR, 1e-6)));
   reflectedLight.directDiffuse *= eyAO;
   reflectedLight.indirectDiffuse *= eyAO;
   reflectedLight.directSpecular *= eyAO;
