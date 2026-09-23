@@ -490,6 +490,54 @@ export const FUR_DEFAULTS = {
   cardTipEdge: 1.40,
   cardJitter: 1.05,
   cardOpacity: 1.0,
+  /*
+   * GUARD-HAIR SHAPE. The two knobs behind bible 5's "curvature under the
+   * hair's own weight" and the critic's "frizzy uniform needles radiating
+   * outward ... no gravity, no crossing".
+   *
+   * cardCurve reparametrises a card ALONG ITSELF and moves its tip by exactly
+   * nothing: both the normal and the tangential term are mixed between the
+   * old shape and a hooked one that agrees with it at v = 0 and v = 1. The
+   * hair leaves the skin more steeply (v^0.70 instead of v) and does all of
+   * its combing over in the outer third (v^2 * (1.32 - 0.32 v) instead of
+   * v * (0.42 + 0.58 v)). That matters here specifically because every
+   * silhouette metric on this project is a 10th percentile over scanlines of
+   * the OUTERMOST coverage, so a shape change that holds the tip fixed cannot
+   * lower one -- which is the trap f88f36e documented for the stand-off, and
+   * the reason this is a reparametrisation rather than more `lay`.
+   *
+   * cardDroop is gravity for guard hair only, in addition to what furDynamics
+   * already applies through CARD_SHAPE.droopBoost. It is separate from uDroop
+   * because uDroop also drives the shells, and the shells' hair is undercoat.
+   * This one DOES move the tip, downward -- which is nearly free on the same
+   * metrics for the opposite reason: they scan rows horizontally, so vertical
+   * sag is perpendicular to every ramp they measure.
+   *
+   * Swept together on the exact coverage matte at `profile`, one page session,
+   * one instant. `flat` is cardCurve 0 / cardDroop 0, i.e. byte-for-byte the
+   * shape that shipped before this:
+   *
+   *   arm                       coverage   head p10   body p10   legs p10
+   *     flat (the old shape)     158 590     1.069      1.559      1.458
+   *     curve 1.0, droop 0       163 960     1.112      1.917      1.871
+   *     curve 0,   droop 0.28    158 790     1.000      1.679      1.602
+   *     curve 1.0, droop 0.28    163 xxx     1.112      2.493      1.871
+   *     curve 1.0, droop 0.55    165 313     1.105      2.453      2.038  <-
+   *     curve 1.0, droop 0.90    167 629     1.052      3.053      1.949
+   *
+   * Every band improves, which is the opposite of what the last three
+   * attempts at hair character cost, and it is not an accident: the curve
+   * holds the tip and the sag is perpendicular to the scan.
+   *
+   * 0.90 is where it stops being fur. The coat combs into a straight vertical
+   * curtain and loses its loft -- it reads wet, and the ear rims go from a
+   * fringe to a pompom (shots/fur-look1/nape.curvedroop90.png against
+   * nape.curvedroop55.png). The metrics do not see that: 0.90 has the best
+   * body p10 in the table. This is a case where the render decides and the
+   * number only keeps it honest.
+   */
+  cardCurve: 1.0,
+  cardDroop: 0.55,
   // Fraction of a card's lateral distance to its lock's site taken out by the
   // tip. 0 restores the pre-clump coat (an even spray of independent hairs);
   // much above 0.7 the locks pinch to points and the coat reads wet.
@@ -703,6 +751,8 @@ export function buildFurUniforms(ctx) {
     uCardTipEdge: { value: d.cardTipEdge },
     uCardJitter: { value: d.cardJitter },
     uCardClump: { value: d.cardClump },
+    uCardCurve: { value: d.cardCurve },
+    uCardDroop: { value: d.cardDroop },
     uCardOpacity: { value: d.cardOpacity },
   };
 }

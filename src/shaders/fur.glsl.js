@@ -1105,6 +1105,8 @@ uniform float uCardFloor;   // PEAK guard-hair stand-off past the coat, metres
 uniform float uCardFloorLow; // what the shortest lock gets, as a fraction of it
 uniform float uCardJitter;
 uniform float uCardClump;
+uniform float uCardCurve;   // 0 = the straight-ish original shape, 1 = hooked
+uniform float uCardDroop;   // extra gravity for GUARD HAIR only
 
 attribute float furLength;
 attribute float furStiffness;
@@ -1214,8 +1216,27 @@ void main(){
   // shells by ~25% and the longest by ~2x.
   float lay  = uLay * ra.z * (0.55 + 1.25 * soft) * (1.10 + 0.85 * hash11(lrnd * 37.1));
   float rise = ${CARD_SHAPE.rise};
-  vec3  offB = nb * (L * v * rise) + tb * (L * lay * v * (0.42 + 0.58 * v));
-  vec3  hdir = normalize(nb * rise + tb * (lay * (0.42 + 1.16 * v)));
+  /*
+   * THE HAIR'S OWN SHAPE, and the one property of it that matters here is
+   * that BOTH terms are 1.0 at v = 1, so uCardCurve moves the tip by zero.
+   * See FUR_DEFAULTS.cardCurve: the silhouette metrics are 10th percentiles
+   * of the outermost coverage, so a shape that holds the tip cannot lower
+   * one, and that is the whole reason the curvature goes here and not into
+   * more lay (which shortens perpendicular reach) or into a length draw
+   * (which f88f36e measured costing 0.16 of body p10).
+   *
+   * vn front-loads the climb out of the skin; vt delays the comb-over into
+   * the outer third. A hair that leaves the skin steeply and then hooks is
+   * what a guard hair does and what a radial needle does not.
+   */
+  float vn = mix(v, pow(max(v, 1e-4), 0.70), uCardCurve);
+  float vt = mix(v * (0.42 + 0.58 * v), v * v * (1.32 - 0.32 * v), uCardCurve);
+  vec3  offB = nb * (L * vn * rise) + tb * (L * lay * vt);
+  // The shading tangent is the derivative of that curve, not the chord, or
+  // the Kajiya-Kay lobe travels along a hair the geometry is not drawing.
+  float dn = mix(1.0, 0.70 * pow(max(v, 0.08), -0.30), uCardCurve);
+  float dt = mix(0.42 + 1.16 * v, 2.64 * v - 0.96 * v * v, uCardCurve);
+  vec3  hdir = normalize(nb * (rise * dn) + tb * (lay * dt));
 
   // --- the lock ------------------------------------------------------------
   // Lean the tip toward the lock's own site. This is what gives a tuft MASS:
@@ -1255,6 +1276,15 @@ void main(){
   // together, so it swings as one body. Per-card phase shears the bundle
   // apart on every gust and undoes the clumping in motion.
   vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), lrnd, ${CARD_SHAPE.droopBoost});
+  // Gravity for GUARD HAIR ONLY. furDynamics scales gravity, wind, gust and
+  // the body's lag by one boost, so raising that to get a hair to hang also
+  // makes it flap; and uDroop is shared with the shells, whose hair is
+  // undercoat and does not hang. This term is the one the critic's "no
+  // gravity" is about, and it is the only one of the three that is purely
+  // vertical -- which is why it is nearly free on row-scan silhouette
+  // metrics. It rides v*v with the rest of W: a cantilever pinned at the
+  // root, so the sag is all in the outer half.
+  W += uGravity * (uCardDroop * L * (0.30 + 1.0 * soft));
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
 
