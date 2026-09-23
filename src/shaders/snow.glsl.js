@@ -790,8 +790,19 @@ void main(){
   col += uSunColor * (uSunInt * uSheen.z * D * Vis * F * NoL * sun * (0.55 + 0.8 * packed));
 
   // Grazing-angle brightening: at a metre above the snow you see the sky in it.
+  //
+  // The aurora belongs in THIS term and was only in the diffuse one. §7 asks
+  // for a reflection in the snow and a reflection has SHAPE -- it is brightest
+  // where the surface turns toward grazing, it follows the drifts, and it is
+  // stronger on packed snow than on powder. A uniform green lift on the
+  // ambient is not a reflection, it is a tint, and it is invisible by
+  // construction however far you turn it up. uAurora is published in the same
+  // units as uSkyColor * uSkyInt (a fraction of the radiance of a white
+  // lambertian surface under this rig), so it goes in at weight 1 and no new
+  // gain is invented: what was already there is put where the eye reads it.
   float fres = 1.0 - NdotV; fres = fres * fres * (fres * fres) * fres;
-  col += uSkyColor * (uSkyInt * (0.035 + 0.55 * fres) * (0.35 + 0.65 * packed));
+  col += (uSkyColor * uSkyInt + uAurora)
+       * ((0.035 + 0.55 * fres) * (0.35 + 0.65 * packed));
 
   // --- sparkle --------------------------------------------------------------
   // Glints are a near-field phenomenon: at the horizon a crystal facet
