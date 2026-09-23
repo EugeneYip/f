@@ -360,7 +360,61 @@ export class Whiskers {
           const seed = pNose.clone().addScaledVector(back, b);
           const out = R.clone().multiplyScalar(side * Math.cos(az))
             .addScaledVector(U, Math.sin(az));
-          place(seed, out, len, 0.16 + 0.13 * fr, 'mystacial',
+          // SPREAD is the caudal share of the emergence direction, and it was
+          // the reason review 4 counted "4-5 strands drooping straight down
+          // rather than sweeping back past the cheek line". Measured per
+          // strand off the built geometry, in the head's own frame (chord
+          // root->tip; the probe sign-checks head-up against world up, which
+          // its first version did not and so reported every BROW whisker as
+          // drooping 60 degrees):
+          //
+          //   before  48 mystacial+genal, chord elevation -42.7 .. +27.3 deg,
+          //           median -11.1, and NINE steeper than -30 deg -- which is
+          //           the 4-5 per side the review saw. All nine are the
+          //           rostro-ventral follicles, and the telling part is not
+          //           their elevation but their AZIMUTH: chord cF only -0.04
+          //           to -0.41 against cR 0.63 to 0.84. They were not
+          //           drooping so much as pointing sideways, and a strand
+          //           that goes out rather than back has nothing but its own
+          //           droop left to show.
+          //
+          // The ventral rows emerge along a normal that already points down
+          // and out (MYS_AZ reaches -0.56 rad there), so 0.16-0.29 of caudal
+          // sweep could not turn them. MYS_AZ is not the knob to touch --
+          // REVIEW-2 blocker 7 was the dorsal limit climbing onto the brow
+          // and this row sits where a real mystacial pad sits.
+          //
+          // So the RAMP is inverted rather than the level raised. A flat lift
+          // to 0.34 + 0.20 fr fixed the droop the same amount (9 -> 4) and
+          // cost three strands, because it also swung the DORSAL rows -- which
+          // already swept back -- round toward the eye until the guard cut
+          // them (mystacial 44 kept -> 41, eye-guarded 6 -> 9). The dorsal
+          // rows did not need it. 0.20 + 0.34 fr gives the increase to the
+          // rows that were pointing sideways and leaves the top of the pad
+          // near where it was:
+          //
+          //   spread            0.16+0.13fr   0.34+0.20fr   0.20+0.34fr
+          //   strands total          53            50            53
+          //   mystacial kept/guarded 44/6          41/9          43/7
+          //   brow kept/guarded      5/3           5/3           6/2
+          //   chord elev below -30   9             4             4
+          //   steepest chord      -42.7 deg     -34.5 deg     -38.1 deg
+          //   median elevation    -11.1         -7.1          -11.9
+          //   caudal (cF<-0.30)   37/48         43/45         41/47
+          //   pointing FORWARD    1             0             0
+          //
+          // STILL FAILING, and it is a numbers disagreement not a taste one:
+          // §4b wants the row "well past the cheek line" and MYS_LEN's own
+          // comment says that is ~40 mm on this skull. Measured on the live
+          // rig, the mystacial roots sit 79-85 mm ROSTRAL of the eye plane,
+          // so at MYS_LEN's 54 mm ceiling not one strand of 47 can reach it:
+          // tips land 21-85 mm in front of the eyes. Either the 40 mm figure
+          // was measured against a shorter muzzle than §4g/§4i left us, or
+          // "cheek line" means the ruff's LATERAL edge rather than a caudal
+          // plane. Reported rather than tuned -- 82 mm was tried before and
+          // read as a starburst, and I am not going to re-buy that on my own
+          // reading of one phrase.
+          place(seed, out, len, 0.20 + 0.34 * fr, 'mystacial',
             { x: side * gauss(rand, 0, 0.05), y: gauss(rand, 0, 0.06) });
         }
       }
