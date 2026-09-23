@@ -51,8 +51,24 @@ highlight rolloff long and soft. **No teal-orange crush. No heavy vignette. No l
 
 Work in metres, Y-up, fox faces **+Z**.
 
-- Head-body length: **0.55 m**; shoulder height **0.28 m**; tail **0.32 m** (bushy, ~0.10 m diameter with fur)
+- Head-body length: **0.55 m**; shoulder height **0.28 m**; tail **0.32 m**
 - Mass 3.5 kg. Winter coat thickness up to **0.05 m** on the flank, thicker on the tail and ruff.
+
+> **The "~0.10 m diameter with fur" that used to sit on the tail line is
+> struck: it contradicted the very next clause.** A 0.10 m furred diameter is
+> 50 mm of radius; the flank carries up to 50 mm of coat and the tail is
+> supposed to be *thicker* than the flank — which leaves the tail's core at
+> zero or less. No non-negative animal satisfies both. A fur agent found this
+> after `7df3911` had cut mid-tail coat 67 → 36 mm to hit the 0.10 m figure,
+> leaving 23–26 mm of coat over a 24–27 mm core, i.e. **0.75× the flank** when
+> the same sentence asks for more.
+>
+> `REFERENCE-FOX.md` §2b has the only directly measured per-region figures
+> anyone found (Alaska State Museum specimen ASM #2): lower back guard hair
+> **20–35 mm** against tail **60–70 mm**. The sourced ordering is the one the
+> clause states, and our rig had it inverted. Tail coat is now the deepest on
+> the animal; the furred diameter that falls out of that is ~0.15 m, and the
+> 0.10 m figure has no source behind it.
 - Skull is **short and blunt** — an arctic fox is not a red fox. Muzzle short, forehead domed,
   ears **small, rounded, heavily furred** (cold adaptation; NOT the tall triangles of a red fox).
 - Legs short relative to body; paws broad with dense fur between the toes.
