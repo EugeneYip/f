@@ -303,7 +303,21 @@ const main = async () => {
         const t0 = performance.now(); const N = 40;
         for (let i = 0; i < N; i++) { D.step(1 / 60); D.render(); }
         sync();
-        out[tier] = { frameMs: +((performance.now() - t0) / N).toFixed(2), ...D.stats() };
+        // ORDER MATTERS. This used to read
+        //     { frameMs: <measured>, ...D.stats() }
+        // and `D.stats()` carries its own `frameMs` -- the rAF loop's running
+        // average, which the harness froze when it called `pause()`. So the
+        // spread overwrote the good number with the vsync interval, and every
+        // tier reported the same 14.78 ms however many triangles it drew.
+        //
+        // That is also what has been firing the contention detector below on
+        // EVERY run this session: "frame time barely moves across tiers whose
+        // triangle counts vary severalfold" is true by construction when the
+        // number is a constant. The detector was right about the symptom and
+        // wrong about the cause, and it taught everyone to discount a
+        // measurement that was never taken.
+        const measuredMs = +((performance.now() - t0) / N).toFixed(2);
+        out[tier] = { ...D.stats(), frameMs: measuredMs };
       }
       return out;
     });
