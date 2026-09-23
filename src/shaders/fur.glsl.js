@@ -1109,6 +1109,9 @@ uniform float uCardJitter;
 uniform float uCardClump;
 uniform float uCardCurve;   // 0 = the straight-ish original shape, 1 = hooked
 uniform float uCardDroop;   // extra gravity for GUARD HAIR only
+uniform float uCardInteriorLen;  // card length multiplier AWAY from the outline
+uniform vec2  uCardEdgeLen;      // vEdge band the multiplier ramps out over
+uniform float uCardIntMix[${REGION_COUNT}];  // per-region share of it, 0 = exempt
 
 attribute float furLength;
 attribute float furStiffness;
@@ -1202,6 +1205,51 @@ void main(){
   vec3  nb   = normalize(normal);
   vec3  tb   = furTangent;
 
+  /* ------------------------------------------------- INTERIOR vs OUTLINE --
+   *
+   * The review's headline look defect -- "long combed hair, not a dense pile,
+   * ON THE INTERIOR of the body" -- and the outline requirement that every
+   * previous attempt to shorten a card ran into are the SAME knob only
+   * because card length was a single number for both. They are not the same
+   * place in the image.
+   *
+   * For a smooth closed surface the silhouette is exactly where N.V = 0, so
+   * vEdge (1 - |dot(N, V)|) is 1 on the contour and 0 on a flank facing the
+   * camera. 250d67e measured that and read it as a defect ("uCardTipEdge is a
+   * no-op on a body seen side-on"); it is also the clean discriminator this
+   * needs. Cards that can put hair over sky are the high-vEdge ones -- on a
+   * cylinder of radius R a card at angle phi from the front is rooted
+   * R(1-cos phi) inside the outline and reaches L cos phi out of it, so it
+   * only reaches the contour while cos phi > R/(R+L), which for the body's
+   * 150 px radius against a 30 px card is vEdge > ~0.44. Below that a card
+   * cannot be on the outline at any framing, and its whole length is drawn
+   * over coat.
+   *
+   * So the length multiplier ramps OUT over uCardEdgeLen and is 1.0 by the
+   * time a card can reach the contour. Silhouette reach is untouched by
+   * construction, which is also why reachReport()'s band still bounds the
+   * right quantity -- see the interiorLen note there.
+   *
+   * It is evaluated at the card's ROOT, not per vertex: a card must not bend
+   * along its own length because its tip leans toward the outline.
+   */
+  mat4 sk  = furSkinMatrix();
+  mat3 sk3 = mat3(sk);
+  mat3 m3  = mat3(modelMatrix);
+  vec3 rootO  = (sk * vec4(position, 1.0)).xyz;
+  vec3 rootW  = (modelMatrix * vec4(rootO, 1.0)).xyz;
+  vec3 wn     = normalize(m3 * normalize(sk3 * nb));
+  float edgeRoot = 1.0 - abs(dot(wn, normalize(cameraPosition - rootW)));
+  float ew    = smoothstep(uCardEdgeLen.x, uCardEdgeLen.y, edgeRoot);
+  // Per region, because one global number for this is the mechanism behind
+  // "length and direction are identical on the shoulder, flank, haunch, cheek
+  // and muzzle". A mix above 1 extrapolates -- that is deliberate, it is how
+  // the muzzle gets a SHORTER interior coat than the skull -- so it is
+  // floored. 0 exempts a region entirely; flat plates need that, because on a
+  // plate seen face-on vEdge is low over the RIM as well as the middle.
+  float iLen  = max(0.12, mix(1.0, uCardInteriorLen, uCardIntMix[ri]));
+  L *= mix(iLen, 1.0, ew);
+
   // Fan each LOCK off the flow direction. Without this every card on the
   // dorsal line sweeps back on exactly the same heading and the topline reads
   // as a combed mane rather than as separate locks.
@@ -1264,19 +1312,13 @@ void main(){
   if (sl > slMax) toSite *= slMax / sl;
   offB += toSite * (uCardClump * v * v);
 
-  mat4 sk  = furSkinMatrix();
-  mat3 sk3 = mat3(sk);
+  // sk / sk3 / m3 / rootO / rootW / wn are already computed above, for the
+  // interior-vs-outline split; they are the same quantities.
   vec3 posO  = (sk * vec4(position + offB, 1.0)).xyz;
-  vec3 rootO = (sk * vec4(position, 1.0)).xyz;
-  vec3 nO    = normalize(sk3 * nb);
   vec3 hO    = normalize(sk3 * hdir);
 
-  mat3 m3 = mat3(modelMatrix);
   vec4 wp = modelMatrix * vec4(posO, 1.0);
-  vec3 wn = normalize(m3 * nO);
   vec3 wh = normalize(m3 * hO);
-
-  vec3 rootW = (modelMatrix * vec4(rootO, 1.0)).xyz;
   // Wind phase is the LOCK's: a tuft is a bundle of hairs that have matted
   // together, so it swings as one body. Per-card phase shears the bundle
   // apart on every gust and undoes the clumping in motion.

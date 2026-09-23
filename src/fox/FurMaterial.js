@@ -192,6 +192,33 @@ export const CARD_FLOOR_SCALE = {
   // empty on purpose -- see above. 1.0 is the global floor.
 };
 
+/**
+ * Per-region share of `cardInteriorLen`, the card-length multiplier that is
+ * applied AWAY from the outline (uCardIntMix in the card vertex shader).
+ *
+ * 1.0 = the global value · 0 = exempt · above 1 extrapolates, i.e. that
+ * region's interior coat is shorter still. See the long note in the card
+ * vertex shader for why an interior card and a contour card are not the same
+ * card: for a smooth surface the outline is exactly where N.V = 0, so the
+ * cards that can put hair over sky and the cards that make the flank read as
+ * separated strands are disjoint sets, and length can be cut in one without
+ * being cut in the other. Every earlier attempt on the review's "long combed
+ * hair" cut both at once and paid 6-8% of the animal for it.
+ *
+ * TWO KINDS OF EXEMPTION, both measured, both for the same reason -- vEdge is
+ * a poor outline test on a THIN PLATE. The card fragment shader already
+ * carries this warning for uCardInner: on the ear pinna seen face-on the
+ * surface faces the camera over its whole extent INCLUDING the rim that has
+ * to break the outline, so an interior/outline split keyed on vEdge would
+ * shorten the rim fringe with the rest. The ears are therefore exempt, and
+ * the nose is exempt because its coat is uNoseFade's and not a length
+ * question at all.
+ */
+export const CARD_INTERIOR_MIX = {
+  0: 0.0,          // nose -- uNoseFade owns this coat
+  6: 0.0, 7: 0.0,  // earOuter / earInner -- thin plates, see above
+};
+
 export const CARD_LEN_SCALE = {
   0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.0,
   8: 1.0, 9: 1.0, 10: 1.0, 11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0,
@@ -783,6 +810,67 @@ export const FUR_DEFAULTS = {
    */
   cardCurve: 1.0,
   cardDroop: 0.55,
+
+  /*
+   * THE INTERIOR COAT'S LENGTH, as a multiple of the outline coat's.
+   *
+   * Review blocker 5: "the coat is long combed hair, not a dense pile --
+   * long straggly individually-resolvable strands with dark gaps between
+   * them, ON THE INTERIOR of the body, not just at the silhouette". 250d67e
+   * attributed the strands to the CARDS (hiding them leaves a granular mass
+   * with no strands anywhere) and then priced the only two knobs that shorten
+   * one: uCardFloor 0 costs 7.6% of the animal's coverage and uCardLength
+   * 1.20 -> 1.05 costs 5.9%, both of which also collapse the body band. That
+   * is what this number is for -- it shortens a card only where the card
+   * cannot be on the outline, so the outline does not pay.
+   *
+   * cardEdgeLen is the vEdge band it ramps out over. The upper end is where a
+   * card starts being able to reach the contour; see the geometry in the card
+   * vertex shader.
+   */
+  /*
+   * MEASURED, `profile`, 2100x1350, one page session, one instant, against a
+   * `nocards` positive control in the same session. "STRAND" is the rms of
+   * the 4/8/16 px octaves of luminance inside the coverage matte eroded by
+   * 25 px -- the animal's INTERIOR, with the whole fringe and everything the
+   * contour metric grades removed, so the two instruments cannot be reading
+   * the same pixels:
+   *
+   *   arm                 interior   STRAND   coverage   L/R/T/B contour p10
+   *     base                141.5     6.289    419 063   1.510 2.072 1.746 1.791
+   *     0.30 / [.40,.62]    131.2     3.551    416 009   1.532 2.018 1.720 1.651
+   *     NO CARDS AT ALL     131.2     3.344    339 457   1.000 1.000 1.000 1.000
+   *
+   * The interior lands on the cards-free coat to a tenth of a level and the
+   * strand band to 6%, while the outline keeps 96% of what the cards
+   * contribute to it -- 0.9% of the animal against the 7.6% and 5.9% that
+   * uCardFloor 0 and uCardLength 1.05 cost for the same interior effect in
+   * 250d67e. All four contour p10s stay far above 4f's 1.15 floor and the
+   * frame's cliff count falls 1844 -> 1839.
+   *
+   * THE BAND. Pushed one notch further out, [0.62, 0.74], the left p10
+   * collapses 1.440 -> 1.000 and coverage falls 0.42%: that is the measured
+   * position of the "a card can still reach the contour" boundary and it
+   * agrees with the cylinder estimate in the shader to within a tenth. 0.62
+   * is inside it. [.40,.62], [.45,.58] and [.50,.62] are equivalent on every
+   * number above; the widest ramp is taken because the transition from
+   * granular interior to hairy outline is a thing you can see.
+   *
+   * THE LENGTH SATURATES. 0.40 and 0.25 read 153.1 and 152.4 at `portrait`:
+   * below about 0.4 the card is already inside the shells and shortening it
+   * further removes nothing more. 0.30 sits under that knee with margin and
+   * is not the smallest value that works, which is deliberate -- a card that
+   * is merely hidden is cheaper to get wrong than one that is annihilated.
+   *
+   * WHAT IT DOES NOT FIX, measured in the same table: the interior is now
+   * 131.2 where it was 141.5, and every level of that is the bright card tips
+   * no longer being drawn over it, because `nocards` reads 131.2 as well. The
+   * review's "the lit coat is 10-20% darker than lit snow" is therefore now
+   * entirely a SHELL shading question, with the cards no longer papering over
+   * it. That is the next thing, and it is not this knob.
+   */
+  cardInteriorLen: 0.30,
+  cardEdgeLen: [0.40, 0.62],
   // Fraction of a card's lateral distance to its lock's site taken out by the
   // tip. 0 restores the pre-clump coat (an even spray of independent hairs);
   // much above 0.7 the locks pinch to points and the coat reads wet.
@@ -940,6 +1028,7 @@ export function buildFurUniforms(ctx) {
   const regionB = [];
   const regionC = [];
   const floorScale = [];
+  const intMix = [];
   // The band is a hard bound on the TABLE, not advice. Authoring 1.8 here once
   // put the card tips at 2.0x the local coat and produced the urchin coat; a
   // guard that only checks the global knob cannot see that, so clamp at the
@@ -959,6 +1048,7 @@ export function buildFurUniforms(ctx) {
     regionC.push(new THREE.Vector4(got, CARD_INNER_FLOOR[i] ?? 0,
                                    SHELL_LEN_SCALE[i] ?? 1.0, TRANS_BOOST[i] ?? 1.0));
     floorScale.push(CARD_FLOOR_SCALE[i] ?? 1.0);
+    intMix.push(CARD_INTERIOR_MIX[i] ?? 1.0);
   }
   if (clamped.length) {
     console.warn(`[fur] CARD_LEN_SCALE outside reachBand ${CARD_SHAPE.reachBand} — ` +
@@ -1135,6 +1225,9 @@ export function buildFurUniforms(ctx) {
     uCardDroop: { value: d.cardDroop },
     uCardOpacity: { value: d.cardOpacity },
     uCardHairs: { value: d.cardHairs },
+    uCardInteriorLen: { value: d.cardInteriorLen },
+    uCardEdgeLen: { value: new THREE.Vector2(d.cardEdgeLen[0], d.cardEdgeLen[1]) },
+    uCardIntMix: { value: intMix },
     uCardCut: { value: d.cardCut },
   };
 }

@@ -577,6 +577,27 @@ export class FurSystem {
     // constant that every lock in the coat received.
     const floor = u.uCardFloor?.value ?? 0;
     const fScale = u.uCardFloorScale?.value ?? [];
+    /*
+     * THE THIRD PER-REGION TABLE, declared here in the same edit that adds it,
+     * because the note above says not to add one without doing so.
+     *
+     * uCardIntMix x uCardInteriorLen is the card-length multiplier applied
+     * AWAY from the outline. It is deliberately NOT in `reach()` and NOT in
+     * `standOf()`, and that is a property of the shader rather than a
+     * convenience: the multiplier ramps to exactly 1.0 by vEdge
+     * uCardEdgeLen.y, which is below the vEdge at which a card can first
+     * reach the contour, so every card this band is about is drawn at its
+     * full authored length. reachBand bounds SILHOUETTE reach -- it exists
+     * because card tips standing over open sky are what the urchin coat was
+     * -- and a term that is 1.0 on the silhouette cannot move it.
+     *
+     * It can only ever SHORTEN, never lengthen: `iLen` is a max(0.12, ...) of
+     * a mix toward a value the authoring layer clamps at 1.0 below, so it
+     * cannot be used to get round clause A or clause B either. Reported per
+     * region so the number stays visible.
+     */
+    const iMix = u.uCardIntMix?.value ?? [];
+    const iLenG = u.uCardInteriorLen?.value ?? 1;
     const floorLow = u.uCardFloorLow?.value ?? 1;
     const floorMean = floor * (floorLow + (1 - floorLow) * CARD_SHAPE.floorDrawMean);
     const coat = this.regionCoatDepth();
@@ -661,6 +682,7 @@ export class FurSystem {
                     min: +rMin.toFixed(3), mean: +rMean.toFixed(3), max: +rMax.toFixed(3),
                     standMm: +(standM * 1000).toFixed(2),
                     floorScale: +fsc.toFixed(3),
+                    interiorLen: +Math.max(0.12, 1 + (iMix[i] ?? 1) * (iLenG - 1)).toFixed(3),
                     totalRatio: c > 0 ? +(1 + standM / c).toFixed(3) : null,
                     floorBinds: floor * fsc > c * PROP,
                     vsShell: +(rMean / shell).toFixed(3),
@@ -686,6 +708,10 @@ export class FurSystem {
       floorCapMm: +(CARD_SHAPE.standFloorMax * 1000).toFixed(2),
       floorOverMm: +(floorOver * 1000).toFixed(2),
       maxStandMm: +maxStandMm.toFixed(2),
+      // Informational: NOT part of `ok`. See the note next to iMix above.
+      interiorLen: +iLenG.toFixed(3),
+      interiorLenMin: +Math.min(...rc.map((_, i) =>
+        Math.max(0.12, 1 + (iMix[i] ?? 1) * (iLenG - 1)))).toFixed(3),
       deepestCoatMm: +(deepest * 1000).toFixed(2),
       min: +min.toFixed(3), mean: +(meanSum / rc.length).toFixed(3), max: +max.toFixed(3),
       worstDroop: +worstDroop.toFixed(3), detail,
