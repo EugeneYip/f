@@ -868,6 +868,56 @@ export const FUR_DEFAULTS = {
    * against shots/fur-after/tail.png.
    */
   cardHairs: 2.4,
+  /*
+   * ALPHA BELOW WHICH A CARD FRAGMENT IS DISCARDED. Shipped unchanged at the
+   * 0.004 it was hard-coded at; it is a knob now because it is one of the two
+   * levers on review blocker 6, and both levers are priced below.
+   *
+   * BLOCKER 6, "the coat's lower contour is a pixel lattice, not hair" --
+   * right-angled chevrons and staples along the tail and legs. Attributed at
+   * `profile`, 2100x1350, one page session, one instant, six arms:
+   *
+   *     hide the FUR        lattice GONE
+   *     hide the CARDS      lattice GONE          (so it is not the shells)
+   *     hide POST           lattice GONE
+   *     DOF scale 0         lattice UNCHANGED, statistics identical to base
+   *     bloom 0             lattice UNCHANGED, statistics identical to base
+   *     card LOD dissolve 1.6x / 2.5x / 4x earlier
+   *                         lattice UNCHANGED; coverage moves 15 px in
+   *                         410 393. fwidth of the per-hair cell is already
+   *                         far under the dissolve threshold down there.
+   *
+   * So it is the CARDS resolved by TAA, and the mechanism is depth. The card
+   * material is `transparent: true` AND `depthWrite: true`, so every fragment
+   * that survives this cut stamps a NEAR depth even at 1% alpha; TAA has no
+   * velocity buffer and reprojects through depth (see src/fx/TAA.js, which
+   * says so); and around the fringe WHICH faint card wins the depth test
+   * changes with the sub-pixel jitter. The resolve turns that into a grid.
+   *
+   * BOTH FUR-SIDE FIXES WORK AND BOTH COST THE OUTLINE. spec's new
+   * four-direction "contour has no bare run at profile" checks, share of scans
+   * under the 1.15 hair floor, 4f allows 2%:
+   *
+   *     arm                        left    right    top    bottom   lattice
+   *       shipped                  6.3%    1.9%    4.2%    4.0%     present
+   *       cards depthWrite false   6.7%    2.6%    8.9%    6.2%     GONE
+   *       cardCut 0.12               --      --      --      --     nearly gone
+   *
+   * and on the four-direction cliff count at 1400x900, cardCut 0.004 -> 0.08
+   * -> 0.12 runs 48 -> 73 -> 94 bare columns while coverage falls 3.6%.
+   * depthWrite false raises coverage 0.7% and removes the lattice completely,
+   * and is the standard treatment for alpha-blended hair cards -- but it makes
+   * every one of the four directions worse, including the two that currently
+   * pass, so it is not shipped either.
+   *
+   * THE CHEAP FIX IS NOT OURS. A card that is 1% opaque should not be writing
+   * depth at all, and the two ways to arrange that in one pass -- gl_FragDepth
+   * or a second depth-only card pass -- cost early-Z and fill respectively, on
+   * a frame budget with no headroom. The other end is TAA's depth
+   * reprojection, which is postfx's file. Handing it over with the controls
+   * above rather than paying for it here.
+   */
+  cardCut: 0.004,
 };
 
 /**
@@ -1085,6 +1135,7 @@ export function buildFurUniforms(ctx) {
     uCardDroop: { value: d.cardDroop },
     uCardOpacity: { value: d.cardOpacity },
     uCardHairs: { value: d.cardHairs },
+    uCardCut: { value: d.cardCut },
   };
 }
 

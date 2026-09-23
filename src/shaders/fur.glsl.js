@@ -1381,6 +1381,7 @@ ${FUR_SHADE}
 uniform float uCardInner;
 uniform float uCardTipEdge;    // vEdge exponent at a card's TIP; see below
 uniform float uCardOpacity;
+uniform float uCardCut;         // alpha below which a card fragment is discarded
 uniform float uCardHairs;      // hairs per card, x the authored 2-5; see below
 
 varying vec4  vCard;
@@ -1417,6 +1418,13 @@ void main(){
   a *= smoothstep(0.0, 0.12, v);           // hide the root inside the shells
 
   // Sub-pixel cards dissolve to their mean instead of flickering.
+  //
+  // NOT A LEVER ON THE PIXEL LATTICE, measured: a bias on fwidth(s) here that
+  // pulls the dissolve 1.6x, 2.5x and 4x earlier moved the animal's coverage
+  // at the profile framing by 15 px in 410 393, and the interior contrast by
+  // 0.003.
+  // fwidth(s) along the lower contour is already far below 0.30, so this term
+  // is not running there at all. See FUR_DEFAULTS.cardCut for what is.
   float lod = 1.0 - smoothstep(0.30, 0.85, fwidth(s));
   a = mix(clamp(rad * 0.70, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
 
@@ -1454,7 +1462,14 @@ void main(){
   float edge = mix(innerFloor, 1.0,
                    pow(clamp(vEdge, 0.0, 1.0), mix(2.6, uCardTipEdge, tipOut)));
   a *= edge * uCardOpacity * vP0.w;
-  if (a < 0.004) discard;
+  // THE DEPTH-WRITE THRESHOLD, not just a fill saving. The card material is
+  // transparent AND depthWrite: true, so any fragment that survives this test
+  // stamps a NEAR depth into the buffer even at 1% alpha -- and TAA reprojects
+  // through depth (it has no velocity buffer). Around the coat's fringe that
+  // leaves a buffer of card-tip depths belonging to hairs you cannot see, and
+  // which of them wins the depth test changes with the sub-pixel jitter. See
+  // FUR_DEFAULTS.cardCut.
+  if (a < uCardCut) discard;
 
   vec3 V = normalize(cameraPosition - vWPos);
   vec3 T = normalize(vTan);
