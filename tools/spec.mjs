@@ -1150,6 +1150,54 @@ const results = await page.evaluate(async () => {
     }
   }
 
+  // 10c. THE FOOT MEETS THE SNOW — measured in the IMAGE, not on a bone.
+  //
+  //      `audit.mjs` has 76 checks certifying paw contact and every one reads
+  //      a bone position. A joint can be perfectly planted while nothing
+  //      renders at its position, and that is exactly what shipped: the
+  //      anatomy agent measured the drawn coat sitting 44-79 px (up to 48 mm)
+  //      BELOW the snow line at every paw, with all 76 checks green.
+  //
+  //      Worse, the instrument shaped the product. `Locomotion.js` says so in
+  //      its own words -- it drives the bone down because "the audit
+  //      classifies stance from that BONE at a 22 mm threshold" -- and the
+  //      metacarpal rides 17.1 mm above the sole. A tolerance became a design
+  //      constraint and buried the foot.
+  //
+  //      So: find each paw in the coverage matte, find where the terrain
+  //      actually is beneath it, and compare. No bone is consulted.
+  {
+  atTime();
+    const m = matteOf('paws');
+    if (m) {
+      const { cov, W, H } = m;
+      out.footGround = {};
+      for (const k of ['pawL', 'pawR', 'footL', 'footR']) {
+        const b = ctx.fox?.bone?.(k);
+        if (!b) { out.footGround[k] = null; continue; }
+        b.updateWorldMatrix(true, false);
+        const wp = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+        const gy = ctx.terrain?.heightAt ? ctx.terrain.heightAt(wp.x, wp.z) : null;
+        if (gy == null) { out.footGround[k] = null; continue; }
+        const pg = new THREE.Vector3(wp.x, gy, wp.z).project(ctx.camera);
+        const pp = wp.clone().project(ctx.camera);
+        if (pg.z > 1 || pp.z > 1) { out.footGround[k] = null; continue; }
+        const gpx = (-pg.y * 0.5 + 0.5) * H;
+        const ppx = Math.round((pp.x * 0.5 + 0.5) * W);
+        let lowest = -1;
+        for (let x = Math.max(0, ppx - 12); x <= Math.min(W - 1, ppx + 12); x++)
+          for (let y = H - 1; y > 0; y--)
+            if (cov[y * W + x] > 0.5) { if (y > lowest) lowest = y; break; }
+        const dist = ctx.camera.getWorldPosition(new THREE.Vector3()).distanceTo(wp);
+        const pxPerM = H / (2 * dist * Math.tan(ctx.camera.fov * Math.PI / 360));
+        out.footGround[k] = lowest < 0 ? null : {
+          belowSnowPx: +(lowest - gpx).toFixed(1),
+          belowSnowMm: +((lowest - gpx) / pxPerM * 1000).toFixed(1),
+        };
+      }
+    }
+  }
+
   // 11. AURORA STRUCTURE — §7 asks for vertical filaments.
   //
   //     Measured on GREEN EXCESS, not luminance, and only where the aurora
@@ -1439,6 +1487,37 @@ for (const [region, v] of Object.entries(sbr)) {
 // despite an obvious visual difference). Superseded by the per-region check
 // above, which masks the animal properly. Kept as a warning so the number
 // stays visible without gating on it.
+// The DRAWN foot against the DRAWN snow.
+{
+  const fg = results.footGround ?? {};
+  const seen = Object.entries(fg).filter(([, v]) => v);
+  if (!seen.length) {
+    record('the drawn foot meets the drawn snow', false,
+      'no paw could be located in the coverage matte at `paws` — a failure, ' +
+      'not a pass. An unmeasurable foot is exactly the condition under which ' +
+      '76 bone-space checks certified a foot buried 48 mm below the snow');
+  } else {
+    // The ceiling is DERIVED, not picked. My first attempt was a flat 15 mm
+    // and it was wrong for a reason worth recording: the coat legitimately
+    // hangs below the sole by its own depth, so a paw resting exactly ON the
+    // snow still shows coat below the line. `FUR[R.pawFront]` is 9.5 mm, and
+    // a 3.5 kg animal on powder genuinely sinks — §6 requires that it does.
+    // Allowing 15 mm of sink on top of the 9.5 mm of coat gives 25 mm.
+    //
+    // What this must still catch is the defect that shipped: 44-79 px, up to
+    // **48 mm**, which is the ankle under the snow and the leg amputated by
+    // the ground plane, certified green by all 76 bone-space checks.
+    const CEILING_MM = 25;
+    const worst = seen.reduce((a, b) => (b[1].belowSnowMm > a[1].belowSnowMm ? b : a));
+    record('the drawn foot meets the drawn snow', worst[1].belowSnowMm <= CEILING_MM,
+      seen.map(([k, v]) => `${k} ${v.belowSnowMm}mm`).join(', ') +
+      ` — worst ${worst[0]} at ${worst[1].belowSnowMm}mm below the projected ` +
+      `snow line (max ${CEILING_MM}mm = 9.5mm of paw coat + 15mm of ` +
+      `legitimate sink). Measured on the coverage matte against ` +
+      `ctx.terrain.heightAt; no bone consulted`);
+  }
+}
+
 // Silhouette HARDNESS, validated against a fur-off control in the same frame.
 const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
 {
