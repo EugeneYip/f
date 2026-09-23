@@ -77,7 +77,21 @@ export const TIERS = {
     label: 'Ultra',
     dpr: 1.0, maxDpr: 2.0,
     shadowMapSize: 4096, shadowCascades: 3, softShadow: true,
-    furShells: 26, furFins: true, furCards: 19000, furAniso: true,
+    // 40000 cards, not 19000 — `ultra` was drawing FEWER than `high`.
+    //
+    // That inversion arrived when I raised `high` to 26000 on the fur
+    // agent's measurement and did not walk the ladder up behind it. It made
+    // `ultra` strictly worse than `high` on the coat's density, which is the
+    // one axis the tier exists to spend on.
+    //
+    // It is also the only headroom left worth spending. `ultra` measures
+    // 20.40 ms against a 26 ms budget, and the fur agent's shell-spacing
+    // ceiling now clamps BOTH high and ultra to 14 effective shells at
+    // 1280x800 — correctly, since shells closer than 3.2 px dissolve into
+    // their own mean and the 15th-18th were paying negative. So `ultra`
+    // cannot differentiate itself with shells any more, and cards are the
+    // measured-good lever: 0.21 ms per 13000 for a real gain in band fill.
+    furShells: 26, furFins: true, furCards: 40000, furAniso: true,
     terrainSegments: 512, terrainRadius: 240,
     snowParticles: 20000, snowLayers: 3,
     ao: true, bloom: true, dof: true, godRays: true, taa: true, smaa: false,

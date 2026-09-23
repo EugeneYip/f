@@ -191,6 +191,34 @@ per variant invented a fan of hard stripes around an eyelid that does not
 exist converged, and an agent published a wrong cause before catching it
 itself. Converge before you conclude.
 
+**`page.screenshot()` can return a stale frame for a paused WebGL canvas.**
+A fur agent ran three arms differing by 400,000 triangles and got PNGs
+differing by no more than 31/255 — it nearly published "the controls do not
+separate". Capturing inside the page with
+`ctx2d.drawImage(renderer.domElement, 0, 0)` separated the same three arms at
+105–129/255. `shoot.mjs` happens to be safe because it renders 2 + 18 frames
+before the shot, and low-vs-ultra PNGs from it differ by a max of 177 with
+21% of pixels over 8 — but any new probe that applies an arm and screenshots
+is exposed. Use the in-page capture; `tools/matte.mjs` shows the pattern.
+
+**Two audit thresholds have become design constraints.** This is the
+sharpest form of the instrument problem here, and neither case was hidden —
+both were written down deliberately by the agent that complied:
+
+- `FoxBrain.MAX_ANKLE_MPS = 0.027` exists because "tools/audit.mjs measures
+  exactly that bone; rate-limiting the plate quaternion bounds it by
+  construction at any gait ... budget is 0.045, this leaves a ~40% margin."
+  So the check passes because a limiter runs, and reports nothing about
+  whether the foot visibly slides.
+- A 22 mm stance tolerance drove the metacarpal down to satisfy it, and
+  buried the sole 48 mm under the snow while all 78 paw checks stayed green.
+
+A number an implementer can see and satisfy directly **will** be satisfied
+directly. So a check on a quantity the product can reach is worth little: put
+the assertion in image space, where it can only be satisfied by the thing
+actually looking right. `spec.mjs`'s `the drawn foot meets the drawn snow` is
+the model.
+
 **The dangerous instrument failure is the ABSENT measurement, not the wrong
 one.** Four times this session an instrument failed by removing a number
 rather than reporting a bad one, and each took far longer to notice than any
