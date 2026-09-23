@@ -285,7 +285,19 @@ const main = async () => {
           // stopped that loop before any of this ran -- so it reported the
           // idle vsync interval for every pose. Measure it for real.
           const measuredMs = D.measureFrameMs ? D.measureFrameMs(40) : null;
-          return { ...D.stats(), measuredMs, simTime: D.time?.() ?? null,
+          const st = D.stats();
+          // DROP the rAF loop's frozen frameMs/fps rather than shipping them.
+          //
+          // The console printed `measuredMs` and report.json kept printing
+          // `frameMs: 15.69, fps: 63.7` -- identical for all 14 poses and at
+          // every tier, while measuredMs in the same file spanned 23.3 to
+          // 87.7 ms. REVIEW.md step 3 sends critics to that JSON, so the file
+          // the reviewer reads was the one telling the lie. There is no
+          // honest value to put in `fps` here: the harness drives frames by
+          // hand with the render loop stopped, so a frames-per-second figure
+          // is meaningless by construction. Better absent than wrong.
+          delete st.frameMs; delete st.fps;
+          return { ...st, measuredMs, simTime: D.time?.() ?? null,
                    root: D.probe?.()?.root ?? null };
         }, { name, taa: args.taa });
 
@@ -334,17 +346,29 @@ const main = async () => {
       }
     }
 
-    // Unpaused perf probe: real frame times at each tier.
+    // Per-tier frame time, WITH A GPU DRAIN.
+    //
+    // This used to time `render()` calls and nothing else. GL commands queue,
+    // so it measured CPU submit time and reported {low 0.42, medium 0.45,
+    // high 0.48, ultra 0.53} -- sub-millisecond, and ultra barely slower than
+    // low, on tiers whose triangle counts differ severalfold. A one-pixel
+    // readPixels after the batch forces the driver to finish, so the elapsed
+    // time includes the GPU. Same fix as `D.measureFrameMs`.
     report.perf = await page.evaluate(async () => {
       const D = window.FoxDebug;
+      const gl = D.ctx().renderer.getContext();
+      const px = new Uint8Array(4);
+      const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
       const out = {};
       for (const tier of ['low', 'medium', 'high', 'ultra']) {
         D.setQuality(tier);
         D.setPose('hero');
-        for (let i = 0; i < 6; i++) { D.step(1 / 60); D.render(); }
+        for (let i = 0; i < 12; i++) { D.step(1 / 60); D.render(); }   // warm shaders
+        sync();
         const t0 = performance.now();
         const N = 30;
         for (let i = 0; i < N; i++) { D.step(1 / 60); D.render(); }
+        sync();
         out[tier] = +((performance.now() - t0) / N).toFixed(2);
       }
       return out;
