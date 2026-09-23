@@ -417,6 +417,21 @@ export class FurSystem {
    * `low` is measured -- the 69.2 run reported drift 0.054 and contended
    * false while reading low=21.04 against a budget of 8. Difference arms
    * inside one session; never across runs.
+   *
+   * MEASURED AGAIN ON A QUIET MACHINE, and this is the number to quote. Eight
+   * identical arms back to back read
+   *
+   *     38.42 / 17.86 / 17.80 / 17.88 / 17.86 / 17.86 / 17.82 / 17.90
+   *
+   * so the FIRST call in a session pays a 20 ms shader compile and the rest
+   * are stable to 0.05 ms. But a second session with the SAME configuration
+   * in two different sequence positions read 17.005 and 17.705 -- a residual
+   * 0.70 ms ramp that is not compile and not code. That is the real
+   * resolution of this instrument: about 0.7 ms, whatever the spread of any
+   * one arm suggests. So `[high]` is 17.0-17.9 ms against a 16.7 budget --
+   * over, genuinely, by 0.3 to 1.2 -- and NOT because of fur, which is
+   * 4.7-5.2 ms of its own 6 ms. The pre/post arms of this wave differ by
+   * -0.465 ms in one session and +0.095 in the other: free.
    */
   update(dt, ctx) {
     if (!this.uniforms) return;
