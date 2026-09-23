@@ -629,10 +629,58 @@ function earFrame() {
  * frontal read and re-posing the ear needs its own render loop.
  */
 export const EAR = {
-  rBase: 0.0228,      // world half-radius at the pinna root (x `wide` across)
-  tipRatio: 0.49,     // r(apex) / r(root) — the §4c base-to-tip wedge
-  power: 1.8,         // >1 bulges the outline off the chord: convex sides
-  uEnd: 0.93,         // the chain stops here; the end cap forms the apex
+  /**
+   * ## The blade's OUTLINE, which is what §4c's "rounded triangle" is about
+   *
+   * `rAt(u) = rBase * (1 - (1 - tipRatio) * u^power)`, so `power` is the
+   * shape of the two long sides and `tipRatio` is how wide the apex is.
+   *
+   * `power` was 1.8 and the comment on it read ">1 bulges the outline off the
+   * chord: convex sides". That is true and it is also what made the paddle:
+   * at 1.8 the blade holds ~95 % of `rBase` for the first third of its length
+   * and then turns over, which is parallel sides with a dome on top — §4c's
+   * "semicircular paddle", the exact thing that section supersedes §4b to
+   * forbid. At 1.0 the radius is linear in u, which is a straight-sided
+   * triangle, which is what §4c asks for in words.
+   *
+   * Swept on the built SDF. `profile` looks along -X (14cb891), so the
+   * profile outline is the shadow on (z, y); `sN` is the width of that shadow
+   * measured perpendicular to the projected pinna axis, N mm below the apex.
+   * `proud` is §4c's own guard — frontal shadow top at the pinna's x minus
+   * the same at the midline — over the frontal base width.
+   *
+   *   power tipRatio uEnd rBase | s10  s15  s20  s20/s10 | proud base ratio | apexR
+   *    1.8   0.49    0.93 22.8  | 25.5 29.5 32.0  1.25   | 46.5  53.0 0.88  | 12.6  <- was
+   *    1.4   0.49    0.93 22.8  | 24.5 28.0 31.0  1.27   | 46.0  52.0 0.88  | 12.3
+   *    1.0   0.49    0.93 22.8  | 23.0 26.0 28.5  1.24   | 46.0  52.0 0.88  | 12.0
+   *    1.0   0.32    0.97 22.8  | 18.5 21.5 24.5  1.32   | 43.5  49.0 0.89  |  7.8
+   *    1.0   0.36    0.97 24.0  | 20.0 23.5 26.5  1.33   | 45.0  50.0 0.90  |  9.1  <- is
+   *    0.8   0.32    0.97 22.8  | 17.5 20.5 22.5  1.29   | 43.5  49.0 0.89  |  7.7
+   *
+   * `apexR` is the floor on all of this and it is the MESHER's, not the
+   * anatomy's: 13b46b6 measured stair-stepping below ~1.5 cells and the
+   * `high` cell is 6 mm, so 9 mm of apex radius is the smallest blade that
+   * can be meshed without reintroducing review blocker 5. 9.1 mm is 1.52
+   * cells; the rows below it in the table are 1.28-1.46 and are listed so
+   * nobody re-derives them, not because they are available.
+   *
+   * `rBase` 22.8 -> 24.0 is what pays for the narrower apex. Sharpening alone
+   * drops the tip (the end cap is a sphere of radius `rAt(uEnd)`, so a
+   * smaller cap sits lower) and takes §4c's proud-height 46.5 -> 43.5 mm on a
+   * shrinking base. Widening the root puts the ratio back at 0.90 against
+   * §4c's 1:1 — better than the 0.88 it was — for 1.5 mm of height.
+   *
+   * DO NOT "thicken the pinna slightly to compensate", which is what §4c
+   * suggests for exactly this situation. Measured: `thickTip` 0.92 -> 1.10
+   * takes s10 from 25.5 to 27.5 mm. The thickening axis is `EAR_NORMAL`,
+   * [0.700, 0.085, 0.709], which is 71 % Z — and Z is IN the profile shadow
+   * plane. On this pose thickening the blade blunts the profile outline
+   * instead of protecting it.
+   */
+  rBase: 0.0240,      // world half-radius at the pinna root (x `wide` across)
+  tipRatio: 0.36,     // r(apex) / r(root) — the §4c base-to-tip wedge
+  power: 1.0,         // 1.0 = radius linear in u = straight sides = a wedge
+  uEnd: 0.97,         // the chain stops here; the end cap forms the apex
   segs: 8,
   thickRoot: 0.70,    // squash along EAR_NORMAL at the root
   thickTip: 0.92,     //   ... and at the apex (near-circular cross-section)
