@@ -150,27 +150,74 @@ const result = await page.evaluate(async ({ POSES, SETTLE }) => {
       legs: [top + (bot - top) * 0.70, bot],
     } : {};
     const stats = {};
-    for (const [name, [y0, y1]] of Object.entries(bands)) {
-      const ramps = [], tvs = [];
-      for (let y = Math.round(y0) + 1; y < Math.round(y1) - 1; y += 2) {
-        let x = 0;
-        while (x < W - 1 && cov[y * W + x] < 0.02) x++;
-        if (x >= W - 2) continue;
-        let xi = x;
-        while (xi < W - 1 && cov[y * W + xi] < 0.90) xi++;
-        if (xi >= W - 2) continue;
-        ramps.push(xi - x);                       // px from 2% to 90% coverage
+
+    /**
+     * Walk inward from one edge and measure the fringe.
+     *
+     * `at(i, j)` returns coverage j steps in from the edge along scan i, so
+     * one routine serves all four directions.
+     */
+    const scan = (n, len, at) => {
+      const tvs = [], ramps = [];
+      for (let i = 0; i < n; i += 2) {
+        let a = 0;
+        while (a < len - 1 && at(i, a) < 0.02) a++;
+        if (a >= len - 2) continue;
+        let b = a;
+        while (b < len - 1 && at(i, b) < 0.90) b++;
+        if (b >= len - 2) continue;
         let tv = 0;
-        for (let k = x; k < xi; k++) tv += Math.abs(cov[y * W + k + 1] - cov[y * W + k]);
-        const net = Math.abs(cov[y * W + xi] - cov[y * W + x]);
-        if (net > 0.3) tvs.push(tv / net);
+        for (let k = a; k < b; k++) tv += Math.abs(at(i, k + 1) - at(i, k));
+        const net = Math.abs(at(i, b) - at(i, a));
+        if (net > 0.3) { tvs.push(tv / net); ramps.push(b - a); }
       }
-      const med = (a) => (a.length ? a.slice().sort((p, q) => p - q)[a.length >> 1] : null);
+      return { tvs, ramps };
+    };
+
+    const pct = (arr, f) => (arr.length
+      ? +arr.slice().sort((p, q) => p - q)[Math.min(arr.length - 1, Math.floor(f * arr.length))].toFixed(3)
+      : null);
+
+    // ALL FOUR EDGES.
+    //
+    // This used to walk in from the LEFT only, row-wise -- one quarter of the
+    // contour -- and §4f says "trace the outer contour". The critic re-scanned
+    // the same mattes in all four directions and found every contour defect in
+    // this build living in the unmeasured three quarters: `tail`'s RIGHT edge
+    // has 11.3% of its scans at tv 1.000 with a 1 px ramp, while the left-only
+    // number for the same animal reported a comfortable pass. A muzzle whose
+    // dorsum and underside are both razor-sharp is invisible to a row scan
+    // that stops at the first thing it hits.
+    const edges = {
+      left:   scan(H, W, (y, k) => cov[y * W + k]),
+      right:  scan(H, W, (y, k) => cov[y * W + (W - 1 - k)]),
+      top:    scan(W, H, (x, k) => cov[k * W + x]),
+      bottom: scan(W, H, (x, k) => cov[(H - 1 - k) * W + x]),
+    };
+    stats.edges = {};
+    for (const [e, { tvs, ramps }] of Object.entries(edges)) {
+      stats.edges[e] = {
+        n: tvs.length,
+        tvP10: pct(tvs, 0.10), tvMedian: pct(tvs, 0.50),
+        rampMedianPx: pct(ramps, 0.50),
+        badFrac: tvs.length ? +(tvs.filter((v) => v < 1.15).length / tvs.length).toFixed(3) : null,
+      };
+    }
+
+    for (const [name, [y0, y1]] of Object.entries(bands)) {
+      const y0i = Math.round(y0) + 1, y1i = Math.round(y1) - 1;
+      const nb = Math.max(0, y1i - y0i);
+      const L = scan(nb, W, (i, k) => cov[(y0i + i) * W + k]);
+      const R = scan(nb, W, (i, k) => cov[(y0i + i) * W + (W - 1 - k)]);
+      const tvs = L.tvs.concat(R.tvs), ramps = L.ramps.concat(R.ramps);
       stats[name] = {
         n: ramps.length,
-        rampMedianPx: med(ramps),
-        tvMedian: tvs.length ? +med(tvs).toFixed(3) : null,
-        tvP10: tvs.length ? +tvs.slice().sort((p, q) => p - q)[Math.floor(tvs.length * 0.1)].toFixed(3) : null,
+        rampMedianPx: pct(ramps, 0.50),
+        tvMedian: pct(tvs, 0.50),
+        tvP10: pct(tvs, 0.10),
+        // Reported separately, because a band can be hairy on one side and
+        // bare on the other and a combined p10 hides which.
+        leftP10: pct(L.tvs, 0.10), rightP10: pct(R.tvs, 0.10),
       };
     }
     // Coverage histogram: how much of the animal is a soft fringe?
@@ -214,7 +261,13 @@ for (const [pose, d] of Object.entries(result.poses)) {
   console.log(`${pose.padEnd(11)} coverage ${d.coveragePx}px  fringe share ${f(d.fringeShare)}`);
   for (const band of ['head', 'body', 'legs']) {
     const b = d[band];
-    if (b) console.log(`  ${band.padEnd(5)} ramp ${f(b.rampMedianPx)}px  tv ${f(b.tvMedian)} (p10 ${f(b.tvP10)})  n=${b.n}`);
+    if (b) console.log(`  ${band.padEnd(6)} ramp ${f(b.rampMedianPx)}px  tv ${f(b.tvMedian)}  ` +
+      `p10 ${f(b.tvP10)} (L ${f(b.leftP10)} / R ${f(b.rightP10)})  n=${b.n}`);
+  }
+  for (const e of ['left', 'right', 'top', 'bottom']) {
+    const b = d.edges?.[e];
+    if (b) console.log(`  ${e.padEnd(6)} p10 ${f(b.tvP10)}  median ${f(b.tvMedian)}  ` +
+      `ramp ${f(b.rampMedianPx)}px  ${((b.badFrac ?? 0) * 100).toFixed(1)}% below 1.15  n=${b.n}`);
   }
 }
 await writeFile(path.join(ROOT, OUT, 'matte.json'), JSON.stringify(result, null, 2));

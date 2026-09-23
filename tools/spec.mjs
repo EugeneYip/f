@@ -881,35 +881,32 @@ const results = await page.evaluate(async () => {
   }
 
   /**
-   * Contour structure per height band, measured on a true coverage matte,
-   * NORMALISED TO MILLIMETRES OF FOX.
+   * Contour structure on a true coverage matte — ALL FOUR EDGES, in
+   * millimetres of fox.
    *
-   * The first version counted oscillations per PIXEL, which made it a
-   * function of how many pixels the subject happened to occupy. The fur agent
-   * measured exactly that, on one build with one coat, changing only the
-   * framing:
+   * Two things were wrong with the first version and both let real defects
+   * through.
    *
-   *              head    body    legs
-   *   profile @1280  1.000   1.073   1.000
-   *   profile @2560  1.195   1.409   1.775
-   *   frontal @1280  1.384   2.662   3.064
-   *   frontal  @640  1.000   2.618   1.766
+   * It walked in from the LEFT only, row-wise: one quarter of a four-sided
+   * contour, while §4f says "trace the outer contour". The critic re-scanned
+   * the same mattes in every direction and found every contour defect in this
+   * build living in the unmeasured three quarters — `tail`'s RIGHT edge sits
+   * at p10 1.069 with 12.8% of its scans below the floor, while the left-only
+   * number for the same animal reported a comfortable pass. A muzzle whose
+   * dorsum and underside are both razor-sharp is invisible to a row scan that
+   * stops at the first thing it hits.
    *
-   * `frontal` is ~2.6x the pixels-per-metre of `profile`, so my conclusion
-   * that "frontal is the animal's best angle" was wrong -- it is simply the
-   * higher-resolution one. And a 1-5 px fringe of REAL coat reads as exactly
-   * 1.000 because 1-5 px cannot oscillate, which is why this reported bare
-   * mesh where a bare-mesh control measures a 0 px ramp against 5-14 px
-   * coated, and 84,305 px of coverage against 153,932.
-   *
-   * Box-filtering the profile to a fixed spatial scale before differencing
-   * fixes it by construction: the result counts oscillations per millimetre of
-   * animal, which is what "does the outline read as hair" actually means.
+   * And it counted oscillations per PIXEL, so it was a function of how many
+   * pixels the subject happened to occupy: the same coat measured 1.000 at
+   * `profile @1280` and 1.195 at `@2560`. Box-filtering to a fifth of the
+   * coat's own 7.4 mm tuft scale makes it oscillations per millimetre of
+   * animal, which is what "does the outline read as hair" actually means. The
+   * interval must span at least 2 px or the filter is a no-op — that is the
+   * `resolvable` guard.
    */
   function matteBands(m) {
     if (!m) return null;
     const { cov, W, H } = m;
-    // Pixel scale from the camera, the same way the macro probe gets it.
     const subj = ctx.fox?.root
       ? new THREE.Vector3().setFromMatrixPosition(ctx.fox.root.matrixWorld)
       : new THREE.Vector3();
@@ -917,82 +914,85 @@ const results = await page.evaluate(async () => {
     const pxPerMm = dist > 1e-4
       ? (H / (2 * dist * Math.tan(ctx.camera.fov * Math.PI / 360))) / 1000
       : 0;
-    // Sample at a fifth of the COAT'S OWN TUFT SCALE.
-    //
-    // My first choice was 0.35 mm, on the reasoning that a guard hair is
-    // 0.05-0.08 mm so anything finer is pointless. That was the wrong scale
-    // to pick: what breaks an outline at a normal framing is not an
-    // individual hair, it is a tuft, and `FUR_DEFAULTS.clumpFreq` puts those
-    // at ~7.4 mm. A fifth of that is 1.5 mm, which is fine enough to register
-    // a single tuft's shoulder and coarse enough to be resolvable.
     const TUFT_MM = 7.4, SAMPLE_MM = TUFT_MM / 5;
     const step = Math.max(1, Math.round(SAMPLE_MM * pxPerMm));
+    const resolvable = step >= 2;
+
+    // Walk inward from an edge; `at(i, k)` is coverage k steps in along scan
+    // i. One routine serves all four directions.
+    const scan = (n, len, at) => {
+      const tvs = []; let short = 0;
+      for (let i = 0; i < n; i += 2) {
+        let a = 0;
+        while (a < len - 1 && at(i, a) < 0.02) a++;
+        if (a >= len - 2) continue;
+        let b = a;
+        while (b < len - 1 && at(i, b) < 0.90) b++;
+        if (b >= len - 2) continue;
+        const prof = [];
+        for (let k = a; k <= b; k += step) {
+          let sum = 0, cnt = 0;
+          for (let j = k; j < Math.min(k + step, b + 1); j++) { sum += at(i, j); cnt++; }
+          prof.push(sum / Math.max(cnt, 1));
+        }
+        // A ratio over fewer than six samples is not a statistic; the fur
+        // agent showed bare mesh outscoring the coat where rows were that
+        // short. Dropped rows are counted and reported, never hidden.
+        if (prof.length < 6) { short++; continue; }
+        let tv = 0;
+        for (let k = 0; k < prof.length - 1; k++) tv += Math.abs(prof[k + 1] - prof[k]);
+        const net = Math.abs(prof[prof.length - 1] - prof[0]);
+        if (net > 0.3) tvs.push(tv / net);
+      }
+      return { tvs, short };
+    };
+    const pct = (a, f) => (a.length
+      ? +a.slice().sort((p, q) => p - q)[Math.min(a.length - 1, Math.floor(f * a.length))].toFixed(3)
+      : null);
+
     let top = H, bot = 0;
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) if (cov[y * W + x] > 0.5) { if (y < top) top = y; if (y > bot) bot = y; break; }
     if (bot <= top) return null;
+
+    const res = {};
     const bands = {
       head: [top, top + (bot - top) * 0.33],
       body: [top + (bot - top) * 0.33, top + (bot - top) * 0.70],
       legs: [top + (bot - top) * 0.70, bot],
     };
-    const res = {};
     for (const [name, [y0, y1]] of Object.entries(bands)) {
-      const tvs = [], ramps = []; let short = 0;
-      for (let y = Math.round(y0) + 1; y < Math.round(y1) - 1; y += 2) {
-        let x = 0;
-        while (x < W - 1 && cov[y * W + x] < 0.02) x++;
-        if (x >= W - 2) continue;
-        let xi = x;
-        while (xi < W - 1 && cov[y * W + xi] < 0.90) xi++;
-        if (xi >= W - 2) continue;
-        // Box-filter to the fixed spatial scale, then difference.
-        const prof = [];
-        for (let k = x; k <= xi; k += step) {
-          let sum = 0, cnt = 0;
-          for (let j = k; j < Math.min(k + step, xi + 1); j++) { sum += cov[y * W + j]; cnt++; }
-          prof.push(sum / Math.max(cnt, 1));
-        }
-        // A ratio over three samples is not a statistic.
-        //
-        // The head band's failing rows are one contiguous block at the ear tip
-        // and crown where the fringe is 4-11 mm -- at 1.48 px/mm sampled every
-        // 1.5 mm that is three to eight samples, and total-variation-over-net
-        // on three samples is noise. The fur agent proved the metric is not
-        // discriminating there by the only test that settles it: **bare mesh
-        // scores HIGHER than the coat in that band** (p10 1.077 against 1.050),
-        // which cannot be true of a working hairiness metric.
-        //
-        // Dropping those rows raises the head's p10, so it must be said plainly
-        // that this is not tuning to pass: the rows are dropped because they
-        // cannot support the statistic, the count of dropped rows is reported,
-        // and if too many go the band reports unmeasurable rather than green.
-        if (prof.length < 6) { short++; continue; }
-        let tv = 0;
-        for (let k = 0; k < prof.length - 1; k++) tv += Math.abs(prof[k + 1] - prof[k]);
-        const net = Math.abs(prof[prof.length - 1] - prof[0]);
-        if (net > 0.3) { tvs.push(tv / net); ramps.push(+((xi - x) / Math.max(pxPerMm, 1e-6)).toFixed(2)); }
-      }
-      tvs.sort((a, b) => a - b); ramps.sort((a, b) => a - b);
-      // The sampling interval must span at least 2 px, or the box filter is a
-      // no-op and the metric silently reverts to counting pixels. At 1280x800
-      // `profile` gave 0.98 px/mm -- one pixel per millimetre of fox -- and a
-      // 1-5 px fringe reads as exactly 1.000 because 1-5 px cannot oscillate.
-      // That is how this reported bare mesh on a coat a bare-mesh control
-      // measures at 0 px ramp against 5-14 px coated, and 84,305 px of
-      // coverage against 153,932. Unresolvable is a failure, not a pass.
-      const resolvable = step >= 2;
-      // If most rows in a band were too short to measure, the band is
-      // unmeasurable -- not passing.
+      const y0i = Math.round(y0) + 1, nb = Math.max(0, Math.round(y1) - 1 - y0i);
+      const L = scan(nb, W, (i, k) => cov[(y0i + i) * W + k]);
+      const R = scan(nb, W, (i, k) => cov[(y0i + i) * W + (W - 1 - k)]);
+      const tvs = L.tvs.concat(R.tvs), short = L.short + R.short;
       const usable = tvs.length >= 8 && tvs.length >= short;
+      const lp = pct(L.tvs, 0.10), rp = pct(R.tvs, 0.10);
       res[name] = usable && resolvable
         ? { n: tvs.length, shortRows: short,
-            tvMedian: +tvs[tvs.length >> 1].toFixed(3),
-            tvP10: +tvs[Math.floor(tvs.length * 0.1)].toFixed(3),
-            rampMedianMm: ramps[ramps.length >> 1],
+            tvMedian: pct(tvs, 0.50), tvP10: pct(tvs, 0.10),
+            leftP10: lp, rightP10: rp,
+            // The WORSE side is what the gate asserts. A band can be hairy on
+            // one side and bare on the other -- `tail`'s legs band reads 3.14
+            // left and 1.000 right -- and a combined p10 hides which.
+            worstP10: Math.min(lp ?? 99, rp ?? 99),
             pxPerMm: +pxPerMm.toFixed(2), stepPx: step }
         : { unresolvable: !resolvable, tooShort: !usable,
             pxPerMm: +pxPerMm.toFixed(2), n: tvs.length, shortRows: short };
+    }
+    // Whole-contour edges, so top and bottom are measured at all.
+    res.edges = {};
+    for (const [e, sc] of Object.entries({
+      left:   scan(H, W, (y, k) => cov[y * W + k]),
+      right:  scan(H, W, (y, k) => cov[y * W + (W - 1 - k)]),
+      top:    scan(W, H, (x, k) => cov[k * W + x]),
+      bottom: scan(W, H, (x, k) => cov[(H - 1 - k) * W + x]),
+    })) {
+      res.edges[e] = {
+        n: sc.tvs.length, tvP10: pct(sc.tvs, 0.10), tvMedian: pct(sc.tvs, 0.50),
+        badFrac: sc.tvs.length
+          ? +(sc.tvs.filter((v) => v < 1.15).length / sc.tvs.length).toFixed(3) : null,
+      };
     }
     return res;
   }
@@ -1469,10 +1469,11 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
       const v = results.matteProfile?.[band];
       const f = results.matteFrontal?.[band];
       record(`matte silhouette is hair at profile: ${band}`,
-        !!(v && v.tvP10 != null && v.tvP10 >= 1.15),
-        v && v.tvP10 != null ? `outline path length over net crossing ${v.tvP10} at the 10th ` +
+        !!(v && v.worstP10 != null && v.worstP10 >= 1.15),
+        v && v.worstP10 != null ? `WORSE SIDE ${v.worstP10} (left ${v.leftP10}, ` +
+            `right ${v.rightP10}); combined path length over net crossing ${v.tvP10} at the 10th ` +
             `percentile (median ${v.tvMedian}, ramp ${v.rampMedianMm}mm of fox) ` +
-            `over ${v.n} rows (${v.shortRows} dropped as too short to support ` +
+            `over ${v.n} scans (${v.shortRows} dropped as too short to support ` +
             `the ratio — see the comment in matteBands), sampled every 1.5mm — a fifth of the coat's ` +
             `own 7.4mm tuft scale (${v.stepPx}px at ` +
             `${v.pxPerMm}px/mm). 1.0 means the fringe does not oscillate at ` +
@@ -1484,6 +1485,19 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
               `do not tune the coat to this number`
             : 'too few usable rows in this band to measure — that is a ' +
               'failure, not a pass');
+    }
+
+    // Whole-contour edges. §4f says trace the OUTER CONTOUR, and the band
+    // scans above only see left and right. The top and bottom were never
+    // measured at all until the critic scanned them and found the muzzle's
+    // dorsum and underside both razor-sharp.
+    for (const e of ['left', 'right', 'top', 'bottom']) {
+      const ed = results.matteProfile?.edges?.[e];
+      record(`contour has no bare run at profile: ${e}`,
+        !!(ed && ed.badFrac != null && ed.badFrac <= 0.02),
+        ed ? `${((ed.badFrac ?? 0) * 100).toFixed(1)}% of ${ed.n} scans below the ` +
+             `1.15 hair floor (p10 ${ed.tvP10}, median ${ed.tvMedian}) — §4f allows 2%`
+           : 'edge not measured');
     }
 
     // Floor of 1.15 is derived, not tuned to pass: the fur-off control's own
