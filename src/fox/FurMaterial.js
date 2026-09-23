@@ -169,6 +169,55 @@ export const REGION_TABLE = [
   /* 6 earOuter      */ { a: [1.00, 1.00, 0.80, 0.26], b: [1.45, 1.70, 0.90, 2.60] },
   /* 7 earInner      */ { a: [0.90, 1.00, 1.20, 0.55], b: [1.30, 1.55, 0.80, 2.20] },
   /* 8 throat        */ { a: [1.00, 1.10, 1.20, 0.45], b: [0.95, 1.10, 1.00, 0.85] },
+  /*
+   * 8-10 THE NECK. There is no hourglass notch here, and the three columns
+   * that said there was are a front leg, a belly and a hind leg.
+   *
+   * The report was column HEIGHTS on the coverage matte at `profile`, 1280 px
+   * wide: 319 px at x=543 "head + ruff", 171 px at x=643 "neck", 306 px at
+   * x=768 "body" -- a neck thinner than either neighbour, i.e. a head stuck
+   * on rather than grown out of the shoulders (4e). Those three numbers
+   * reproduce exactly (319 / 169 / 299 here). What they measure does not.
+   *
+   * The rig's own bones, projected into that same frame: jaw 437, head 460,
+   * neck02 481, neck01 509, chest 539, spine04 581, spine03 626, spine01 716,
+   * hips 764, tail01 824. So x=543 is the CHEST, x=643 is mid-BACK and x=768
+   * is the HIP. The neck is x 460-539 and none of the three samples is in it.
+   *
+   * And the quantity is not a height. Per column, covered pixels vs the
+   * top-to-bottom span:
+   *
+   *     x=543   top 311  bottom 631  mass 319   the front leg, to the snow
+   *     x=643   top 326  bottom 499  mass 169   belly: no leg in this column
+   *     x=768   top 324  bottom 630  mass 299   a hind leg, to the snow
+   *
+   * The "notch" is the gap between the forelimbs and the hindlimbs, i.e. the
+   * animal's own waist seen between its legs -- which 4f asks for.
+   *
+   * MEASURED PROPERLY -- the contiguous trunk run containing the topmost
+   * covered pixel, gaps of up to 8 px closed first, because a furry outline's
+   * topmost pixel is usually an isolated hair tip and a raw run from it
+   * returns 1 px (it did, on 11 of 29 columns, before the closing):
+   *
+   *     station          crown  neck02  neck01  min over 460..539  withers
+   *       coat            213     212     201      196 @ x=502       334
+   *       COAT HIDDEN     169     182     156      150 @ x=536       150
+   *
+   * The coated neck is 0.92 of the crown and the bare neck 0.89, so the coat
+   * makes that transition FLATTER, not deeper, and it is nearly flat already.
+   * The dorsal contour runs 257 -> 323 px from crown to spine04 without a
+   * dip-and-rise: the deepest row between the crown and the back is 330 at
+   * x=593 against a highest back row of 309, a 21 px step that is 6 px on the
+   * bare mesh and 15 px with the cards hidden -- i.e. it is hair tips, not
+   * shape. 41687a6's tail notch, for scale, is a 20 px step in the other
+   * direction on a contour that is otherwise monotone.
+   *
+   * So the ruff's depth and its extent along the neck are both fine on this
+   * evidence and NEITHER IS WORTH BUYING. Do not deepen region 10 to close a
+   * gap between a fox's legs. If the neck is revisited, measure the trunk run
+   * between x=460 and x=539, not a column mass, and put the probe on the rig's
+   * bones rather than on eyeballed x values.
+   */
   /* 9 neck          */ { a: [1.00, 1.08, 1.05, 0.35], b: [0.90, 1.00, 1.00, 0.90] },
   /* 10 ruff          */ { a: [1.05, 1.16, 1.15, 0.55], b: [0.72, 0.95, 1.00, 1.60] },
   /* 11 chest         */ { a: [1.00, 1.04, 1.10, 0.38], b: [0.92, 1.00, 1.00, 0.72] },
