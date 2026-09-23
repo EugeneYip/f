@@ -46,6 +46,20 @@ export class Horizon {
       { r: 840, h: 66, min: 20, base: -180, aerialBase: 0.78, aerialCrest: 0.972, seed: 9043, rough: 0.7 },
     ];
     this.fog = { r: 520, top: 30, bottom: -60 };
+
+    /**
+     * Radiance of lit snow, republished every frame from Sky.diffuseWhite.
+     *
+     * Both materials used to key their brightness off the SKY they hang in
+     * (`0.35 + 0.75 * luma(haze)`), and that is the wrong reference. A distant
+     * snow ridge and a bank of ice fog over a snowfield are both lit mostly
+     * from BELOW -- the snow is the bright thing in this world, not the
+     * twilight sky -- so tying them to the sky made them track the darkest
+     * source in frame and land 95 levels under bible section 3's #aac4e0.
+     */
+    this.uWhite = { value: 0.45 };
+    /** #aac4e0 in linear, normalised to unit luminance so uWhite sets level. */
+    this.uHaze = { value: new THREE.Vector3() };
   }
 
   init(ctx) {
@@ -61,6 +75,8 @@ export class Horizon {
     this.group.frustumCulled = false;
 
     const snow = new THREE.Color(0xaac4e0);   // bible §3 aerial perspective target
+    const hl = Math.max(1e-6, 0.2126 * snow.r + 0.7152 * snow.g + 0.0722 * snow.b);
+    this.uHaze.value.set(snow.r / hl, snow.g / hl, snow.b / hl);
     for (let i = 0; i < this.layout.length; i++) {
       const L = this.layout[i];
       const mesh = new THREE.Mesh(this._ridgeGeometry(L), this._ridgeMaterial(sky, L, snow));
@@ -79,6 +95,16 @@ export class Horizon {
 
     ctx.scene.add(this.group);
     ctx.horizon = this;
+  }
+
+  /**
+   * One number per frame: the radiance of lit snow under the current rig.
+   * Everything distant is keyed to it so the far field tracks exposure and
+   * sun elevation instead of sitting at a constant that only ever agreed
+   * with one lighting setup.
+   */
+  update(dt, ctx) {
+    this.uWhite.value = ctx.sky?.diffuseWhite ?? 0.45;
   }
 
   dispose() {
@@ -151,6 +177,10 @@ export class Horizon {
         uSnow: { value: new THREE.Vector3(snow.r, snow.g, snow.b) },
         uAerial: { value: new THREE.Vector2(L.aerialBase, L.aerialCrest) },
         uDither: { value: 0.010 },
+        uWhite: this.uWhite,
+        uHaze: this.uHaze,
+        uHazeMix: { value: 0.55 },
+        uHazeGain: { value: 1.32 },
       },
       vertexShader: /* glsl */ `
         attribute float aH;
@@ -169,9 +199,9 @@ export class Horizon {
       `,
       fragmentShader: /* glsl */ `
         precision highp float;
-        uniform vec3 uSunDir, uSnow;
+        uniform vec3 uSunDir, uSnow, uHaze;
         uniform vec2 uAerial;
-        uniform float uDither;
+        uniform float uDither, uWhite, uHazeMix, uHazeGain;
         varying float vH, vAz, vTop;
         varying vec3 vWorld;
         ${ATMO_PARS}
@@ -210,7 +240,13 @@ export class Horizon {
 
           // Fade toward the sky's *own* value at the horizon in this direction,
           // so the ridge line dissolves instead of ending on an edge.
-          vec3 haze = sampleSky(normalize(vec3(dh.x, 0.010, dh.z)), uSunDir);
+          // The colour a ridge dissolves INTO. Not the raw sky: at 340-840 m
+          // the air between us and that ridge is the same snow-lit haze the
+          // ice fog is made of, so the aerial-perspective target is bible
+          // section 3's #aac4e0 at the snow's own level, with the sky mixed
+          // through so the range still goes warm where it crosses the glow.
+          vec3 haze = mix(sampleSky(normalize(vec3(dh.x, 0.010, dh.z)), uSunDir),
+                          uHaze * uWhite * uHazeGain, uHazeMix);
           float aerial = mix(uAerial.x, uAerial.y, hN * hN);
           // Vary the haze along the ring; real distance comes and goes.
           float azVar = vnoise(vAz * 2.7 + 5.0) * 0.55 + vnoise(vAz * 6.1) * 0.45;
@@ -261,6 +297,11 @@ export class Horizon {
         uSunDir: sky.shared.uSunDir,
         uRange: { value: new THREE.Vector2(f.bottom, f.top) },
         uDither: { value: 0.010 },
+        uWhite: this.uWhite,
+        uHaze: this.uHaze,
+        uFogMix: { value: 0.70 },
+        uFogGain: { value: 1.32 },
+        uFogAlpha: { value: 0.70 },
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;
@@ -274,7 +315,8 @@ export class Horizon {
         precision highp float;
         uniform vec3 uSunDir;
         uniform vec2 uRange;
-        uniform float uDither;
+        uniform float uDither, uWhite, uFogMix, uFogGain, uFogAlpha;
+        uniform vec3 uHaze;
         varying vec3 vWorld;
         ${ATMO_PARS}
         ${SKY_SAMPLE}
@@ -297,13 +339,23 @@ export class Horizon {
           // Taper to exactly zero before the cylinder's top rim, or the rim
           // itself draws a perfectly straight line across the sky.
           float rim = smoothstep(uRange.y, uRange.y * 0.45, vWorld.y);
-          float a = clamp(band * lumpy * rim * 0.62, 0.0, 1.0);
+          float a = clamp(band * lumpy * rim * uFogAlpha, 0.0, 1.0);
 
           vec3 haze = sampleSky(normalize(vec3(dh.x, 0.006, dh.z)), uSunDir);
-          // Ice fog is suspended crystals, not air: it scatters near-neutrally
-          // and reads brighter and cooler than the sky it hangs in front of.
-          // Tinting it with the sky made it mathematically invisible.
-          vec3 col = mix(haze, vec3(0.62, 0.72, 0.88) * (0.35 + 0.75 * luma3(haze)), 0.55) * 1.18;
+          // Ice fog is suspended crystals hanging OVER a snowfield, not air.
+          // Most of what lights it comes up off the snow, so its radiance
+          // tracks lit snow (uWhite) and not the twilight sky it stands in
+          // front of. The previous form scaled by the sky's own luminance,
+          // which made the brightest object in the lower frame follow the
+          // darkest one: measured (93,99,97) at hero against the bible's
+          // #aac4e0. uHaze IS #aac4e0, normalised to unit luminance so the
+          // level is set by the rig rather than by a constant that silently
+          // goes wrong when exposure moves.
+          //
+          // A little of the sky is still mixed through, because the band has
+          // to agree with whatever is behind it where it thins out -- warm
+          // across the sun's glow, cold away from it.
+          vec3 col = mix(haze, uHaze * uWhite * uFogGain, uFogMix);
           col *= 1.0 + triDither(gl_FragCoord.xy) * uDither;
           gl_FragColor = vec4(max(col, 0.0), a);
           #include <tonemapping_fragment>
