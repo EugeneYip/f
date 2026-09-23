@@ -40,26 +40,32 @@ export const TIERS = {
     label: 'High',
     dpr: 1.0, maxDpr: 2.0,
     shadowMapSize: 3072, shadowCascades: 3, softShadow: true,
-    // HELD AT 13000, and the reason is measured rather than conservative.
+    // 26000, and the arithmetic that got here is worth keeping because I
+    // got it wrong once.
     //
-    // The fur agent swept card count against its new pile metrics and found
+    // The fur agent swept card count against its own pile metrics and found
     // 26000 the only arm to improve BOTH band fill and contour p10 (0.435
-    // fill, best left p10 at 1.41) where every other lever traded one for the
-    // other, and it reported the whole card mesh at 0.545 ms in a paired ABBA
-    // at hero/idle/high/1280x800. So I tried it, and on the same machine at
-    // loadFactor 1.03 the audit reads:
+    // fill, best left p10 at 1.41) where every other lever traded one against
+    // the other. I tried it, measured 13000 -> 17.19 ms against 26000 ->
+    // 18.43 in sequential single runs, called it 1.2 ms and reverted.
     //
-    //     13000 -> high 17.19 ms     18000 -> 17.62     26000 -> 18.43
+    // That was inside the instrument's noise. Two agents independently
+    // bounded `[high]` at 15.66-22.24 ms on IDENTICAL code, and a paired
+    // ABBA on a quiet machine says:
     //
-    // against a 16.7 budget. The look gain is real but small -- the dark gaps
-    // between strands close -- and the cost is not the 0.545 ms the isolated
-    // mesh measures, because more cards is more OVERDRAW, not more mesh.
+    //     13000 -> 17.61, 17.56   (mean 17.585)
+    //     26000 -> 17.86, 17.72   (mean 17.790)
     //
-    // §10 is a contract and `high` is already over it at 13000. Buying a
-    // marginal improvement with a budget that is already in deficit is the
-    // wrong order of operations: find the 1-2 ms first, then spend it here,
-    // where the exchange rate is genuinely the best on the table.
-    furShells: 18, furFins: true, furCards: 13000, furAniso: true,
+    // **0.21 ms**, against a within-arm spread of 0.05-0.14. Six times the
+    // cost of the isolated card mesh, because more cards is overdraw rather
+    // than mesh -- but a sixth of what I first measured, and a good price for
+    // closing the dark gaps between strands.
+    //
+    // `high` is 0.9 ms over its 16.7 budget at EITHER value, so the deficit
+    // is not the card count's and reverting does not pay it. Shipping the
+    // cheap improvement and naming the deficit separately is the honest
+    // order; sequential single-shot timing on this machine is not.
+    furShells: 18, furFins: true, furCards: 26000, furAniso: true,
     terrainSegments: 384, terrainRadius: 190,
     snowParticles: 12000, snowLayers: 3,
     ao: true, bloom: true, dof: true, godRays: true, taa: true, smaa: false,
