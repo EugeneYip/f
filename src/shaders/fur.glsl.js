@@ -1427,6 +1427,9 @@ uniform float uCardCut;         // alpha below which a card fragment is discarde
 uniform float uCardHairs;      // hairs per card, x the authored 2-5; see below
 uniform float uCardHairAlign;  // 1 = the hair lattice lands on the card's edges
 uniform float uCardRootRag;    // per-hair root fade depth; 0 = one straight spine
+uniform float uCardDuty;       // share of a card's AREA that is hair; see below
+uniform float uCardHairLen;    // shortest per-hair length, in card lengths
+uniform float uCardHairFade;   // per-hair tip ramp, in card lengths
 
 varying vec4  vCard;
 varying float vEdge;
@@ -1477,13 +1480,37 @@ void main(){
   float hr = hash11(fi * 1.7 + rnd * 31.0);
 
   float d   = abs(fr - 0.5) * 2.0;
-  float rad = 0.20 + 0.40 * hr;
+  /*
+   * THE HAIR LATTICE'S DUTY CYCLE, and it is the only term in this shader
+   * that can change how MUCH hair a card draws.
+   *
+   * d is a triangle wave over each hair cell and rad is the half-width
+   * the hair occupies in it, so the fraction of the card's area that is hair
+   * is exactly E[rad] -- INDEPENDENT OF uCardHairs. Raising the hair count
+   * subdivides the same covered area into more, finer strands; it cannot add
+   * any. That is why uCardHairs 2.4 -> 5.0 moved macro detail and the contour
+   * and left the fringe's fill where it was. See FUR_DEFAULTS.cardDuty.
+   */
+  float rad = uCardDuty * (0.50 + 1.00 * hr);
   float aa  = clamp(fwidth(s) * 1.6, 0.02, 1.2);
   float a   = 1.0 - smoothstep(rad - aa, rad + aa, d);
 
-  // Per-hair length, so the card never ends on a straight edge.
-  float hlen = 0.42 + 0.58 * hash11(fi * 3.3 + rnd * 11.0);
-  float tipFade = 1.0 - smoothstep(hlen - 0.30, hlen, v);
+  /*
+   * PER-HAIR LENGTH, and it is the depth of the coat's OUTER BAND.
+   *
+   * This was 0.42 + 0.58 * hash with a fixed 0.30 fade: every hair in a
+   * card ended somewhere between 42% and 100% of the card's length, so at
+   * v = 0.9 only the ~17% of hairs whose draw came up long were still being
+   * drawn. A card's outer half is therefore a SPRAY, not a tuft -- which is
+   * what the 62 px deep, 24% filled fringe band at portrait is made of. See
+   * FUR_DEFAULTS.cardHairLen for the measurement and the derivation.
+   *
+   * uCardHairFade is the ramp, in card lengths. It cannot be zero -- a hard
+   * end on every hair at once is the straight tip edge this term exists to
+   * break -- but it does not have to be 0.30 of the card either.
+   */
+  float hlen = uCardHairLen + (1.0 - uCardHairLen) * hash11(fi * 3.3 + rnd * 11.0);
+  float tipFade = 1.0 - smoothstep(hlen - uCardHairFade, hlen, v);
   a *= tipFade;
   /*
    * THE CARD'S ROOT EDGE IS THE SPINE OF THE STAPLE.

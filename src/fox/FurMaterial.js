@@ -1109,6 +1109,56 @@ export const FUR_DEFAULTS = {
    */
   cardRootRag: 0.45,
 
+  /**
+   * THE THREE NUMBERS THAT DECIDE WHETHER THE COAT IS A PILE OR A SPRAY.
+   *
+   * Review blocker 5 -- "long straggly individually-resolvable strands with
+   * dark gaps between them" -- has been worked four times through card
+   * LENGTH, and four levers in that dimension are now dead (uCardFloor,
+   * uCardLength, cardClump/clumpAO/clumpPull, per-lock stand-off,
+   * uCardTipEdge). It is not a length defect. Measured at `portrait`,
+   * 1400x900, one page session, one instant, on the true two-clear-colour
+   * coverage matte, walking in from each of the four frame edges to the first
+   * sustained cov > 0.95:
+   *
+   *     arm        band depth px (L/R/T/B)   band FILL    fringe share
+   *       shipped      62 / 66 / 43 / 65     0.245        0.115
+   *       no cards     18 / 13 / 14 / 19     0.359        0.019
+   *       cards only  113 /123 /104 / 92     0.222        0.282
+   *
+   * So the coat's outer band is 62 px deep and 24% hair -- three quarters of
+   * it is air -- and the cards own that: hiding them takes the band to a
+   * quarter of the depth at half again the fill, and they own 83% of all the
+   * partial-coverage area on the animal. THAT is the defect, stated as a
+   * number for the first time, and none of the four contour metrics can see
+   * it: all of them grade tv/net, which a field of separated spikes scores
+   * BETTER on than a dense pile does.
+   *
+   * What makes the band sparse is not the card count. It is that a card's
+   * outer half is a spray:
+   *
+   *   * cardDuty is the share of a card's AREA that is hair, E[rad] in the
+   *     fragment shader. It was 0.40 by construction -- and, critically, it
+   *     is INDEPENDENT of cardHairs: the hair lattice is a triangle wave per
+   *     cell, so more hairs means finer hairs over the same covered area.
+   *     Raising cardHairs 2.4 -> 5.0 could not have changed the fill and did
+   *     not. This is the knob that adds hair rather than subdividing it.
+   *   * cardHairLen was 0.42, so per-hair length was uniform on [0.42, 1.0)
+   *     of the card. At v = 0.9 only the ~17% of hairs that drew long are
+   *     still there; at v = 0.6, 45% of them are gone. The outer half of
+   *     every card is a handful of surviving hairs with holes between them,
+   *     which is precisely "individually-resolvable strands with dark gaps".
+   *   * cardHairFade was a fixed 0.30 of the card -- on top of the draw
+   *     above, a third of the card's length spent ramping each hair out.
+   *
+   * 0.42 / 0.30 / 0.40 reproduce the shipped-before behaviour exactly, and
+   * the A/B in this commit confirms it to four decimals on all nine
+   * statistics. See the sweep below each value for what moves.
+   */
+  cardDuty: 0.40,
+  cardHairLen: 0.42,
+  cardHairFade: 0.30,
+
   cardCut: 0.004,
 };
 
@@ -1331,6 +1381,9 @@ export function buildFurUniforms(ctx) {
     uCardHairs: { value: d.cardHairs },
     uCardHairAlign: { value: d.cardHairAlign },
     uCardRootRag: { value: d.cardRootRag },
+    uCardDuty: { value: d.cardDuty },
+    uCardHairLen: { value: d.cardHairLen },
+    uCardHairFade: { value: d.cardHairFade },
     uCardInteriorLen: { value: d.cardInteriorLen },
     uCardEdgeLen: { value: new THREE.Vector2(d.cardEdgeLen[0], d.cardEdgeLen[1]) },
     uCardIntMix: { value: intMix },
