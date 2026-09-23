@@ -135,6 +135,63 @@ export const TRANS_BOOST = {
  * a second place to add some. So: 1.0, everywhere, and the clamp in
  * `buildFurUniforms` makes that the only value the band admits.
  */
+/**
+ * Per-region multiplier on uCardFloor, the ABSOLUTE guard-hair stand-off
+ * (uCardFloorScale in the card vertex shader). 1.0 = the global floor.
+ *
+ * THE FLOOR IS WHY THE HAIR IS THE SAME LENGTH EVERYWHERE. It exists for a
+ * good reason -- "a fox's guard hairs over the muzzle, brow and cannon are not
+ * proportionally shorter than the ones over its flank, they stand out of a
+ * much shallower undercoat" -- but as a single global number it tops every
+ * shallow region up to the SAME absolute reach, which is the mechanism behind
+ * the review's "the length and direction are identical on the shoulder, flank,
+ * haunch, cheek and muzzle" and behind 4h's lost muzzle/skull contrast:
+ *
+ *     region    coat mm   stand mm   drawn hair mm    vs skull
+ *       muzzle    10.4      8.96         23.2           2.1 : 1
+ *       skull     33.9      6.61         48.6              --
+ *
+ * against a coat contrast of 3.3:1 that anatomy authored on purpose. Bible 5
+ * puts the muzzle, the paws and the forehead at 2-6 mm of hair; 23 mm is not
+ * that, and the floor is the whole of the difference.
+ *
+ * THE TABLE IS EMPTY, AND THAT IS A MEASURED RESULT, NOT AN OVERSIGHT. The
+ * obvious first entry is the muzzle, and it is in DIRECT CONFLICT with review
+ * blocker 1: the muzzle's 23 mm of guard hair is what stops its silhouette
+ * being bare mesh. Four-direction contour scan on the coverage matte at
+ * `profile`, 1400x900, one page session, one instant, muzzle band x 361..488
+ * (the residual 11 are the rhinarium and uNoseFade's own ramp, which 4f rule
+ * 3 allows to be bare):
+ *
+ *     muzzle / jaw floor scale   bottom cliffs   top cliffs   median ramp
+ *       1.00 / 1.00  (shipped)      11 / 114       3 / 114       13 px
+ *       0.50 / 0.65                 14             7              8
+ *       0.25 / 0.45                 19            10              6
+ *       0.10 / 0.30                 22            13              6
+ *
+ * AND MORE CARDS CANNOT PAY FOR SHORTER ONES. Holding the floor at 0.50 and
+ * raising the muzzle card weight from the shipped 4.5/3.8 to 6.0/5.0 and then
+ * 9.0/7.0 leaves the bottom cliffs at 15 either way, and taking that many
+ * cards off the body costs the whole outline: the frame's top-scan cliffs go
+ * 7 -> 23 and left p10 1.347 -> 1.285. Density does not substitute for reach
+ * at a contour; it is the reach that puts hair over sky.
+ *
+ * So the two requirements are genuinely opposed at the muzzle, and blocker 1
+ * wins -- the same resolution 4h itself reached when rule 2 and rule 3 could
+ * not both hold there. The contrast stays at 2.1:1 and is a known debt.
+ *
+ * The lever is left wired for regions where the conflict does NOT bite; they
+ * have not been measured yet. It is bounded the same way the global floor is:
+ * reachReport()'s clause B now tests uCardFloor x max(scale) against
+ * CARD_SHAPE.standFloorMax, so raising a scale above 1.0 is not a way around
+ * the cap, and reachReport reads the table per region. The mistake
+ * CARD_LEN_SCALE made was a guard that could not see the table it was meant
+ * to bound; it is not repeated here.
+ */
+export const CARD_FLOOR_SCALE = {
+  // empty on purpose -- see above. 1.0 is the global floor.
+};
+
 export const CARD_LEN_SCALE = {
   0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.0,
   8: 1.0, 9: 1.0, 10: 1.0, 11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0,
@@ -832,6 +889,7 @@ export function buildFurUniforms(ctx) {
   const regionA = [];
   const regionB = [];
   const regionC = [];
+  const floorScale = [];
   // The band is a hard bound on the TABLE, not advice. Authoring 1.8 here once
   // put the card tips at 2.0x the local coat and produced the urchin coat; a
   // guard that only checks the global knob cannot see that, so clamp at the
@@ -850,6 +908,7 @@ export function buildFurUniforms(ctx) {
     regionB.push(new THREE.Vector4(...r.b));
     regionC.push(new THREE.Vector4(got, CARD_INNER_FLOOR[i] ?? 0,
                                    SHELL_LEN_SCALE[i] ?? 1.0, TRANS_BOOST[i] ?? 1.0));
+    floorScale.push(CARD_FLOOR_SCALE[i] ?? 1.0);
   }
   if (clamped.length) {
     console.warn(`[fur] CARD_LEN_SCALE outside reachBand ${CARD_SHAPE.reachBand} — ` +
@@ -1012,6 +1071,7 @@ export function buildFurUniforms(ctx) {
     uRegionA: { value: regionA },
     uRegionB: { value: regionB },
     uRegionC: { value: regionC },
+    uCardFloorScale: { value: floorScale },
 
     uCardWidth: { value: d.cardWidth },
     uCardLength: { value: d.cardLength },

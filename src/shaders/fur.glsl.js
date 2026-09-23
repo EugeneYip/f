@@ -229,6 +229,7 @@ uniform vec4 uRegionB[${REGION_COUNT}];
 // the coat underneath stays short. Real ear rims and skull guard hairs are
 // exactly that: long hairs standing out of short underfur.
 uniform vec4 uRegionC[${REGION_COUNT}];
+uniform float uCardFloorScale[${REGION_COUNT}];  // per-region x on uCardFloor
 `;
 
 export const FUR_VARYINGS = /* glsl */ `
@@ -1190,7 +1191,10 @@ void main(){
   // CARD_SHAPE.clumpCell exists to undo.
   float coat  = furCoatLength(position, ra.y);
   float fw    = sqrt(hash11(lrnd * 61.7 + 4.3));   // mean 2/3, weighted long
-  float stand = max(0.0, uCardFloor * (uCardFloorLow + (1.0 - uCardFloorLow) * fw)
+  // PER-REGION, because an absolute floor applied globally is what makes the
+  // hair the same length everywhere. See CARD_FLOOR_SCALE in FurMaterial.
+  float stand = max(0.0, uCardFloor * uCardFloorScale[ri]
+                         * (uCardFloorLow + (1.0 - uCardFloorLow) * fw)
                          * furSkinMask2(position).x
                          - coat * ${(CARD_SHAPE.reachBand[0] - 1).toFixed(3)});
   float L    = (coat + stand) * rc.x * uCardLength * aCard.w;

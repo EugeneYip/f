@@ -576,6 +576,7 @@ export class FurSystem {
     // unchanged and now bounds the right thing; before this it bounded a
     // constant that every lock in the coat received.
     const floor = u.uCardFloor?.value ?? 0;
+    const fScale = u.uCardFloorScale?.value ?? [];
     const floorLow = u.uCardFloorLow?.value ?? 1;
     const floorMean = floor * (floorLow + (1 - floorLow) * CARD_SHAPE.floorDrawMean);
     const coat = this.regionCoatDepth();
@@ -601,8 +602,14 @@ export class FurSystem {
     //   stand()  the ABSOLUTE stand-off in metres, floor included — what the
     //            eye actually judges, bounded by CARD_SHAPE.standFloorMax.
     const reach = (lm, s) => s * cardLen * lm * rise;
-    const standOf = (lm, s, c) => {
-      const st = Math.max(0, floor - c * PROP);
+    // `fsc` is CARD_FLOOR_SCALE for this region, read from the uniform the
+    // shader actually samples. A guard that multiplies the GLOBAL floor and
+    // ignores a per-region table is the exact failure CARD_LEN_SCALE had --
+    // reachReport said `ok: true, mean 1.117` throughout the urchin coat
+    // because it never looked at uRegionC.x. Do not add a third such table
+    // without adding it here in the same edit.
+    const standOf = (lm, s, c, fsc) => {
+      const st = Math.max(0, floor * fsc - c * PROP);
       return Math.max(0, (c + st) * s * cardLen * lm * rise - c);
     };
 
@@ -631,6 +638,7 @@ export class FurSystem {
     let worstDroop = 0, worst = null, worstOver = 0, maxStandMm = 0;
     for (let i = 0; i < rc.length; i++) {
       const s = rc[i].x > 0 ? rc[i].x : 1;
+      const fsc = fScale[i] ?? 1;
       const shell = rc[i].z > 0 ? rc[i].z : 1;
       const c = coat[i];
       const rMin = reach(lo, s), rMean = reach(mid, s), rMax = reach(lo + sp, s);
@@ -643,7 +651,7 @@ export class FurSystem {
       min = Math.min(min, rMin); max = Math.max(max, rMax);
       meanSum += rMean;
       worstDroop = Math.max(worstDroop, rMean + extra);
-      const standM = standOf(lo + sp, s, c);
+      const standM = standOf(lo + sp, s, c, fsc);
       maxStandMm = Math.max(maxStandMm, standM * 1000);
       // How far outside the band this region sits, in either direction.
       const over = Math.max(rMax - reachBand[1] * 1.02, reachBand[0] * 0.92 - rMin,
@@ -652,8 +660,9 @@ export class FurSystem {
       detail.push({ region: i, scale: +s.toFixed(3), coatMm: +(c * 1000).toFixed(2),
                     min: +rMin.toFixed(3), mean: +rMean.toFixed(3), max: +rMax.toFixed(3),
                     standMm: +(standM * 1000).toFixed(2),
+                    floorScale: +fsc.toFixed(3),
                     totalRatio: c > 0 ? +(1 + standM / c).toFixed(3) : null,
-                    floorBinds: floor > c * PROP,
+                    floorBinds: floor * fsc > c * PROP,
                     vsShell: +(rMean / shell).toFixed(3),
                     droopTotal: +(rMean + extra).toFixed(3),
                     cardSagUnprojected: +cardSag.toFixed(3),
@@ -662,11 +671,17 @@ export class FurSystem {
 
     // Clause B: the absolute floor may add no more stand-off than the
     // proportional rule already grants the one coat depth 4f sources.
-    const floorOver = floor - CARD_SHAPE.standFloorMax;
+    // Clause B bounds the floor's PEAK, so it must bound the largest scaled
+    // floor any region receives -- otherwise CARD_FLOOR_SCALE is a way around
+    // the cap and the cap is decorative.
+    const maxFScale = fScale.length ? Math.max(...fScale) : 1;
+    const floorOver = floor * maxFScale - CARD_SHAPE.standFloorMax;
     const ok = worstOver <= 0 && floorOver <= 0;
     return {
       ok, band: reachBand, worst, worstOver: +worstOver.toFixed(3),
       floorMm: +(floor * 1000).toFixed(2),
+      maxFloorScale: +maxFScale.toFixed(3),
+      peakFloorMm: +(floor * maxFScale * 1000).toFixed(2),
       floorLow, floorMeanMm: +(floorMean * 1000).toFixed(2),
       floorCapMm: +(CARD_SHAPE.standFloorMax * 1000).toFixed(2),
       floorOverMm: +(floorOver * 1000).toFixed(2),
