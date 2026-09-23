@@ -143,6 +143,12 @@ function defaults() {
       maxBackgroundCoC: 0.005,
       nearGain: 1.0, edgeBoost: 0.14, blendLo: 1.0, blendHi: 3.0,
       highlightClamp: 7.0,
+      /* Taps per square pixel of circle-of-confusion area, i.e. how densely
+         the gather spiral samples the disc it is actually given. One per pixel
+         is full coverage; the per-tier DOF_TAPS remains the ceiling and 6 the
+         floor. 0 restores the old fixed count so the change stays A/B-able in
+         one page session. See the comment in DoF.js's GATHER_FRAG. */
+      tapDensity: Math.PI,
     },
     fog: {
       density: 0.018, falloff: 0.18, height: 0.0, strength: 1.0,
@@ -836,8 +842,27 @@ export class PostFX {
    * of a full, canvas-terminated frame are apples to apples.
    *
    * Absolute numbers are a ceiling when other processes share the GPU.
+   *
+   * PAIRED AND REPEATED, because a single baseline is not survivable here.
+   * Several agents drive headless Chromium against this GPU at once, and the
+   * load is BURSTY -- one audit run read `low` at 11.78 ms and `medium` at
+   * 33.13 on an identical tree, and audit.mjs's contention detector only
+   * catches load that is uniform across tiers. The first version of this
+   * method measured ONE baseline and subtracted every stage from it, so a
+   * burst anywhere in the ~10 s sweep landed entirely on whichever stage was
+   * unlucky: it returned ao -19.2 ms, bloom -19.4, taa -18.0 and
+   * compositeGradeEtc +65.5 on a run whose own frameMs was 19.2. Negative
+   * milliseconds are not a small error, they are the instrument saying it
+   * measured someone else's workload.
+   *
+   * So: each stage's baseline is re-measured IMMEDIATELY next to its skipped
+   * arm, the order within a pair alternates between rounds to cancel monotonic
+   * drift, and the reported cost is the MEDIAN over rounds rather than a mean.
+   * `spread` carries the median absolute deviation of each stage's per-round
+   * differences -- a cost whose MAD is comparable to the cost itself is noise
+   * and must be reported as such, never quietly rounded into a conclusion.
    */
-  _profile(iters = 20) {
+  _profile(iters = 16, rounds = 5) {
     const ctx = this.ctx;
     const gl = this.renderer.getContext();
     const buf = new Uint8Array(4);
@@ -852,34 +877,58 @@ export class PostFX {
       for (let i = 0; i < iters; i++) frame();
       return (performance.now() - t0) / iters;
     };
+    const median = (a) => {
+      const v = [...a].sort((x, y) => x - y);
+      const m = v.length >> 1;
+      return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+    };
+    const mad = (a) => { const m = median(a); return median(a.map((x) => Math.abs(x - m))); };
 
     const prevDebug = this.cfg.debug;
     this.cfg.debug = 'off';
     const sk = this._skip;
+    const stages = [
+      ['ao', !!this.ao], ['bloom', !!this.bloom], ['dof', !!this.dof],
+      ['rays', !!this.rays], ['taa', !!this.taa], ['post', true],
+    ].filter(([, on]) => on).map(([k]) => k);
+    const samples = Object.fromEntries(stages.map((k) => [k, []]));
+    const fulls = [];
     const out = {};
     try {
-      const full = measure();
-      const one = (key) => {
-        sk[key] = true;
-        const t = measure();
-        sk[key] = false;
-        return +(full - t).toFixed(3);
-      };
-      out.frameMs = +full.toFixed(3);
-      out.ao = this.ao ? one('ao') : 0;
-      out.bloom = this.bloom ? one('bloom') : 0;
-      out.dof = this.dof ? one('dof') : 0;
-      out.rays = this.rays ? one('rays') : 0;
-      out.taa = this.taa ? one('taa') : 0;
-      sk.post = true;
-      const sceneOnly = measure();
-      sk.post = false;
-      out.sceneMs = +sceneOnly.toFixed(3);
-      out.postTotal = +(full - sceneOnly).toFixed(3);
+      for (let r = 0; r < rounds; r++) {
+        for (const key of stages) {
+          // Alternate which arm runs first so a rising or falling load biases
+          // the two arms equally across rounds instead of one of them.
+          let full, skipped;
+          if ((r + stages.indexOf(key)) % 2 === 0) {
+            full = measure(); sk[key] = true; skipped = measure(); sk[key] = false;
+          } else {
+            sk[key] = true; skipped = measure(); sk[key] = false; full = measure();
+          }
+          fulls.push(full);
+          samples[key].push(full - skipped);
+        }
+      }
+      const r3 = (v) => +v.toFixed(3);
+      out.frameMs = r3(median(fulls));
+      out.ao = this.ao ? r3(median(samples.ao)) : 0;
+      out.bloom = this.bloom ? r3(median(samples.bloom)) : 0;
+      out.dof = this.dof ? r3(median(samples.dof)) : 0;
+      out.rays = this.rays ? r3(median(samples.rays)) : 0;
+      out.taa = this.taa ? r3(median(samples.taa)) : 0;
+      out.postTotal = r3(median(samples.post));
+      out.sceneMs = r3(out.frameMs - out.postTotal);
       // Whatever the named stages do not account for: composite + grade +
       // the extra full-res round trips.
-      out.compositeGradeEtc = +(out.postTotal - out.ao - out.bloom -
-        out.dof - out.rays - out.taa).toFixed(3);
+      out.compositeGradeEtc = r3(out.postTotal - out.ao - out.bloom -
+        out.dof - out.rays - out.taa);
+      out.rounds = rounds; out.iters = iters;
+      out.spread = Object.fromEntries(stages.map((k) => [k, r3(mad(samples[k]))]));
+      out.frameSpread = r3(mad(fulls));
+      // Name the failure instead of letting it hide inside a plausible number.
+      out.contended = stages.some((k) => mad(samples[k]) > 0.6 &&
+        mad(samples[k]) > Math.abs(median(samples[k])));
+      out.raw = samples;
     } finally {
       for (const k of Object.keys(sk)) sk[k] = false;
       this.cfg.debug = prevDebug;

@@ -108,6 +108,7 @@ uniform sampler2D tSrc;
 uniform vec2  uTexel;
 uniform float uMaxCoC;
 uniform float uEdgeBoost;
+uniform float uTapDensity;   // taps per square pixel of disc; huge = fixed
 #ifdef DOF_NEAR
 uniform sampler2D tNearMax;
 #endif
@@ -132,12 +133,25 @@ void main() {
 
   float rot = fxIGN(gl_FragCoord.xy) * 6.28318531;
 
+  /* SAMPLE THE DISC YOU ACTUALLY HAVE.
+     DOF_TAPS is a per-tier constant (32 far / 18 near at high) but R is not:
+     the far layer's radius is capped by cfg.dof.maxBackgroundCoC, which is a
+     FRACTION OF IMAGE HEIGHT, so at the gate's 1280x800 the far disc can never
+     exceed 2.0 half-res px -- an area of 12.6 px sampled 32 times. Those extra
+     19 taps cannot change a single pixel; they are 2.5x oversampling of a disc
+     that is already fully covered. At the review's 2100x1350 the same ceiling
+     is 3.375 px, area 35.8, and the full 32 are used, so this costs the review
+     image nothing at all. One tap per square pixel of disc is the density; the
+     floor of 6 keeps the spiral from degenerating on tiny discs. */
+  float nf = clamp(ceil(uTapDensity * R * R), 6.0, float(DOF_TAPS));
+
   vec3 acc = vec3(0.0);
   float wsum = 0.0;
   float cover = 0.0;
 
   for (int i = 0; i < DOF_TAPS; i++) {
-    float fi = (float(i) + 0.5) / float(DOF_TAPS);
+    if (float(i) >= nf) break;
+    float fi = (float(i) + 0.5) / nf;
     float rr = sqrt(fi);                            // uniform over the disc
     float a = float(i) * 2.39996323 + rot;          // golden-angle spiral
     vec2 o = vec2(cos(a), sin(a)) * rr * R;
@@ -175,7 +189,7 @@ void main() {
 #ifdef DOF_NEAR
   // Coverage = the fraction of the (correctly sized) disc that foreground
   // material actually occupies. Every tap can contribute at most 1.
-  float alpha = fxSat(cover / float(DOF_TAPS));
+  float alpha = fxSat(cover / nf);
   gl_FragColor = vec4(wsum > 1e-4 ? acc / wsum : centre.rgb, alpha);
 #else
   acc += centre.rgb; wsum += 1.0;   // an in-focus pixel must remain itself
@@ -270,6 +284,7 @@ export class DoF {
       uTexel: { value: new THREE.Vector2(1 / hw, 1 / hh) },
       uMaxCoC: { value: 16 },
       uEdgeBoost: { value: 0.16 },
+      uTapDensity: { value: Math.PI },
     });
     this.far = new FxPass('dofFar', GATHER_FRAG, gatherU(), { DOF_TAPS: tune.dofTaps });
     const nearU = gatherU();
@@ -376,6 +391,9 @@ export class DoF {
     for (const g of [this.far, this.near]) {
       g.u.uMaxCoC.value = maxCoC;
       g.u.uEdgeBoost.value = cfg.edgeBoost;
+      // cfg.tapDensity === 0 restores the fixed per-tier tap count, so the
+      // saving stays A/B-able inside one page session. It is not a look knob.
+      g.u.uTapDensity.value = cfg.tapDensity > 0 ? cfg.tapDensity : 1e9;
     }
     this.far.render(r, this.rtFar);
     this.near.render(r, this.rtNear);
