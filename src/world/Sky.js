@@ -115,6 +115,16 @@ export class Sky {
       mieG: 0.70,
       /** Snow. The lower hemisphere of the IBL is this, lit. */
       groundAlbedo: 0.82,
+      /** Snow blink: the fraction of a white snowfield's radiance that is
+       *  available to the in-scatter term. 0.5 is the geometric ceiling --
+       *  the ground is half the sphere -- and the real figure is lower
+       *  because that light is attenuated on its way up. Tuned so the
+       *  horizon band lands on bible section 3's #aac4e0. */
+      bounceScale: 0.30,
+      /** e-folding altitude (km) of the ground-view factor. Low, so the term
+       *  is horizon-weighted: a grazing ray spends hundreds of km inside this
+       *  layer and a zenith ray two. */
+      bounceHeightKm: 2.5,
       /** Solar angular radius, radians. The real sun is 0.00465. */
       sunRadius: 0.00465,
       sunDiscScale: 42.0,
@@ -378,6 +388,8 @@ export class Sky {
         uGroundAmbient: { value: new THREE.Vector3() },
         uBeltTint: { value: new THREE.Vector3(1, 0.5, 0.35) },
         uBeltScale: { value: 0 },
+        uGroundBounce: { value: new THREE.Vector3() },
+        uBounceInvH: { value: 1 / 7.0 },
       },
       vertexShader: VS,
       fragmentShader: /* glsl */ `
@@ -428,6 +440,37 @@ export class Sky {
     const groundBoost = 2.4;
     const amb = 0.10 * I * groundBoost * Math.max(0.28, Math.sin(elev) + 0.34);
     su.uGroundAmbient.value.set(0.175 * amb, 0.410 * amb, 1.0 * amb);
+
+    // Snow blink (see ATMO_SCATTER).
+    //
+    // COLOUR comes from the physical model: snow albedo times everything
+    // landing on it. The sky's share of that is the blue half, and it
+    // survives the sun going down, which is why the band stays cold instead
+    // of following the sun into orange.
+    //
+    // MAGNITUDE comes from this.diffuseWhite -- the radiance of a white
+    // up-facing Lambertian surface under the rig that actually lights the
+    // terrain. The CPU-side irradiance estimate is wrong by a large factor
+    // and always has been, because Environment.js runs a hemisphere light, a
+    // snow-bounce directional, a rim directional and the IBL on top of
+    // uSunIrradiance. uGroundAmbient already carries a hardcoded 2.4x
+    // groundBoost for exactly this reason; keying off diffuseWhite instead
+    // means the band tracks exposure and sun intensity rather than silently
+    // going wrong the next time anyone moves them.
+    const sinE = Math.sin(elev);
+    const Tg = transmittance(0.0, Math.max(sinE, 0.0));
+    const alb = su.uGroundAlbedo.value;
+    const ambV = su.uGroundAmbient.value;
+    const sd = Math.max(sinE, 0) * I;
+    const gc = [
+      alb.x * (SOLAR[0] * sd * Tg[0] + ambV.x),
+      alb.y * (SOLAR[1] * sd * Tg[1] + ambV.y),
+      alb.z * (SOLAR[2] * sd * Tg[2] + ambV.z),
+    ];
+    const gl = Math.max(1e-6, 0.2126 * gc[0] + 0.7152 * gc[1] + 0.0722 * gc[2]);
+    const mag = this.diffuseWhite * this.params.bounceScale / gl;
+    su.uGroundBounce.value.set(gc[0] * mag, gc[1] * mag, gc[2] * mag);
+    su.uBounceInvH.value = 1 / this.params.bounceHeightKm;
 
     // Grazing-limb colour: the transmittance of a ray skimming the limb at
     // 5 km. Normalised to peak 1 so beltScale alone sets the strength, and

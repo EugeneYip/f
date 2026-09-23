@@ -164,6 +164,11 @@ uniform vec3  uGroundAlbedo;
 uniform vec3  uGroundAmbient;
 uniform vec3  uBeltTint;
 uniform float uBeltScale;
+// Snow blink. Upward radiance of the snowfield, in the same units as
+// uSunIrradiance, and the reciprocal e-folding altitude of the fraction of the
+// sphere that is bright ground.
+uniform vec3  uGroundBounce;
+uniform float uBounceInvH;
 
 vec3 atmoScatter(vec3 ro, vec3 rd, vec3 sunDir, int N) {
   vec2 top = raySphere(ro, rd, Rt);
@@ -222,9 +227,37 @@ vec3 atmoScatter(vec3 ro, vec3 rd, vec3 sunDir, int N) {
     float back = smoothstep(0.30, -0.55, mu);
     vec3 belt = uBeltTint * (BETA_R.r * dens.x * back * uBeltScale);
 
+    // SNOW BLINK -- the term whose absence made the low sky olive-grey.
+    //
+    // Every other source here is sunlight arriving from above. Over an 82%
+    // albedo snowfield that is at most half the story: the ground throws an
+    // enormous amount of light straight back up, and the air scatters it into
+    // the view ray exactly like any other source. Polar pilots navigate by it
+    // (iceblink), and in a photograph it is the bright blue-white band that
+    // sits on the horizon under the darker sky above.
+    //
+    // Leaving it out is what produced the measured (98,103,101): along a
+    // 1000 km horizon path the Rayleigh source is extinguished bluest-first,
+    // so a sky lit ONLY from above converges on a warm neutral, and with the
+    // ozone Chappuis band taking green out of the remaining direct beam the
+    // residue lands on khaki. Adding the bounce fixes it at the root rather
+    // than tinting the result, and it self-limits: along a long path the
+    // integral converges to uGroundBounce weighted by sR/ext, i.e. to a
+    // BLUE-biased fraction of the snow's own radiance -- bible section 3's
+    // #aac4e0 by construction, not by a colour picker.
+    //
+    // gv is the fraction of the sphere that is bright ground as seen from
+    // altitude h, folded together with the ground-to-h transmittance. Near
+    // the surface it is ~1; a few scale heights up the ground has both dimmed
+    // and curved away. That profile is what makes the term horizon-weighted:
+    // a grazing ray spends hundreds of km in the layer where gv is large, a
+    // zenith ray a few.
+    float gv = exp(-h * uBounceInvH);
+
     vec3 S = ((sR * pR + sM * pM) * Tsun
            + (sR + sM) * Tms * uMsScale * 0.0795775
-           + belt) * uSunIrradiance;
+           + belt) * uSunIrradiance
+           + (sR + sM) * uGroundBounce * gv;
 
     vec3 segT = exp(-ext * ds);
     // Energy-conserving analytic integration of the segment (Hillaire 2020).
