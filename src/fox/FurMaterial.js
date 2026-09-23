@@ -214,10 +214,72 @@ export const CARD_FLOOR_SCALE = {
  * the nose is exempt because its coat is uNoseFade's and not a length
  * question at all.
  */
+/*
+ * AND THIS TABLE IS WHERE THE COAT STOPS BEING THE SAME LENGTH EVERYWHERE.
+ * Review 4 on blocker 5: "the damning detail is uniformity -- length and
+ * direction are identical on the shoulder, flank, haunch, cheek and muzzle",
+ * and section A calls it suspicious evenness. ac5ed4c named the mechanism
+ * (uCardFloor is one global absolute stand-off) and had to leave its own
+ * lever empty, because cutting the muzzle's reach is in DIRECT CONFLICT with
+ * blocker 1 -- that reach is what stops the muzzle's silhouette being bare
+ * mesh, and the numbers it measured show the conflict is real:
+ *
+ *     muzzle / jaw floor scale   bottom cliffs   top cliffs
+ *       1.00 / 1.00  (shipped)      11 / 114       3 / 114
+ *       0.25 / 0.45                 19            10
+ *
+ * The interior/outline split dissolves that conflict, because the two
+ * requirements were never about the same hair. Shortening a region here
+ * touches only the cards that cannot be on its contour at any framing, so
+ * blocker 1's fringe is kept at full reach while 4h's short muzzle coat is
+ * restored over the part of it you look at. Measured at `profile`, 2100x1350,
+ * one session, one instant, the whole table below against a flat 1.0:
+ * coverage 416 498 -> 416 598 and the four contour p10s 1.562/2.156/1.917/
+ * 1.856 -> 1.562/2.191/1.917/1.901. It is free.
+ *
+ * With cardInteriorLen 0.30 the drawn interior multiplier is 1 + mix*(0.30-1),
+ * floored at 0.12 in the shader:
+ *
+ *     mix 0.55 -> 0.615 · 0.75 -> 0.475 · 1.00 -> 0.300 · 1.20 -> 0.160
+ *
+ * so the muzzle's 23.2 mm of drawn guard hair becomes 3.7 mm over its own
+ * flat, against the skull's 48.6 mm becoming 29.9 -- 8:1 where it reads,
+ * against the 2.1:1 ac5ed4c had to accept, and bible 5's 2-6 mm for muzzle,
+ * paw and forehead hair. The skull, ruff and tail are held back deliberately:
+ * 4h's contrast is between a SHORT muzzle and a DEEP skull, and the tail has
+ * to stop reading as a constant-diameter extension of the torso.
+ */
 export const CARD_INTERIOR_MIX = {
-  0: 0.0,          // nose -- uNoseFade owns this coat
-  6: 0.0, 7: 0.0,  // earOuter / earInner -- thin plates, see above
+  0: 0.0,                     // nose -- uNoseFade owns this coat
+  1: 1.20, 2: 1.10,           // muzzle, jawLower -- bible 5's 2-6 mm
+  3: 1.00,                    // cheek
+  4: 0.75, 5: 0.55,           // forehead, skull -- 4h's deep skull
+  6: 0.60, 7: 0.60,           // ears: see below
+  8: 0.85, 9: 0.90, 10: 0.60, // throat, neck, ruff -- the ruff reads deep
+  11: 0.85, 12: 1.00, 13: 0.95, 14: 1.00, 15: 0.90, 16: 0.95, 17: 1.00,
+  18: 1.00, 19: 1.15, 20: 1.25,      // front leg, cannon, paw
+  21: 1.00, 22: 1.15, 23: 1.25,      // hind leg, hock, paw
+  24: 0.60, 25: 0.55, 26: 0.55,      // tail -- a brush, not a flank
 };
+/*
+ * THE EARS ARE THE ONE ENTRY WITH A MEASURED COST, and they are here rather
+ * than exempt because the review asks whether their raggedness is fur's. It
+ * is: cropped at `portrait`, the pinna is a mass of 60-120 px spikes
+ * radiating off its FACE as well as its rim, with no defined edge anywhere.
+ * At 1.0 the near pinna gets a body again and the fringe retreats to the rim.
+ * The cost, at `portrait` / `profile` in the same session:
+ *
+ *     ear mix   portrait coverage   top p10   left p10   profile left p10
+ *       0.0          1 363 398       2.836      1.429         1.562
+ *       0.5          1 359 473       2.714      1.390         1.562
+ *       1.0          1 358 379       2.622      1.390         1.520
+ *
+ * 0.60 is taken rather than 1.0 because of the warning the card fragment
+ * shader already carries for uCardInner and this file for CARD_INNER_FLOOR:
+ * on a thin plate seen FACE-ON, vEdge is low over the rim as well as the
+ * middle, so the split cannot tell the ear's outline from its interior at
+ * the frontal framings -- and those are not the framings measured above.
+ */
 
 export const CARD_LEN_SCALE = {
   0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.0,

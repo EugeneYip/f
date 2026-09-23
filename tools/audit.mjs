@@ -296,7 +296,20 @@ const main = async () => {
       // is unchanged -- and two standalone audits read `high` at 17.4 while
       // the same build idle reads 16.2. Measuring `low` at both ends catches
       // exactly that, because load changes over the ten seconds between.
-      for (const tier of ['low', 'medium', 'high', 'ultra', 'low']) {
+      // Sweep low->ultra, then repeat HIGH at the end.
+      //
+      // Two ordering facts, both learned the hard way. Repeating `low` proves
+      // nothing: it read 5.22 and 5.21 ten seconds apart, drift 0.002, on a
+      // run where `high` came back at 17.73 against 16.22 idle. And putting
+      // `high` FIRST to fix that made it read 17.48 — the first tier measured
+      // pays the warm-up, because a quality switch recompiles shaders and 12
+      // renders do not always cover it.
+      //
+      // So the ascending order stays (every budget in this file was set
+      // against it, and changing it silently re-baselines all four), and the
+      // repeat is appended. The repeat therefore measures drift over the
+      // sweep's duration, which is exactly the contention question.
+      for (const tier of ['low', 'medium', 'high', 'ultra', 'high']) {
         D.setQuality(tier); D.setPose('hero'); D.setState('idle'); D.settle(0.5);
         for (let i = 0; i < 12; i++) { D.step(1 / 60); D.render(); }  // warm shaders
 
@@ -341,14 +354,14 @@ const main = async () => {
     const triSpread = Math.max(...tierTris) / Math.max(1, Math.min(...tierTris));
     // Two independent contention signals, because each is blind to a case
     // the other catches.
-    const lo = perf.low;
-    const drift = lo && lo.repeatMs
-      ? Math.abs(lo.repeatMs - lo.frameMs) / Math.max(lo.frameMs, 1e-6) : 0;
-    report.lowDriftFrac = +drift.toFixed(3);
+    const hi = perf.high;
+    const drift = hi && hi.repeatMs
+      ? Math.abs(hi.repeatMs - hi.frameMs) / Math.max(hi.frameMs, 1e-6) : 0;
+    report.highDriftFrac = +drift.toFixed(3);
     report.contended = (msSpread < 0.08 && triSpread > 2) || drift > 0.15;
     if (report.contended) {
       if (drift > 0.15) {
-        console.log(`\n  NOTE: the SAME tier measured ${lo.frameMs} ms and ${lo.repeatMs} ms ` +
+        console.log(`\n  NOTE: the SAME tier measured ${hi.frameMs} ms and ${hi.repeatMs} ms ` +
           `ten seconds apart (${(drift * 100).toFixed(0)}% drift).\n` +
           '        The machine is not quiet. Budgets are not enforced this run.');
       }
