@@ -27,6 +27,35 @@
 // resampled its own history bilinearly on every accumulated frame instead of
 // fetching it back unchanged. The contract above was simply false, and the
 // coat's contour paid for it -- see the comment at the reprojection itself.
+//
+// VERIFIED, and the verification found the diagnosis INCOMPLETE. In-session
+// A/B over cfg.taa.dejitterReproject, orders alternated on/off/on/off, one sim
+// instant, 18 accumulated renders per arm, repeats bit-stable (arm-to-arm
+// repeat moved 0.08-0.58% of the frame at max delta 4; on-vs-off moved 96.4%
+// at macro_eye). Measured inside the coat band (matte-located, 18 px in from
+// the contour, 99436 px at `profile`):
+//
+//                      OFF (as shipped for 4 rounds)   ON (fixed)
+//   fine-detail rms          1.546                       5.769   (3.7x)
+//   axis-aligned share       0.540                       0.479
+//   vertical autocorr        +0.103 / -0.100 / -0.025    -0.164 / +0.002 / +0.020
+//
+// That middle row of autocorrelation IS the defect: a damped 4 px vertical
+// ripple, i.e. the comb. It is gone. It converges too -- 18 / 60 / 180
+// accumulated renders give rms 6.546 / 6.430 / 6.428, so what the fix restores
+// is resolved detail and not unintegrated dither.
+//
+// BUT THE CHEVRONS AT `macro_eye` ARE NOT THIS PASS AND NEVER WERE. They are
+// still there, sharper. Attributed in one session at one instant:
+// hiding `ctx.fur.cardMesh` removes every right-angled bracket and leaves soft
+// directional shell fur; hiding `ctx.fur.shellMesh` leaves the brackets as the
+// ENTIRE image. The fur cards have a hard kink and their silhouettes are the
+// staples. Do not spend another round on the resolve for that.
+//
+// The earlier "hiding post removes it" elimination was the AGENTS.md trap
+// verbatim: post off also gates TAA off, the coat's stochastic alpha is then
+// unresolved, and the whole crop becomes a noise field in which no shape of
+// any kind is visible. `nopost` cannot answer a question about coat structure.
 import * as THREE from 'three';
 import { FxPass, makeRT, disposeRT } from './Pass.js';
 import { FX_CATMULL_ROM } from './glsl/common.js';
