@@ -579,6 +579,52 @@ float snShadowMask(){
 #endif
 }
 
+/**
+ * SUBJECT CONTACT OCCLUSION.
+ *
+ * A cast shadow is DIRECT light removed, and it therefore carries a factor of
+ * sin(sun elevation): at 2 degrees the beam delivers 3.5% of its normal
+ * irradiance to a horizontal surface, so even a geometrically perfect shadow
+ * is invisible. What tells the eye that a body is TOUCHING the ground is the
+ * other half -- the sky and the snow bounce that the body blocks -- and that
+ * has no elevation term at all. It is the same at noon and at 2 degrees, and
+ * we were rendering none of it: snow under a paw measured within a level of
+ * snow 400 px away at every angle.
+ *
+ * Analytic, from a handful of spheres fitted to the live skeleton
+ * (SnowMaterial._occluders), not from the depth buffer: screen-space AO at
+ * this scale is the thing that produced the picket-fence lattice, and a
+ * 0.085 m kernel cannot see a 0.25 m belly anyway.
+ *
+ * Per sphere this is the standard far-field solid-angle term
+ * cos(theta) * r^2 / d^2, saturated inside the sphere, combined as a
+ * visibility product so several overlapping spheres cannot exceed 1. Unused
+ * slots carry w = 0, which makes their term exactly 0 with no branch.
+ */
+uniform vec4 uOccl[ SN_OCCL ];   // world xyz, radius. w = 0 disables a slot.
+uniform vec4 uOcclBound;         // world xyz of the subject, w = cull radius
+uniform vec2 uOcclMix;           // x: sky attenuation · y: bounce attenuation
+
+float snContactOcc(vec3 p, vec3 n){
+  vec3 db = p - uOcclBound.xyz;
+  float d2 = dot(db, db);
+  float R = uOcclBound.w;
+  // One rejection for the whole frame outside a 1.4 m ball around the animal,
+  // which is all but a few percent of the snow pixels in a wide shot.
+  if (R <= 0.0 || d2 > R * R) return 0.0;
+  float vis = 1.0;
+  for (int i = 0; i < SN_OCCL; i++) {
+    vec4 s = uOccl[ i ];
+    vec3 d = s.xyz - p;
+    float l2 = max(dot(d, d), 1e-6);
+    float r2 = s.w * s.w;
+    float nl = clamp(dot(n, d) * inversesqrt(l2), 0.0, 1.0);
+    vis *= 1.0 - min(nl * r2 / max(l2, r2), 0.97);
+  }
+  // Feather the cull boundary so the ball has no edge of its own.
+  return (1.0 - vis) * (1.0 - smoothstep(R * 0.62, R, sqrt(d2)));
+}
+
 SNOW_CONSTS
 SNOW_FIELD
 SNOW_FOOTPRINT
@@ -802,11 +848,18 @@ void main(){
 
   // Hollows between the ridges see less sky than the crests do.
   float hollow = 0.78 + 0.22 * saturate(vFields.x * 2.0 + 0.62);
-  float skyVis = saturate(0.52 + 0.48 * N.y) * hollow * (1.0 - 0.45 * comp * comp);
+  // ... and so does snow with an animal standing on it. This is the term the
+  // cast shadow cannot supply at a low sun; see snContactOcc().
+  float contact = snContactOcc(vWorld, N);
+  float skyVis = saturate(0.52 + 0.48 * N.y) * hollow * (1.0 - 0.45 * comp * comp)
+               * (1.0 - uOcclMix.x * contact);
   vec3 ambient = uSkyColor * (uSkyInt * skyVis) * deep;
   // Snow is surrounded by snow: a modest near-white interreflection that keeps
-  // hollows from going black without washing the blue out of them.
-  vec3 inter = uBounce * (uBounceInt * (0.45 + 0.55 * saturate(1.0 - N.y)));
+  // hollows from going black without washing the blue out of them. The body
+  // blocks less of this than of the sky -- it arrives from all round, not from
+  // straight up -- so it takes a weaker share of the contact term.
+  vec3 inter = uBounce * (uBounceInt * (0.45 + 0.55 * saturate(1.0 - N.y)))
+             * (1.0 - uOcclMix.y * contact);
   // The aurora is a wide, dim source directly overhead, so on snow it is a
   // broad wash on upward faces with almost no shape to it -- and it only
   // exists at all once the sun is far enough down for the curtains to be
@@ -907,7 +960,8 @@ void main(){
     else if (uDebugView < 5.5) col = vec3(dn * 2.0 + 0.5, 0.5);
     else if (uDebugView < 6.5) col = vec3(comp, ft.x, ft.y);
     else if (uDebugView < 7.5) col = vec3(gShadowDbg.xy, 0.0);
-    else col = vec3(gShadowDbg.z, gShadowDbg.w, 0.0);
+    else if (uDebugView < 8.5) col = vec3(gShadowDbg.z, gShadowDbg.w, 0.0);
+    else col = vec3(1.0 - contact);
   }
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>

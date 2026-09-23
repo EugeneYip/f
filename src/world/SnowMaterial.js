@@ -77,6 +77,35 @@ import * as THREE from 'three';
 import { rng } from '../util/math.js';
 
 const _clear = new THREE.Color();
+const _wp = new THREE.Vector3();
+
+/**
+ * Sphere proxies for the animal, used ONLY for contact occlusion on the snow.
+ *
+ * Bone name + radius in metres. The radii are coat radii, not skin radii: the
+ * critic's blocker 7 is partly that the shadow caster is the bare mesh, and
+ * while the shadow MAP is not ours to change, the term that actually reads as
+ * "this animal is touching the ground" is this one, and it can be fitted to
+ * the silhouette the viewer sees. Shoulder height is ~0.28 m and the body is
+ * ~0.55 m long, so a 0.12 m torso sphere every ~0.15 m along the spine tiles
+ * the trunk without gaps.
+ *
+ * Bone names are the canonical set in AGENTS.md. Any that a future rig does
+ * not have is left at radius 0, which makes its term exactly zero with no
+ * branch in the shader -- but the COUNT never changes, so a missing bone can
+ * never silently delete the occluder (AGENTS.md: the absent measurement).
+ */
+const OCCLUDERS = [
+  ['chest', 0.145],
+  ['spine02', 0.145],
+  ['hips', 0.145],
+  ['head', 0.090],
+  ['pawL', 0.060],
+  ['pawR', 0.060],
+  ['toeL', 0.060],
+  ['toeR', 0.060],
+  ['tail04', 0.070],
+];
 import {
   SNOW, SNOW_VERT, SNOW_FRAG, DETAIL_BAKE_FRAG, PROBE_FRAG,
   FULLSCREEN_VERT, snowResolve, snowConstsGLSL,
@@ -166,8 +195,16 @@ export class SnowMaterial {
         uAerial: { value: new THREE.Vector3(0.016, 0.62, 0.62) },
         uHaze: { value: new THREE.Color(0xaac4e0) },
         uSkirtDrop: { value: 60.0 },
+        // --- subject contact occlusion (see snContactOcc in snow.glsl.js) ---
+        uOccl: { value: OCCLUDERS.map(() => new THREE.Vector4(0, 0, 0, 0)) },
+        uOcclBound: { value: new THREE.Vector4(0, 0, 0, 0) },
+        // x: share of SKY ambient the body blocks · y: share of the snow
+        // interreflection. The sky arrives from straight up and is blocked
+        // hardest; the bounce arrives from all round the horizon and is not.
+        uOcclMix: { value: new THREE.Vector2(1.00, 0.65) },
         // 0 off · 1 shadow mask · 2 ridge self-shadow · 3 clipmap level ·
-        // 4 sparkle · 5 detail normal · 6 footprint channels · 7/8 shadow dbg.
+        // 4 sparkle · 5 detail normal · 6 footprint channels · 7/8 shadow dbg
+        // · 9 contact occlusion.
         // See the note below before blaming this material for a lattice.
         uDebugView: { value: 0 },
       },
@@ -183,7 +220,11 @@ export class SnowMaterial {
       fragmentShader: snowResolve(SNOW_FRAG),
       lights: true,
       fog: true,
-      defines: { SUN_TAPS: this._sunTaps(q), SPARKLE_OCT: this._sparkleOct(q) },
+      defines: {
+        SUN_TAPS: this._sunTaps(q),
+        SPARKLE_OCT: this._sparkleOct(q),
+        SN_OCCL: OCCLUDERS.length,
+      },
     });
     this.material.name = 'snow';
 
@@ -303,9 +344,48 @@ export class SnowMaterial {
     // than caching it: a stale texel size silently rescales the depth bias.
     const sm = ctx.environment?.sun?.shadow?.mapSize;
     if (sm && sm.x > 0) u.uShadowTexel.value.set(1 / sm.x, 1 / sm.y);
+    this._updateOccluders(ctx);
     const w = ctx.wind;
     const wl = Math.hypot(w.x, w.z) || 1;
     this.field.uWindXZ.value.set(w.x / wl, w.z / wl);
+  }
+
+  /**
+   * Refit the contact-occlusion spheres to the live skeleton.
+   *
+   * Read off the bones rather than off subjectPosition alone, so the term
+   * tracks a lifted paw, a sat haunch and a turned head instead of following
+   * a single point around. Bone world matrices are already up to date here:
+   * the terrain runs at order -50 and the rig at 100, so these are LAST
+   * frame's poses -- a fraction of a millimetre at 120 Hz, and the
+   * alternative (reaching into another system mid-draw) is worse.
+   */
+  _updateOccluders(ctx) {
+    const u = this.uniforms;
+    const arr = u.uOccl.value;
+    const fox = ctx.fox;
+    let ok = 0;
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < OCCLUDERS.length; i++) {
+      const b = fox?.bone?.(OCCLUDERS[i][0]);
+      if (!b) { arr[i].set(0, 0, 0, 0); continue; }
+      b.getWorldPosition(_wp);
+      arr[i].set(_wp.x, _wp.y, _wp.z, OCCLUDERS[i][1]);
+      cx += _wp.x; cy += _wp.y; cz += _wp.z; ok++;
+    }
+    if (!ok) { u.uOcclBound.value.set(0, 0, 0, 0); return; }
+    cx /= ok; cy /= ok; cz /= ok;
+    // Cull radius. The per-sphere term has fallen to ~1% of its peak at ten
+    // radii, so 1.25 m past the centroid covers the 0.125 m torso spheres and
+    // everything smaller. Anything outside is rejected with one dot product,
+    // which is the whole cost of this feature over most of a wide frame.
+    let reach = 0;
+    for (let i = 0; i < OCCLUDERS.length; i++) {
+      const s = arr[i];
+      if (s.w <= 0) continue;
+      reach = Math.max(reach, Math.hypot(s.x - cx, s.y - cy, s.z - cz) + s.w * 10.0);
+    }
+    u.uOcclBound.value.set(cx, cy, cz, reach);
   }
 
   onQuality(ctx) {
