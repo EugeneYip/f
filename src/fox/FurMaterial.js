@@ -644,6 +644,40 @@ export const FUR_DEFAULTS = {
    *
    * For scale, measured the same way: the shells cost 4.30 ms of the frame,
    * the cards 0.51 ms, and everything else on the screen 12.44 ms.
+   *
+   * ----------------------------------------------------------------------
+   * RE-MEASURED AND RE-REFUSED, with the dense coat and 14 shells.
+   *
+   * The brief for this wave asked whether 0.55 -> 0.85 was worth taking now
+   * that the cards carry far more of the pile (band fill 0.243 -> 0.416), and
+   * asked for the detail cost to be re-measured rather than inherited. It is
+   * worse than the 7% my predecessor refused, and the reason the old number
+   * understated it is that it was read at macro_eye, which is not where this
+   * defect lives.
+   *
+   * Frame, paired ABBA at hero/idle/high/1280x800, six interleaved
+   * measurements per arm, minimum over them:
+   *
+   *     0.55   15.960 min   16.160 med
+   *     0.70   15.760       16.050      -0.200 / -0.110 ms
+   *     0.85   15.570       15.700      -0.390 / -0.460 ms
+   *
+   * Look, same protocol, mean |p - blur3(p)| over the eroded coverage
+   * interior -- and measured at the NAPE as well as the cheek, because §4b's
+   * waxy-interior defect is named at cheek, skull AND nape:
+   *
+   *     arm      portrait fine   nape fine     nape coarse
+   *      0.55       2.766          1.520          1.905
+   *      0.70       2.757          1.491 -1.9%    1.970
+   *      0.85       2.613 -5.5%    1.207 -20.6%   2.042 +7.2%
+   *
+   * 0.85 costs a FIFTH of the nape's fine detail and adds 7% to its coarse
+   * detail -- fine energy out, coarse energy in, which is the waxy failure
+   * getting measurably worse at the exact region the review names. Refused
+   * again, and now there is no case for it at all: the shell-spacing ceiling
+   * pays 0.93-1.07 ms rather than 0.39 and pays it in the other direction on
+   * detail. 0.70 is nearly free on both counts (-0.20 ms, -0.3%/-1.9%) and is
+   * the arm to reach for first if a later wave needs half a millisecond.
    */
   shellDeep: 0.55,
   fillTop: 1.12,
