@@ -941,19 +941,55 @@ export const FUR = {
   [R.croup]: [0.0460, 0.80],
   [R.haunch]: [0.0415, 0.66],
   [R.legFrontUpper]: [0.0340, 0.58],
-  [R.legFrontLower]: [0.0210, 0.66],
-  // §4f's sourced ranking (Underwood & Reynolds via Prestrud 1991) puts the
-  // FOOT PADS among the DEEPEST and most seasonal pelage on the animal and
-  // the DISTAL LEGS among the shallowest. We had it exactly backwards: pads
-  // 12 mm under a 26 mm distal leg. Flipped, which is also the one thing
-  // this species is named for -- lagopus, "hare-foot" -- and §4b's "paws
-  // broad with dense fur between the toes". It gives the foot the flare out
-  // of a slimmer ankle that makes it read as a foot rather than as the
-  // bottom of a column; see the note on `addPaw` about the toes.
-  [R.pawFront]: [0.0220, 0.86],
+  [R.legFrontLower]: [0.0140, 0.68],
+  /**
+   * ### 22 -> 9.5 mm, and why f708e0d's reading of the source was right while
+   * its number made the animal footless.
+   *
+   * f708e0d flipped pads 12 -> 22 mm on the Underwood & Reynolds ranking
+   * (foot pads DEEPEST, distal legs SHALLOWEST) and verified it on the
+   * canopy: the foot stood 26 % proud of the pastern. That measurement was
+   * of the canopy's WIDTH and it was correct. What it never measured is the
+   * canopy's BOTTOM, and that is where 22 mm goes:
+   *
+   *   `paws`, true-coverage matte, 1400x900. Each paw's own ground point is
+   *   projected from the bone and the terrain height under it:
+   *
+   *       paw      ground y   coat bottom y   coat BELOW the snow
+   *       pawL        562          641            79 px  (~48 mm)
+   *       pawR        571          632            61 px
+   *       footL       543          603            60 px
+   *       footR       549          593            44 px
+   *
+   *   and the four legs stop being separate runs at y = 540 -- ABOVE every
+   *   one of those ground lines -- so no leg is ever individually visible at
+   *   the height where it meets the snow. The bottom of the animal is one
+   *   486 px skirt.
+   *
+   * 22 mm of coat is 20.5 mm of shell plus roughly as much again of card
+   * reach and droop, all of it below a sole that already sits ~9 mm under the
+   * snow surface (Locomotion plants the METACARPAL BONE on the ground and
+   * that bone rides 17.1 mm above the sole -- its own comment says 20.5 and
+   * says the 22 mm audit threshold is why). So every millimetre of paw coat
+   * is buried by construction, and the foot cannot be anything but a fringe
+   * that ends somewhere in the snow.
+   *
+   * STATE THE COST PLAINLY: at 9.5 mm the pad coat is now shallower than the
+   * lower leg's 14.0, which inverts the ranking f708e0d restored. The
+   * defence is that the ranking describes hair on a foot standing ON snow
+   * and ours stands IN it -- a depth that is entirely subterranean is not a
+   * depth, it is fill cost. What the ranking actually buys the picture, a
+   * foot broader than the ankle above it, is bought back in GEOMETRY in
+   * `addPaw` and measured there: flare over the pastern goes 1.32 -> 1.62.
+   * That is §4f's own move ("radius moves from geometry into coat") run in
+   * the direction this scale demands, because a 6 mm mesher cell can hold a
+   * 52 mm pad's shape and 22 mm of isotropic coat over a 9.6 mm toe cannot
+   * hold anything's.
+   */
+  [R.pawFront]: [0.0095, 0.88],
   [R.legHindUpper]: [0.0380, 0.60],
-  [R.hock]: [0.0180, 0.52],
-  [R.pawHind]: [0.0220, 0.86],
+  [R.hock]: [0.0120, 0.54],
+  [R.pawHind]: [0.0095, 0.88],
   [R.tailBase]: [0.0480, 0.78],
   [R.tailMid]: [0.0540, 0.80],
   [R.tailTip]: [0.0420, 0.72],
@@ -1573,7 +1609,7 @@ export function buildField() {
     ra: 0.0156, rb: 0.0178, squash: [1.0, 1.0, 0.92], k: 0.012, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.12], flowRadial: 0.40, tint: TINT_FUR,
   });
-  addPaw(f, furOf, 0.0455, 0.0722, +1, R.pawFront, 0.0192, 0.0206);
+  addPaw(f, furOf, 0.0455, 0.0722, +1, R.pawFront, 0.0232, 0.0250);
 
   // -------------------------------------------------------------- hindlimb ---
   // Haunch mass first: it is the widest point of the animal from behind.
@@ -1603,7 +1639,7 @@ export function buildField() {
     flowDir: [0, -0.55, -0.84], flowRadial: 0.45, tint: TINT_FUR,
   });
 
-  addPaw(f, furOf, 0.0450, -0.1300, +1, R.pawHind, 0.0180, 0.0190);
+  addPaw(f, furOf, 0.0450, -0.1300, +1, R.pawHind, 0.0216, 0.0230);
 
   // ------------------------------------------------------------------ tail ---
   const tailKeys = ['tail01', 'tail02', 'tail03', 'tail04', 'tail05',
@@ -1695,12 +1731,27 @@ export function buildField() {
 function addPaw(f, furOf, x, zBack, sgn, region, padR, toeSpread) {
   const fur = furOf(region);
   const flow = { flowDir: [0, -0.35, sgn * 1.0], flowRadial: 0.30 };
-  const padLen = 0.0140;
-  const padY = 0.0034 + padR * 0.62;
+  const padLen = 0.0152;
+  // The underside is a PLANE, and every part of the foot shares it. It used
+  // to be 3.4 mm, which was below the carpus end-cap's own lowest point
+  // (0.0250 - 0.0178 = 7.2 mm), so the round ankle cap -- not the pad --
+  // was the bottom of the foot on its caudal half and there was no sole to
+  // read. SOLE_Y is that cap's height, so the pad and the toes now form the
+  // whole of the ground-facing surface and it is flat.
+  //
+  // Raising it also recovers 3.8 mm of the 9.2 mm by which the skin foot
+  // sits UNDER the snow at `paws` (bone 7.9 mm proud of the terrain, sole
+  // 17.1 mm below the bone). The remaining 5.4 mm is Locomotion's stance
+  // target and is reported, not worked around: moving the `pawR`/`footR`
+  // landmarks down to the sole would fix it at the cost of re-baselining 76
+  // bone-space audit checks, and those belong to another owner.
+  const SOLE_Y = 0.0072;
+  const padSqY = 0.50;
+  const padY = SOLE_Y + padR * padSqY;
 
   f.addMirrored({
     name: `pad${region}`, a: [x, padY, zBack], b: [x, padY, zBack + sgn * padLen],
-    ra: padR, rb: padR * 1.04, squash: [1.08, 0.62, 1.0], k: 0.013,
+    ra: padR, rb: padR * 1.04, squash: [1.12, padSqY, 1.02], k: 0.013,
     ...fur, ...flow, tint: TINT_PAW,
   });
 
@@ -1715,17 +1766,18 @@ function addPaw(f, furOf, x, zBack, sgn, region, padR, toeSpread) {
   // mesh can represent and what §4b describes -- a winter fox's foot is a
   // furred mitten, not four visible digits.
   const offs = [-1.85, -0.62, 0.62, 1.85];
-  const lens = [0.0206, 0.0268, 0.0268, 0.0206];
-  const splay = [-0.0070, -0.0020, 0.0020, 0.0070];
+  const lens = [0.0230, 0.0300, 0.0300, 0.0230];
+  const splay = [-0.0078, -0.0022, 0.0022, 0.0078];
+  const toeSqY = 0.66;
   for (let i = 0; i < 4; i++) {
-    const r0 = 0.0096, r1 = 0.0082;
+    const r0 = 0.0112, r1 = 0.0096;
     const x0 = x + offs[i] * toeSpread * 0.5;
     const z0 = zBack + sgn * (padLen + 0.0012);
     f.addMirrored({
       name: `toe${region}_${i}`,
-      a: [x0, 0.0034 + r0 * 0.86, z0],
-      b: [x0 + splay[i], 0.0034 + r1 * 0.86, z0 + sgn * lens[i]],
-      ra: r0, rb: r1, squash: [1.0, 0.86, 1.0], k: 0.0130,
+      a: [x0, SOLE_Y + r0 * toeSqY, z0],
+      b: [x0 + splay[i], SOLE_Y + r1 * toeSqY, z0 + sgn * lens[i]],
+      ra: r0, rb: r1, squash: [1.0, toeSqY, 1.0], k: 0.0130,
       ...fur, ...flow, tint: TINT_FUR,
     });
   }
