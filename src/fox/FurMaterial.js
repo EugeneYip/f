@@ -1153,11 +1153,55 @@ export const FUR_DEFAULTS = {
    *
    * 0.42 / 0.30 / 0.40 reproduce the shipped-before behaviour exactly, and
    * the A/B in this commit confirms it to four decimals on all nine
-   * statistics. See the sweep below each value for what moves.
+   * statistics.
+   *
+   * THE SWEEP, `portrait`, 1400x900, one session, one instant. `base` is the
+   * three values at 0.40 / 0.42 / 0.30 and reproduces the pre-refactor build
+   * to a pixel, which is this refactor's positive control:
+   *
+   *   arm                        cov      band fill L   depth L   p10 L/T   strand
+   *     base                   604 422      0.245         62     1.19/2.12   3.87
+   *     cardHairs 5 -> 14      605 185      0.242         65     1.05/2.39   3.94
+   *     duty 0.70              605 963      0.310         61     1.05/2.45   4.03
+   *     hairLen .80 fade .12   617 864      0.293         66     1.15/2.15   3.94
+   *     SHIPPED (.85/.85/.10)  619 474      0.431         63     1.20/1.86   4.23
+   *     + cardHairs 12         619 727      0.434         63     1.14/2.16   4.14
+   *     duty 1.00              619 526      0.445         52     1.09/1.00   4.17
+   *     + cardLength 1.10      608 010      0.432         58     1.00/1.64   4.11
+   *     + interiorLen 0.12     619 201      0.432         63     1.17/1.72   4.11
+   *     + furCards 13k -> 26k  630 084      0.435         64     1.41/2.26   4.12
+   *
+   * The band's fill goes 0.245 -> 0.431, a 76% denser coat, while its depth
+   * and both measured contour p10s hold and coverage RISES 2.5% -- so this is
+   * not the length-for-silhouette trade that four previous attempts ran into.
+   * It is not a trade at all. Paired ABBA at `hero`/idle/high/1280x800 it
+   * costs 0.025 ms against a 0.05 ms arm-to-arm spread: free.
+   *
+   * THREE THINGS THE SWEEP SETTLES, so they are not re-run:
+   *
+   *   * cardHairs is NOT the lever, as the duty-cycle algebra says. 5 -> 12 on
+   *     top of the shipped duty buys 0.003 of fill. It stays at 5.0; raising
+   *     it also drives fwidth(s) past the lattice's LOD dissolve, which turns
+   *     cards back into the constant-alpha plates blocker 6 is about.
+   *   * duty 1.00 IS too much: the hairs merge, and the top contour p10
+   *     collapses 1.86 -> 1.00, i.e. the outline goes monotone -- a solid mat,
+   *     which is the failure mode the uCardInner note already warns about.
+   *     0.85 is the last value that keeps it.
+   *   * cardLength 1.10 and interiorLen 0.12 were tried as ways to PAY for
+   *     this and neither is needed: 1.10 costs 1.9% of coverage and takes the
+   *     left p10 to 1.000, and interiorLen 0.12 buys 0.032 ms, inside noise.
+   *     Both are left where they are.
+   *
+   * WHAT IS STILL WRONG, measured rather than argued: the band is still 63 px
+   * deep at `portrait` against 18 px for the coat with no cards at all, and
+   * the strand width has gone 1.3 -> 2.7 px because duty widens a hair inside
+   * a fixed cell. More cards is the one arm that improved the fill further
+   * (0.435 at 26k, and the best left p10 in the sweep at 1.41) and it is the
+   * one that costs triangles.
    */
-  cardDuty: 0.40,
-  cardHairLen: 0.42,
-  cardHairFade: 0.30,
+  cardDuty: 0.85,
+  cardHairLen: 0.85,
+  cardHairFade: 0.10,
 
   cardCut: 0.004,
 };
