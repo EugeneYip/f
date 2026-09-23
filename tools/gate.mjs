@@ -37,8 +37,8 @@
  * Writes shots/gate/{report.json, audit.json, gate.json, <pose>.png}.
  * Exit code is non-zero if any group fails.
  */
-import { spawn } from 'node:child_process';
-import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { spawn, execFileSync } from 'node:child_process';
+import { readFile, readdir, rm, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -98,6 +98,56 @@ const main = async () => {
   if (QUICK) {
     console.log('[gate] --quick trims TAA/settle and audit gait states for speed -- '
       + 'treat a quick PASS as "safe to keep iterating", not as a ship signal.');
+  }
+
+  // --- 0. Every source file parses -----------------------------------------
+  //
+  // A backtick inside a `/* glsl */` template literal closes it, and node
+  // reports the resulting error tens of lines from the offending character.
+  // It has happened FIVE times on this project -- in Eyes.js, snow.glsl.js,
+  // terrain, DoF.js and Horizon.js -- and twice it left the page unparseable
+  // for the better part of an hour, blocking every concurrent agent's
+  // renders, not just the author's.
+  //
+  // Everything downstream of this point takes minutes and needs a browser.
+  // This takes two seconds and needs nothing, so it runs first and stops the
+  // run. A syntax error is not a render failure and should not be reported as
+  // one after a four-minute wait.
+  const parseFailures = [];
+  {
+    const walk = async (d) => {
+      for (const e of await readdir(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) { await walk(full); continue; }
+        if (!/\.(js|mjs)$/.test(e.name)) continue;
+        try {
+          execFileSync(process.execPath, ['--check', full], { stdio: 'pipe' });
+        } catch (err) {
+          const msg = String(err.stderr ?? err).split('\n').filter(Boolean);
+          const where = msg.find((l) => /SyntaxError/.test(l)) ?? msg[msg.length - 1] ?? '?';
+          parseFailures.push(`${path.relative(ROOT, full)}: ${where.trim()}` +
+            (/Unexpected|Invalid or unexpected/.test(where)
+              ? '  [if this makes no sense, grep the file for a backtick inside a GLSL comment]'
+              : ''));
+        }
+      }
+    };
+    await walk(path.join(ROOT, 'src'));
+    await walk(path.join(ROOT, 'tools'));
+  }
+  const parseGroup = { name: 'Sources parse', ok: parseFailures.length === 0,
+    notes: [], failures: parseFailures,
+    summary: parseFailures.length ? `${parseFailures.length} file(s) do not parse`
+                                  : 'every file under src/ and tools/ parses' };
+  if (parseFailures.length) {
+    console.error('\n[gate] SOURCES DO NOT PARSE — stopping before anything that needs a browser:');
+    for (const f of parseFailures) console.error(`   ${f}`);
+    console.error('\n' + '='.repeat(70));
+    console.error('GATE: FAIL   (sources do not parse; nothing else was run)');
+    await mkdir(path.join(ROOT, 'shots/gate'), { recursive: true });
+    await writeFile(path.join(ROOT, 'shots/gate/gate.json'),
+      JSON.stringify({ ok: false, groups: [parseGroup] }, null, 2));
+    process.exit(1);
   }
 
   // --- 1. Production build ------------------------------------------------
@@ -243,7 +293,7 @@ const main = async () => {
   }
 
   // --- report ---------------------------------------------------------------
-  const groups = [buildGroup, renderGroup, auditGroup, budgetGroup, detGroup];
+  const groups = [parseGroup, buildGroup, renderGroup, auditGroup, budgetGroup, detGroup];
   const applicable = groups.filter((g) => !g.skipped);
   const passed = applicable.filter((g) => g.ok);
   const totalFailures = applicable.reduce((n, g) => n + (g.ok ? 0 : g.failures.length), 0);

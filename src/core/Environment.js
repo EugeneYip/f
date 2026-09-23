@@ -80,12 +80,31 @@ export class Environment {
     this.sunTarget.position.copy(focus);
     this.sun.position.copy(focus).addScaledVector(d, 22);
 
-    // Tight frustum around the animal + a little ground for contact shadow.
+    // Frustum around the animal, WITH ENOUGH DEPTH TO HOLD ITS OWN SHADOW.
+    //
+    // `near 18 / far 27.5` at a light distance of 22 gives 5.5 m of depth
+    // behind the subject, which is ample at a high sun and nowhere near
+    // enough at a low one: a 0.45 m animal at 2 degrees of elevation casts
+    // **12.9 m** of shadow, so 57% of it fell outside the far plane and
+    // simply stopped. The lighting agent measured the clip and traced it
+    // here. §2 makes a look that only works at one sun angle a fluke, and a
+    // shadow that is correct at 14 degrees and truncated at 2 is exactly
+    // that.
+    //
+    // Depth is now derived from the geometry that produces it: the shadow of
+    // a body `H` tall at elevation `e` runs `H / tan(e)` along the ground,
+    // and the far plane has to clear the light-space depth of its far end.
+    // Clamped because tan() runs away below the horizon, and because a
+    // needlessly deep frustum spends depth precision it does not get back.
     const cam = this.sun.shadow.camera;
     const half = 1.55;
     cam.left = -half; cam.right = half;
     cam.top = half; cam.bottom = -half;
-    cam.near = 18; cam.far = 27.5;
+    const elev = Math.max(Math.asin(Math.max(d.y, 1e-3)), 0.5 * Math.PI / 180);
+    const H = 0.45;                               // animal height, metres
+    const reach = Math.min(H / Math.tan(elev), 26);
+    cam.near = 18;
+    cam.far = 22 + Math.max(5.5, reach * Math.cos(elev) + 1.0);
     cam.updateProjectionMatrix();
 
     this.rim.position.copy(focus).add(new THREE.Vector3(-d.x, 0.55, -d.z).multiplyScalar(10));
