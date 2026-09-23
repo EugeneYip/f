@@ -161,8 +161,67 @@ export const REGION_TABLE = [
    * millimetre, which is what stops it reading as fur on the nose leather.
    */
   /* 0 nose          */ { a: [0.98, 0.30, 0.00, 0.00], b: [1.00, 2.40, 1.00, 0.00] },
-  /* 1 muzzle        */ { a: [0.98, 1.40, 0.60, 0.10], b: [1.55, 1.60, 0.90, 1.20] },
-  /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 1.10] },
+  /*
+   * 1-2 THE MUZZLE'S CARD BAND, which did not exist. Review blocker 1: the
+   * muzzle's silhouette is bare mesh -- "a razor-sharp hairless wedge".
+   *
+   * IT DOES NOT SHOW UP IN ANY CHECK WE HAVE, and that is the first half of
+   * the finding. tools/matte.mjs and tools/spec.mjs walk in from the LEFT, row
+   * by row; at `profile` the muzzle is a near-horizontal wedge whose contour is
+   * entirely TOP and BOTTOM, so no row scan ever crosses it. Scanned in all
+   * four directions on the same matte at 1400x900:
+   *
+   *     arm        left p10  right p10  top p10  bottom p10   bottom cliffs
+   *       coat       1.205     1.757     1.377     1.395        32 / 819
+   *       COAT OFF   1.000     1.000     1.000     1.000       755 / 779
+   *       CARDS OFF  1.000     1.000     1.000     1.000       458 / 820
+   *
+   * and the muzzle band alone (x 361..488, nose anchor at 381, jaw at 478)
+   * read 29 of 114 BOTTOM columns at tv 1.000 with a 0-1 px ramp.
+   *
+   * SECOND HALF: the statistic itself was dropping cliffs. matte.mjs records a
+   * row only if net = |cov(x90) - cov(x2)| > 0.3 -- but on a perfectly hard
+   * edge the first sample over 0.02 is ALREADY over 0.90, so x90 == x2, net is
+   * 0, and the row is discarded. With the whole coat hidden only 56 of ~400
+   * rows survived that filter, and the bare mesh scored a clean p10 on the 56
+   * that did. A cliff has to SCORE 1.000, not be deleted. The CARDS OFF row
+   * above is the control that proves the corrected statistic separates: 458 of
+   * 820 bottom columns are cliffs with the cards hidden, against 32 with them.
+   * (It also says the shells alone do NOT break their own outline, which the
+   * SHELL_LEN_SCALE note above claims they do.)
+   *
+   * THE FIX IS DENSITY, AND IT IS FREE. cardWeight redistributes a FIXED card
+   * budget, so triangles, draw calls and fill are all unchanged -- which
+   * matters because `high` sits on its 16.7 ms budget. Swept live by mutating
+   * REGION_TABLE and calling FurSystem._buildCards(), one page session, one
+   * instant; the seed is fixed, so a rebuild with unchanged weights is a
+   * control and it came back byte-identical to base:
+   *
+   *     muzzle / jaw cardWeight   muzzle bottom cliffs   frame bottom cliffs
+   *       1.20 / 1.10 (was)            29 / 114               32 / 819
+   *       3.00 / 2.60                  13 / 114               23 / 819
+   *       4.50 / 3.80 SHIPPED          11 / 114               17 / 819
+   *       6.00 / 5.00                  11 / 114               17 / 819
+   *
+   * and at 4.50 the residual eleven are x 375-381 and x 387-390 -- the
+   * rhinarium and uNoseFade's own 4-7 mm ramp, which bible 4f rule 3 names as
+   * one of the three places bare skin is allowed. Everything from x=396 back
+   * now ramps over 4-19 px. 6.00 buys nothing further, so it is not taken.
+   * The rest of the outline does not pay: left p10 1.205 -> 1.164, right
+   * 1.757 -> 1.641, both inside this statistic's run-to-run spread, and the
+   * frame's total cliff count falls.
+   *
+   * WHAT THIS DOES NOT FIX. 4h's contrast between a short muzzle coat and a
+   * deep skull coat is real and the CARDS are what erased it, not the coat.
+   * Coat depth is 10.4 mm on the muzzle against 33.9 on the skull, 3.3:1 as
+   * intended -- but uCardFloor is an ABSOLUTE 10 mm stand-off applied
+   * globally, so it tops the muzzle's hair up by 8.96 mm and the skull's by
+   * only 6.6, and the drawn guard hair comes out 23.2 mm against 48.6, i.e.
+   * 2.1:1. The floor is the term that flattens every region's hair toward one
+   * length. Making it per-region is the fix and it is not this change.
+   */
+  /* 1 muzzle        */ { a: [0.98, 1.40, 0.60, 0.10], b: [1.55, 1.60, 0.90, 4.50] },
+  /* 2 jawLower      */ { a: [0.98, 1.00, 0.80, 0.18], b: [1.40, 1.30, 0.90, 3.80] },
   /* 3 cheek         */ { a: [1.05, 1.34, 1.35, 0.50], b: [0.80, 1.00, 1.00, 1.70] },
   /* 4 forehead      */ { a: [1.00, 1.10, 0.90, 0.10], b: [1.40, 1.35, 0.90, 1.80] },
   /* 5 skull         */ { a: [1.00, 1.40, 0.95, 0.16], b: [1.20, 1.25, 1.00, 1.70] },
