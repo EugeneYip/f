@@ -27,7 +27,15 @@ const VARIANTS = flag('--variants', 'base,nopost,nodof').split(',');
 const APPLY = {
   base:     '() => () => {}',
   nopost:   '(c) => { c.postfx.enabled = false; return () => { c.postfx.enabled = true; }; }',
-  nodof:    '(c) => { const d = c.postfx.dof || c.postfx.passes?.dof; const p = d && d.scale; if (d) d.scale = 0; return () => { if (d) d.scale = p; }; }',
+  // Skips the DoF PASSES, rather than zeroing their scale.
+  //
+  // Setting `scale = 0` left all six passes running and only removed the
+  // blur, so this variant measured **+0.5 ms** against DoF's real cost of
+  // about -1.9 -- it was more expensive than the thing it claimed to remove.
+  // Found by the postfx agent while attributing frame time. `_skip` is
+  // PostFX's own pass bypass, which is what the per-pass A/B in that agent's
+  // own work uses.
+  nodof:    '(c) => { const s = c.postfx?.system?._skip; if (!s) throw new Error("nodof: postfx.system._skip not found"); const had = s.dof; s.dof = true; return () => { s.dof = had; }; }',
   nobloom:  '(c) => { const b = c.postfx.bloom || c.postfx.passes?.bloom; const p = b && b.strength; if (b) b.strength = 0; return () => { if (b) b.strength = p; }; }',
   nobreath: '(c) => { const m = c.breath?.mesh; const v = m && m.visible; if (m) m.visible = false; return () => { if (m) m.visible = v; }; }',
   // `c.fur.group` and `c.fur.shells` have never existed -- FurSystem adds

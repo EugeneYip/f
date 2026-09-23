@@ -289,7 +289,14 @@ const main = async () => {
     const perf = await page.evaluate(async () => {
       const D = window.FoxDebug;
       const out = {};
-      for (const tier of ['low', 'medium', 'high', 'ultra']) {
+      // The tier list is bracketed by a REPEAT of the first tier, so the
+      // sweep carries its own repeatability test. The spread-across-tiers
+      // detector below cannot see contention that inflates every tier
+      // equally -- a uniform 7% rise moves all four together and the ratio
+      // is unchanged -- and two standalone audits read `high` at 17.4 while
+      // the same build idle reads 16.2. Measuring `low` at both ends catches
+      // exactly that, because load changes over the ten seconds between.
+      for (const tier of ['low', 'medium', 'high', 'ultra', 'low']) {
         D.setQuality(tier); D.setPose('hero'); D.setState('idle'); D.settle(0.5);
         for (let i = 0; i < 12; i++) { D.step(1 / 60); D.render(); }  // warm shaders
 
@@ -317,6 +324,7 @@ const main = async () => {
         // wrong about the cause, and it taught everyone to discount a
         // measurement that was never taken.
         const measuredMs = +((performance.now() - t0) / N).toFixed(2);
+        if (out[tier]) { out[tier].repeatMs = measuredMs; continue; }
         out[tier] = { ...D.stats(), frameMs: measuredMs };
       }
       return out;
@@ -331,9 +339,20 @@ const main = async () => {
     const tierTris = Object.values(perf).map((p) => p.triangles);
     const msSpread = (Math.max(...tierMs) - Math.min(...tierMs)) / Math.max(...tierMs);
     const triSpread = Math.max(...tierTris) / Math.max(1, Math.min(...tierTris));
-    report.contended = msSpread < 0.08 && triSpread > 2;
+    // Two independent contention signals, because each is blind to a case
+    // the other catches.
+    const lo = perf.low;
+    const drift = lo && lo.repeatMs
+      ? Math.abs(lo.repeatMs - lo.frameMs) / Math.max(lo.frameMs, 1e-6) : 0;
+    report.lowDriftFrac = +drift.toFixed(3);
+    report.contended = (msSpread < 0.08 && triSpread > 2) || drift > 0.15;
     if (report.contended) {
-      console.log(`\n  NOTE: frame time varies only ${(msSpread * 100).toFixed(1)}% across tiers ` +
+      if (drift > 0.15) {
+        console.log(`\n  NOTE: the SAME tier measured ${lo.frameMs} ms and ${lo.repeatMs} ms ` +
+          `ten seconds apart (${(drift * 100).toFixed(0)}% drift).\n` +
+          '        The machine is not quiet. Budgets are not enforced this run.');
+      }
+      if (msSpread < 0.08 && triSpread > 2) console.log(`\n  NOTE: frame time varies only ${(msSpread * 100).toFixed(1)}% across tiers ` +
         `whose triangle counts vary ${triSpread.toFixed(1)}x.\n` +
         '        That is GPU contention, not your renderer. Treat these numbers as a\n' +
         '        floor and re-measure with nothing else running.');

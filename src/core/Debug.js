@@ -53,13 +53,13 @@ export const POSES = {
   paws:        { pos: [0.620, 0.055, 0.660], target: [0.000, 0.055, 0.020], fov: 32, focus: 0.89 },
 
   // Environment composition, fox small in frame.
-  wide:        { pos: [4.200, 1.050, 4.900], target: [0.150, 0.300, -0.300], fov: 44, focus: 6.40 },
+  wide:        { pos: [4.200, 1.050, 4.900], target: [0.150, 0.300, -0.300], fov: 44, focus: 6.40, focusHold: true },
 
   // Sky / aurora / atmosphere.
-  aurora:      { pos: [2.600, 0.550, 3.000], target: [-0.500, 2.400, -2.000], fov: 60, focus: 12.0 },
+  aurora:      { pos: [2.600, 0.550, 3.000], target: [-0.500, 2.400, -2.000], fov: 60, focus: 12.0, focusHold: true },
 
   // Elevated. Terrain shading, sastrugi structure, aerial perspective.
-  terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70 },
+  terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70, focusHold: true },
 
   // Same framing as `hero`, shot on a long lens instead of a wide one.
   // `hero` at fov 40 from 1.17 m is a 33 mm equivalent — wide enough to
@@ -187,6 +187,30 @@ function resolvePose(pose, ctx) {
   return { pos: pos.toArray(), target: t.toArray(), fov: pose.fov, focus: pose.focus ?? dist };
 }
 
+/**
+ * §9 says focus the EYE. Measure the distance to it rather than authoring one.
+ *
+ * Every absolute pose carried a hand-written `focus`, and hand-written numbers
+ * go stale the moment the rig moves — which it has, repeatedly. The postfx
+ * agent measured `tail` at 1.10 m against 1.4825 m to the near eye: **26%
+ * short**, and it had been blamed on DoF for two reviews. It is not DoF. The
+ * animal's circle of confusion at `tail` tops out near 1.05 half-res pixels
+ * and the composite's 1→3 px ramp discards it entirely; the coat is identical
+ * to four decimals with DoF on and off. The focus number was simply wrong.
+ *
+ * So resolve it from the rig. A pose may still override — `wide`, `aurora` and
+ * `terrain` are landscape compositions where the subject is deliberately not
+ * the focal plane — but the animal framings now track whatever the eye does.
+ */
+export function focusOnEye(pose, ctx, camPos) {
+  if (pose.focusHold) return pose.focus;
+  const a = ctx.fox?.anchors?.eyeR ?? ctx.fox?.anchors?.eyeL;
+  if (!a) return pose.focus;
+  a.updateWorldMatrix(true, false);
+  const eye = new THREE.Vector3().setFromMatrixPosition(a.matrixWorld);
+  return +camPos.distanceTo(eye).toFixed(4);
+}
+
 export class Debug {
   name = 'debug';
   order = 1000;
@@ -256,7 +280,12 @@ export class Debug {
           ctx.baseFov = pose.fov;
           applyAdaptiveFov(ctx.camera, pose.fov, ctx.camera.aspect);
         }
-        if (pose.focus) ctx.focusDistance = pose.focus;
+        // §9: focus the eye, measured, not authored. `focusHold` poses keep
+        // their own number because they are landscape compositions where the
+        // animal is deliberately not the focal plane.
+        const camNow = ctx.camera.getWorldPosition(new THREE.Vector3());
+        const f = focusOnEye(pose, ctx, camNow);
+        if (f) ctx.focusDistance = f;
         ctx.camera.updateMatrixWorld(true);
         // A pose change is a hard cut. Drop temporal history so the shot
         // converges from scratch rather than dragging the previous framing's
