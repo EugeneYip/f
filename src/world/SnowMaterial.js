@@ -140,6 +140,10 @@ export class SnowMaterial {
         uSkyColor: { value: new THREE.Color(1, 1, 1) },
         uSkyInt: { value: 0.86 },
         uShadowEmpty: { value: 0.02 },
+        uShadowTexel: { value: new THREE.Vector2(1 / 2048, 1 / 2048) },
+        // x: constant depth slack · y: slack in shadow-map TEXELS, which is
+        // what the VSM blur actually costs. See snShadowMask().
+        uShadowBias: { value: new THREE.Vector2(0.0006, 6.0) },
         uBounce: { value: new THREE.Color(1, 1, 1) },
         uBounceInt: { value: 0.13 },
         uAlbedo: { value: new THREE.Color(0.90, 0.93, 0.965) },
@@ -288,6 +292,10 @@ export class SnowMaterial {
     // so track it and treat texels at that value as "nothing ever rendered".
     ctx.renderer.getClearColor(_clear);
     u.uShadowEmpty.value = Math.min(0.25, _clear.r * 1.6 + 0.02);
+    // The shadow map is reallocated on a tier change, so read its size rather
+    // than caching it: a stale texel size silently rescales the depth bias.
+    const sm = ctx.environment?.sun?.shadow?.mapSize;
+    if (sm && sm.x > 0) u.uShadowTexel.value.set(1 / sm.x, 1 / sm.y);
     const w = ctx.wind;
     const wl = Math.hypot(w.x, w.z) || 1;
     this.field.uWindXZ.value.set(w.x / wl, w.z / wl);

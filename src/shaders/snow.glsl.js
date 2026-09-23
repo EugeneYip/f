@@ -487,6 +487,8 @@ varying float vFw;
  * fox and a hard rectangle edge across the snow is worse than no shadow.
  */
 uniform float uShadowEmpty;
+uniform vec2  uShadowTexel;   // 1 / shadow map size
+uniform vec2  uShadowBias;    // x: constant depth slack · y: slack in TEXELS
 vec4 gShadowDbg;   // c.xy, m.x, m.y — debug views 7/8
 
 float snShadowMask(){
@@ -496,6 +498,35 @@ float snShadowMask(){
   vec3 c = sc.xyz / sc.w;
   gShadowDbg = vec4(c.xy, -2.0, c.z);
   c.z += directionalLightShadows[ 0 ].shadowBias;
+
+  // RECEIVER-PLANE DEPTH BIAS (Isidoro 2006), computed BEFORE any branch so
+  // the derivatives are taken in uniform control flow.
+  //
+  // What was here was a flat 'c.z -= 0.014', labelled slope-scaled but
+  // constant. Over this frustum's 9.5 m depth range that is 133 mm of depth,
+  // and a depth offset displaces a shadow ALONG THE GROUND by offset/sin(sun
+  // elevation): 1.16 m at the default 6.6 degree sun and 0.55 m at 14
+  // degrees. The animal is 0.55 m long. That single line is why the shadow
+  // detaches from the feet, why there is no contact darkening under a paw at
+  // any angle, and why the detachment gets WORSE as the sun gets lower --
+  // measured as a fully separated blob at --sun 14,-30 and reported twice.
+  //
+  // What the bias actually has to cover is the VSM blur: the map is blurred
+  // over a few texels, so the stored mean depth near a silhouette is pulled
+  // off the true surface by however much depth changes across that many
+  // texels. That is a per-texel quantity, so measure it. dz/du and dz/dv come
+  // from solving the 2x2 screen-to-shadow-UV Jacobian; multiply by the texel
+  // size and by the blur width in texels and the slack is exactly as large as
+  // it needs to be and no larger. On a surface facing the light it collapses
+  // to nearly nothing, which is what puts the shadow back under the feet.
+  vec3 sdx = dFdx(c), sdy = dFdy(c);
+  float sdet = sdx.x * sdy.y - sdx.y * sdy.x;
+  vec2 dzduv = abs(sdet) > 1e-12
+    ? vec2(sdy.y * sdx.z - sdx.y * sdy.z, sdx.x * sdy.z - sdy.x * sdx.z) / sdet
+    : vec2(0.0);
+  float slack = uShadowBias.x + uShadowBias.y *
+    (abs(dzduv.x) * uShadowTexel.x + abs(dzduv.y) * uShadowTexel.y);
+
   vec2 dd = abs(c.xy - 0.5);
   float edge = 1.0 - smoothstep(0.40, 0.495, max(dd.x, dd.y));
   if (edge <= 0.001 || c.z > 1.0 || c.z < 0.0) return 1.0;
@@ -503,9 +534,7 @@ float snShadowMask(){
   vec2 m = unpackRGBATo2Half(texture2D(directionalShadowMap[ 0 ], c.xy));
   gShadowDbg = vec4(c.xy, m.x, c.z);
   if (m.x <= uShadowEmpty) return 1.0;
-  // Slope-scaled bias: at a six degree sun the depth races across the map, and
-  // the VSM blur smears it far enough to self-shadow without this.
-  c.z -= 0.014;
+  c.z -= min(slack, 0.02);
   float occ = 1.0;
   if (step(c.z, m.x) != 1.0) {
     float dist = c.z - m.x;
