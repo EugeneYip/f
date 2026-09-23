@@ -195,15 +195,65 @@ export const REGION_TABLE = [
    *   was  base     51.4      27.2         78.6       157 mm
    *        mid      67.1      24.0         91.1       182 mm
    *        tip      48.0      11.0         59.0       118 mm
-   *   now  base     18.0      27.2         45.2        90 mm
+   *   then base     18.0      27.2         45.2        90 mm
    *        mid      36.0      24.0         60.0       120 mm
    *        tip      40.7      11.0         51.7       103 mm
+   *   now  base     18.0      27.2         45.2        90 mm
+   *        mid      51.8      24.0         75.8       152 mm
+   *        tip      52.9      11.0         63.9       128 mm
    *
    * Bible 4 gives the one sourced figure: "tail 0.32 m (bushy, ~0.10 m
    * diameter with fur)". The tail was rendering at 0.18 m across its middle
    * -- 1.8x the spec and 0.72x the coated TORSO (127 mm radius) -- so it was
    * not a brush attached to a fox, it was a second body. That, and not the
    * croup, is why "the rear is one continuous furry mass".
+   *
+   * THAT FIGURE CONTRADICTS THE SENTENCE IT IS IN, and the middle row above
+   * is what happens when you follow it. Bible 4's very next clause is "winter
+   * coat thickness up to 0.05 m on the flank, THICKER ON THE TAIL and ruff",
+   * and 0.10 m of diameter leaves 23-26 mm of coat over a 24-27 mm core --
+   * half the flank's 48 mm, not more than it. No core radius >= 0 satisfies
+   * both halves of that sentence. REFERENCE-FOX 2b breaks the tie with the
+   * only directly measured per-region numbers on the project (ASM #2, one
+   * specimen, combed guard-hair length): lower back 20-35 mm against TAIL
+   * 60-70 mm -- the tail is 2-3x the back on the same animal -- and bible 4b
+   * says outright "tail fur ... is the longest on the animal". At mid 36 mm
+   * ours was 0.75x the flank, i.e. the sourced ORDERING was inverted.
+   *
+   * So mid goes to 51.8 mm: the smallest depth that is actually deeper than
+   * the flank's 48 mm, and well under the 60-70 mm measurement (which
+   * REFERENCE-FOX itself warns is combed length and overstates standing
+   * loft). That is half of 7df3911's cut given back, not the cut undone.
+   *
+   * Measured on the exact coverage matte at `profile`, in one page session at
+   * one instant, seven arms. Mass and height are of the column at the brush's
+   * widest station; the waist is the minimum-mass column in the first half of
+   * the span behind the rump (bounding that search matters -- unbounded it
+   * always lands on the last column before the tip and every arm returns
+   * exactly 1.000):
+   *
+   *   arm (mid/tip lengthScale)   brush/waist  brush h   brush area  coverage
+   *     COAT HIDDEN (control)        1.444       64 px    12 342 px   83 730
+   *     0.73 / 1.00  (was)           1.568      130 px    24 736 px  152 056
+   *     0.90 / 1.15                  1.666      141 px    27 223 px  155 366
+   *     1.05 / 1.30  SHIPPED         1.812      152 px    29 562 px  158 595
+   *     1.20 / 1.45                  1.927      157 px    31 966 px  161 850
+   *
+   * The control is the point: with the coat hidden the bare tail already
+   * reads 1.444, so at 0.73 the whole coat was adding 0.12 to the brush's
+   * separation from its own root. It now adds 0.37. The dorsal contour is
+   * the other half of it -- at 0.73 the topmost covered row ran 353 356 350
+   * 361 360 373 across the tail root, a monotone descent with no notch in it
+   * at all, and at 1.05 it runs 359 362 342 351 353 364, which steps back UP
+   * by 20 px behind the waist. That step is the notch, and it is the thing
+   * that was missing.
+   *
+   * COSTS, stated rather than buried: the animal's total coverage grows 4.3%
+   * at `profile` (bible 4f rule 4 is about the body, but it cuts both ways),
+   * and 152 mm is 1.52x bible 4's own 0.10 m figure. Lowering tailBase below
+   * 0.40 was swept too -- 0.30 buys 0.11 more on the ratio -- and is NOT
+   * shipped, because 18 mm at the root is the number that was verified not to
+   * expose skin under bible 4f rule 3 and 13.5 mm is below the hock's 16.8.
    *
    * The croup hypothesis is disproved and must not be re-tested: deepening
    * or pulling back the croup coat (region 16) does not move the notch at
@@ -229,8 +279,8 @@ export const REGION_TABLE = [
    * (b[0]) stays BELOW 1 on purpose; big locks are what a brush is.
    */
   /* 24 tailBase      */ { a: [1.04, 0.40, 0.45, 0.34], b: [0.85, 1.30, 1.00, 1.70] },
-  /* 25 tailMid       */ { a: [1.06, 0.73, 0.30, 0.42], b: [0.78, 1.30, 1.00, 2.10] },
-  /* 26 tailTip       */ { a: [1.04, 1.00, 0.34, 0.36], b: [0.82, 1.30, 1.00, 1.85] },
+  /* 25 tailMid       */ { a: [1.06, 1.05, 0.30, 0.42], b: [0.78, 1.30, 1.00, 2.10] },
+  /* 26 tailTip       */ { a: [1.04, 1.30, 0.34, 0.36], b: [0.82, 1.30, 1.00, 1.85] },
 ];
 
 /** Authoring defaults. Every one of these is live-tweakable via ctx.fur.set(). */
