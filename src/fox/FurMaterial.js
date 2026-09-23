@@ -222,6 +222,54 @@ export const REGION_TABLE = [
   /* 10 ruff          */ { a: [1.05, 1.16, 1.15, 0.55], b: [0.72, 0.95, 1.00, 1.60] },
   /* 11 chest         */ { a: [1.00, 1.04, 1.10, 0.38], b: [0.92, 1.00, 1.00, 0.72] },
   /* 12 shoulder      */ { a: [1.00, 1.08, 1.15, 0.30], b: [0.95, 1.00, 1.00, 0.95] },
+  /*
+   * 12-16 THE TOPLINE, and why the coat cannot put a withers or a croup on it.
+   *
+   * The reported defect: at `profile` the matte topline descends from the ear
+   * tip monotonically and then goes FLAT across the back -- no withers rise,
+   * no croup rise, which is what makes the animal read as a guinea pig at
+   * `hero_long` and a wolverine at `paws`. A canid profile is ears, poll dip,
+   * WITHERS rise, level back, CROUP rise, tail drop.
+   *
+   * Measured on the coverage matte at `profile`, one page session, one
+   * instant, as TURNING POINTS of top[x] rather than as column heights.
+   * Withers = the highest point between chest and spine04+20; saddle = the
+   * lowest point between there and spine01; croup = the highest point between
+   * spine01 and tail01:
+   *
+   *     arm             withers    saddle     croup    withers rise  croup rise
+   *       coat          296@529   329@605   313@710        33            16
+   *       COAT HIDDEN   334@529   353@601   346@706        19             7
+   *       back x0.80    296@529   335@619   316@706        39            19
+   *       shoulder x1.50  -- identical to the coat row, to the pixel --
+   *       croup x1.50     -- identical to the coat row, to the pixel --
+   *
+   * TWO THINGS, and they point in opposite directions.
+   *
+   * 1. THE WITHERS IS NOT A TURNING POINT AT ALL, on the coat or on the bare
+   *    mesh. In every arm the highest point inside the withers window lands
+   *    exactly on the window's LEFT EDGE (x=529), which is what a window
+   *    maximum does when the curve through it is still monotonically
+   *    descending. There is no bump to find. The bare mesh has none either,
+   *    so the coat is not hiding one -- the skin's own topline runs downhill
+   *    from the poll into the mid-back saddle. That is anatomy's.
+   *
+   * 2. THE CROUP RISE IS REAL AND THE COAT ALREADY DOUBLES IT: 7 px on the
+   *    bare mesh, 16 px with the coat. So the coat is not flattening this one.
+   *
+   * AND THE COAT HAS NO LEVER ON EITHER. Deepening region 12 (shoulder) by
+   * 50% or region 16 (croup) by 50% moves the topline by ZERO pixels -- the
+   * three turning points are identical to the pixel -- and adds only 327 and
+   * 249 px of coverage in 158 635. Those regions are LATERAL here; they are
+   * barely on the profile outline. Cutting region 13 (back) by 20% moves the
+   * saddle 6 px and costs 1259 px. So the whole dorsal contour from withers
+   * to croup is ONE region with ONE depth, and a region table cannot carve a
+   * withers into it however the numbers are set. The region assignment is
+   * FoxAnatomy's and FoxSurface's, not this file's.
+   *
+   * If a later agent wants the coat to carry the topline, the prerequisite is
+   * a dorsal region split, not a number here.
+   */
   /* 13 back          */ { a: [1.00, 1.04, 1.20, 0.26], b: [0.95, 1.00, 1.00, 1.05] },
   /* 14 flank         */ { a: [1.00, 1.10, 1.05, 0.30], b: [0.90, 1.00, 1.00, 0.82] },
   /* 15 belly         */ { a: [1.00, 1.12, 1.30, 0.42], b: [0.95, 1.05, 0.90, 0.80] },
