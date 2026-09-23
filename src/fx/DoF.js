@@ -14,6 +14,33 @@
 // The circle of confusion is the real thin-lens one, so the strength of the
 // effect follows the framing for free: at `wide` (46 deg, focus 8.2 m) the
 // background is ~1 px soft, at `portrait` ~25 px, at `macro_eye` it saturates.
+//
+// THIS PASS IS NOT WHY THE FOX IS SOFT AT `tail`, and that has been an open
+// blocker since REVIEW-3. Measured in one session at one sim instant, coat
+// pixels isolated with tools/matte.mjs's coverage matte (250927 px), snow
+// taken from the fully-uncovered pixels (2509359 px), high-passed rms:
+//
+//                              coat      snow
+//   focus 1.10 (as authored)   2.5671    3.7899
+//   DoF gated off entirely     2.5670    4.5994
+//   focus 1.4825 (the eye)     2.1694    2.8968
+//
+// The coat is the same to four decimal places with depth of field on and off.
+// It has to be: maxBackgroundCoC caps the far CoC at 3.375 half-res px, the
+// near eye sits at 1.4825 m against a 1.10 m focus, so the animal's own CoC
+// tops out near 1.05 half-res px and the composite's blendLo/blendHi ramp
+// (1 -> 3 px) discards all of it. What DoF actually does at this framing is
+// blur the SNOW, by 18%, which is the opposite of the reported symptom.
+//
+// And "focus the eye" would make it worse, not better: at 1.4825 m the whole
+// near snowfield falls in front of focus, the near layer scatters outward
+// over the animal, and the coat loses a further 15%. The softness at `tail`
+// is the coat itself.
+//
+// The remaining true part of that blocker is a spec violation, not a lens
+// one: ctx.focusDistance at `tail` is 1.10 against 1.4825 m to the near eye,
+// 26% short of §9. That value comes from the pose table and
+// CameraRig.applyPose -- camera+ui and orchestrator, not this file.
 import * as THREE from 'three';
 import { FxPass, makeRT, disposeRT } from './Pass.js';
 

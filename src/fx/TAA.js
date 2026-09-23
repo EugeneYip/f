@@ -56,6 +56,27 @@
 // verbatim: post off also gates TAA off, the coat's stochastic alpha is then
 // unresolved, and the whole crop becomes a noise field in which no shape of
 // any kind is visible. `nopost` cannot answer a question about coat structure.
+//
+// THE UNANTIALIASED HORIZON IS NOT THIS PASS EITHER (REVIEW-4 blocker 14).
+// The resolve converges on it exactly as it should. At `wide`, worst
+// single-pixel luminance step in the horizon band, one session, one instant:
+//
+//   TAA off            49.6      single-pixel share of the edge rise 1.03
+//   2 accumulated      49.1                                          0.91
+//   18 accumulated     38.1                                          0.87
+//   97 accumulated     36.1                                          0.84
+//
+// Monotone, and converged by 18. Turning the sharpen pass off moves it 1.0
+// level, so that is not it either. REVIEW-4's own coordinate no longer
+// reproduces: x=1800 in wide.png is a 6.8-level step over 2 px now, not 43
+// over 1, because the sky near the horizon has been brightened since.
+//
+// What is left is 42 columns at x 1265-1474, y 480-516, stepping 186 -> 221
+// in one pixel. Hiding the horizon ridge meshes makes it WORSE (251 pixels
+// over 25 levels instead of 132); hiding `snowfield` removes it (1 pixel).
+// It is a shading discontinuity within the terrain's own snow material near
+// its far edge, and box-filtering a 35-level step correctly still leaves half
+// of it in the transition pixel. Terrain's, not the resolve's.
 import * as THREE from 'three';
 import { FxPass, makeRT, disposeRT } from './Pass.js';
 import { FX_CATMULL_ROM } from './glsl/common.js';
