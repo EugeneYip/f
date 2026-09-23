@@ -256,11 +256,42 @@ const LID_SPREAD_MAX = 0.95;
 // framings a viewer actually sees and still a modelled lid at macro.
 //   frontal, 0.1615 mm/px : margin 5.0 px · ring out to 8.7 px · fur by 20 px
 //   macro,   0.0239 mm/px : margin 33 px  · ring out to 59 px  · fur by 134 px
-const RIM_MARGIN_0 = 0.00030;    // near-black tarsal margin starts fading here
-const RIM_MARGIN_1 = 0.00080;    // ...and is gone here
-const RIM_RING_1 = 0.00140;      // dark periocular skin ends
-const RIM_FUR_0 = 0.00135;       // short lid fur starts taking over
-const RIM_FUR_1 = 0.00320;       // ...and owns the surface from here out
+// AND THE RAMP IS NOT WHAT THE FRAME SHOWS, because LID_SCATTER is gated by
+// `feFurry` — the same smoothstep that fades the fur COLOUR in. So every
+// millimetre of band inside RIM_FUR_1 renders with a fraction of the
+// multiple-scattering term, i.e. at a fraction of the coat's brightness. The
+// ramp authors 1.40 mm of dark; the render delivered 3.0 mm of it, because
+// the periocular-skin zone from 1.40 to 3.20 mm is skin-coloured (albedo
+// 0x8d8076, L 129 of 255) and shaded as one dielectric bounce under a sunless
+// sky. Measured along the UP meridian at `macro_eye`, in true degrees off the
+// optical axis (the page's own projection of globe points, not a guessed
+// px/mm), free edge at 25.5 deg, local coat p50 190:
+//
+//   vArc mm   0.66  1.04  1.61  2.18  2.75  2.94  3.51  3.89  4.65  5.03
+//   lum        1.9   5.9  22.5  32.2  68.9  87.6 129.1 143.0 130.6 112.5
+//   vs coat   -99%  -97%  -88%  -83%  -64%  -54% -32%  -25%  -31%  -41%
+//
+// So the run darker than half the coat reached vArc 2.94 mm, and with the
+// 1.4 mm of iris the lid contact shadow takes off the top of the cornea the
+// continuous dark was 4.4 mm — 32% OF A CORNEAL DIAMETER (13.8 mm) above the
+// amber, and as much again below it. That is the "heavy dark outline, drawn
+// on rather than lit" the review describes: the eye's apparent size is the
+// iris plus two thirds of a cornea of black.
+//
+// A canid's lid margin is a pigmented LINE and the haired skin starts at it —
+// cilia on the upper lid root in the margin itself. A 3.2 mm hairless ring
+// round the fissure is precisely what §4f rule 3 forbids, which the previous
+// pass argued about the band's noise and then left at 3.2 mm of width.
+//
+// Fur (and therefore the scatter) now takes over at 0.75 mm and owns the
+// surface by 1.90 mm, so the authored dark and the rendered dark agree:
+//   portrait, 0.145 mm/px : margin 3.4 px · ring out to 6.9 px · fur by 13 px
+//   macro,    0.029 mm/px : margin 17 px  · ring out to 34 px  · fur by 65 px
+const RIM_MARGIN_0 = 0.00028;    // near-black tarsal margin starts fading here
+const RIM_MARGIN_1 = 0.00070;    // ...and is gone here
+const RIM_RING_1 = 0.00100;      // dark periocular skin ends
+const RIM_FUR_0 = 0.00075;       // short lid fur starts taking over
+const RIM_FUR_1 = 0.00190;       // ...and owns the surface from here out
 
 // Short white lid fur is a multiple-scattering medium and an ordinary
 // single-bounce dielectric is not. Under this scene's sky-only fill the
@@ -1565,10 +1596,18 @@ void main(){
   // and it is authored in METRES so it is the same line all the way round the
   // fissure and does not rescale when the coat does.
   //
-  //   0.00 -> 0.85 mm   near-black tarsal margin (the line itself)
-  //   0.85 -> 1.70 mm   dark periocular skin, which every reference photo
+  //   0.00 -> 0.70 mm   near-black tarsal margin (the line itself)
+  //   0.70 -> 1.00 mm   dark periocular skin, which every reference photo
   //                     shows as a distinct ring darker than the coat
-  //   1.70 -> 4.50 mm   short lid fur taking over
+  //   0.75 -> 1.90 mm   short lid fur taking over
+  //
+  // The FUR breakpoints are the ones that set how wide the dark READS, not
+  // the margin ones: feFurry also gates LID_SCATTER at lights_fragment_end,
+  // so any arc the fur has not reached is shaded as a single dielectric
+  // bounce under a sunless sky and comes out at a fifth of the coat whatever
+  // colour it was authored. See the measurement at the top of the file.
+  // (No backticks in this comment -- AGENTS.md, and it has now fired a
+  // fourth time in this file.)
   //
   // Widths matter in both directions. A first pass at 1.05 / 2.60 / 6.20 mm
   // put a black donut as wide as the iris around the eye and the socket read
