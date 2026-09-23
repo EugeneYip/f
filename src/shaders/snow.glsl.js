@@ -433,7 +433,28 @@ void main(){
   gl_Position = projectionMatrix * mvPosition;
 
   #include <fog_vertex>
-  #include <shadowmap_vertex>
+
+  // NO NORMAL-OFFSET BIAS ON THE SNOW.
+  //
+  // three's shadowmap_vertex chunk moves the receive point along the surface
+  // normal by shadowNormalBias (22 mm, set in Environment) before projecting
+  // into light space. That exists to stop a surface self-shadowing in its own
+  // depth map. The snowfield is NOT IN THE SHADOW MAP -- only the fox body is
+  // rendered into it -- so it cannot self-shadow and has nothing to gain.
+  //
+  // What it costs is peter-panning, and on a near-horizontal receiver the cost
+  // is large: lifting the receiver b metres shortens every cast shadow by
+  // b / tan(elevation).
+  //     14 deg   0.022 / 0.249 =  88 mm
+  //      6.6 deg 0.022 / 0.116 = 190 mm
+  //      2 deg   0.022 / 0.035 = 630 mm     (the paw is 40 mm across)
+  // So project the true surface point, and let snShadowMask own all of the
+  // slack, where it can be made proportional to the depth gradient.
+  #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+  for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+    vDirectionalShadowCoord[ i ] = directionalShadowMatrix[ i ] * worldPosition;
+  }
+  #endif
 }
 `;
 
@@ -497,7 +518,9 @@ float snShadowMask(){
   vec4 sc = vDirectionalShadowCoord[ 0 ];
   vec3 c = sc.xyz / sc.w;
   gShadowDbg = vec4(c.xy, -2.0, c.z);
-  c.z += directionalLightShadows[ 0 ].shadowBias;
+  // three's own constant shadowBias is deliberately NOT applied: see the note
+  // in the vertex stage. All slack on this receiver is the measured
+  // receiver-plane term below, and nothing else.
 
   // RECEIVER-PLANE DEPTH BIAS (Isidoro 2006), computed BEFORE any branch so
   // the derivatives are taken in uniform control flow.
@@ -534,7 +557,15 @@ float snShadowMask(){
   vec2 m = unpackRGBATo2Half(texture2D(directionalShadowMap[ 0 ], c.xy));
   gShadowDbg = vec4(c.xy, m.x, c.z);
   if (m.x <= uShadowEmpty) return 1.0;
-  c.z -= min(slack, 0.02);
+  // The clamp is what remains of the peter-panning at a grazing sun. The
+  // receiver-plane term is proportional to cot(elevation), so it runs away as
+  // the sun drops: at 2 degrees six texels of slack is 0.026 of normalised
+  // depth, and even the old 0.02 ceiling is 190 mm of depth, i.e. a 190 mm gap
+  // between the paw and the start of its own shadow. Since this receiver is
+  // not in the shadow map it cannot produce acne, so the ceiling is set by
+  // what the VSM blur can leak, not by self-shadowing: 0.005 is 48 mm, about
+  // one paw.
+  c.z -= min(slack, 0.005);
   float occ = 1.0;
   if (step(c.z, m.x) != 1.0) {
     float dist = c.z - m.x;

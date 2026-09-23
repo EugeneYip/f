@@ -143,7 +143,14 @@ export class SnowMaterial {
         uShadowTexel: { value: new THREE.Vector2(1 / 2048, 1 / 2048) },
         // x: constant depth slack · y: slack in shadow-map TEXELS, which is
         // what the VSM blur actually costs. See snShadowMask().
-        uShadowBias: { value: new THREE.Vector2(0.0006, 6.0) },
+        //
+        // Both were cut hard (0.0006, 6.0 -> 0, 1.0) once the reason for a
+        // bias at all was checked: this receiver is never rendered INTO the
+        // shadow map, so it cannot self-shadow and no amount of slack is
+        // buying acne-freedom. What the slack was actually buying was a gap
+        // between each paw and the start of its shadow -- 84 mm at the
+        // default sun, 190 mm at 2 degrees, against a 40 mm paw.
+        uShadowBias: { value: new THREE.Vector2(0.0, 1.0) },
         uBounce: { value: new THREE.Color(1, 1, 1) },
         uBounceInt: { value: 0.13 },
         uAlbedo: { value: new THREE.Color(0.90, 0.93, 0.965) },
