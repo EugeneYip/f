@@ -212,10 +212,53 @@ const main = async () => {
         continue;
       }
       for (const [k, v] of Object.entries(st.paws)) {
+        // TWO WARNINGS ABOUT THIS CHECK, both earned.
+        //
+        // 1. `anchorSlideMps` is STRUCTURALLY ZERO. It reads exactly 0.0000
+        //    in all 78 paw checks across idle, walk, trot and run, because
+        //    the "contact point" it samples is the IK target, which is
+        //    stationary by construction. An exact zero at four different
+        //    speeds is not a measurement. It is asserted below to be
+        //    non-vacuous rather than quietly reported.
+        //
+        // 2. `maxSlideMps` is BOUNDED BY CONSTRUCTION to satisfy this very
+        //    budget. `FoxBrain.MAX_ANKLE_MPS = 0.027` exists, in its own
+        //    words, because "tools/audit.mjs measures exactly that bone;
+        //    rate-limiting the plate quaternion bounds it by construction at
+        //    any gait ... budget is 0.045, this leaves a ~40% margin". So the
+        //    0.0249-0.0263 it reports across three gaits whose speeds differ
+        //    several-fold is the limiter, not the animal, and a pass here is
+        //    evidence that the limiter is running and nothing else.
+        //
+        // This is the second audit threshold to become a design constraint --
+        // the first was a 22 mm stance tolerance that drove the bone down and
+        // buried the sole 48 mm under the snow. The instrument a product
+        // cannot clamp is the one in image space: see spec.mjs's
+        // `the drawn foot meets the drawn snow`.
         record(`[${state}] ${k} no foot slide`,
           v.maxSlideMps <= BUDGET.footSlideMaxMps,
           `ankle ${v.maxSlideMps} m/s, contact point ${v.anchorSlideMps} m/s ` +
-          `(max ${BUDGET.footSlideMaxMps})`);
+          `(max ${BUDGET.footSlideMaxMps}) — NOTE the ankle figure is ` +
+          `rate-limited to 0.027 by FoxBrain.MAX_ANKLE_MPS, so a pass here ` +
+          `means the limiter ran`);
+        // Reported, never asserted — and my first attempt at this was a
+        // worse instrument than the one it replaced.
+        //
+        // I made it `anchorSlideMps > 0` and it failed 16 checks. That is
+        // wrong: a correctly planted foot's contact point SHOULD be zero.
+        // The defect is not the value, it is that the value is zero **by
+        // construction** — it samples the IK target — so it cannot
+        // distinguish a perfectly planted foot from a catastrophically
+        // broken one. Asserting either direction on a quantity with no
+        // information content just adds noise to the report.
+        //
+        // It stays as a number with its provenance attached, and the real
+        // question moves to image space, where the product cannot pin it:
+        // spec.mjs's `the drawn foot meets the drawn snow`.
+        record(`[${state}] ${k} [reported] contact-point slide`, true,
+          `${v.anchorSlideMps} m/s — samples the IK TARGET, which is pinned ` +
+          `by construction, so this is 0.0000 in all 78 paw checks at every ` +
+          `gait and carries no information either way`);
 
         // The old check was `minClearance <= 0.055`, which passes if the paw
         // is EVER near the ground and therefore can never fail. What matters

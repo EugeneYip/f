@@ -175,6 +175,7 @@ uniform float uFillTop;        // where the undercoat stops, x shellFill
 uniform float uFillJitter;     // +/- fraction, per clump/strand
 uniform float uCardTip;        // v past which a card stops being edge-gated
 uniform float uCoatVarFreq;
+uniform vec2  uStrandFade;     // strand octave's own LOD band, cells per pixel
 
 // --- shading ---------------------------------------------------------------
 uniform vec3  uFurLit;
@@ -548,7 +549,25 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   float aa = max(px * fs * 1.6, 0.012);
   float a  = 1.0 - smoothstep(r - aa, r + aa, ds);
 
-  float sLod = octaveFade(px, fs) * detail;
+  // THE STRAND OCTAVE GETS ITS OWN BAND, for the same reason the micro one
+  // does, and this is the waxy cheek.
+  //
+  // The shared octaveFade dissolves an octave between 0.13 and 0.40 cells per
+  // pixel -- cells of 7.7 px down to 2.5 px. On the FACE the region freqScale
+  // runs 1.3-1.6, so the strand cells are 0.58-0.72 mm, and at the portrait
+  // framing one bind-space pixel is 0.25 mm: 0.38 cells per pixel, a 2.6 px
+  // cell, and the shared band has already thrown 98% of the layer away. What
+  // is left is the analytic mean coverage -- a smooth function of depth -- on
+  // top of a clump octave whose own cells are 30 px and running at FULL
+  // strength. Fine energy gone, coarse energy intact: that is the waxy,
+  // blotchy cheek and nape exactly, and it is the failure mode spec.mjs's
+  // fine/coarse ratio was built to name.
+  //
+  // 2.5 px is also simply too conservative a place to stop. Nyquist is 2 px
+  // for a POINT-sampled signal, and nothing here is point-sampled: the
+  // harness resolves 18 jittered TAA samples per pixel, which is what the
+  // stochastic coat alpha already depends on.
+  float sLod = (1.0 - smoothstep(uStrandFade.x, uStrandFade.y, px * fs)) * detail;
   float mean = clamp(3.1416 * r * r * 1.15, 0.0, 1.0);
   a = mix(mean, a, sLod);
 
@@ -1023,7 +1042,10 @@ ${isShell ? /* glsl */ `
 
   // Per-strand cylinder normal. Without this every hair in a tuft shades
   // identically and the macro shot turns to mush.
-  float sLod = octaveFade(px, uStrandFreq * vP1.y) * detail * (deep ? 0.0 : 1.0);
+  // Same band as the strand layer in furHair -- the cylinder normal is that
+  // layer's shading and must not outlive the coverage it shades.
+  float sLod = (1.0 - smoothstep(uStrandFade.x, uStrandFade.y, px * uStrandFreq * vP1.y))
+               * detail * (deep ? 0.0 : 1.0);
   if (uStrandRound > 0.001 && sLod > 0.01){
     vec3 B = cross(T, V);
     float bl = length(B);

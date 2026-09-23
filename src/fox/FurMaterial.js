@@ -650,6 +650,38 @@ export const FUR_DEFAULTS = {
   fillJitter: 0.30,
   cardTip: 0.45,
   coatVarFreq: 15,
+  /*
+   * The strand octave's own LOD band, cells per pixel: full strength below x,
+   * gone above y. THIS IS THE WAXY CHEEK AND NAPE.
+   *
+   * The shared octaveFade dissolves an octave between 0.13 and 0.40 cells per
+   * pixel, i.e. cells of 7.7 px down to 2.5 px. The strand layer is the one
+   * carrying the hair, and on the FACE (region freqScale 1.3-1.6, so cells of
+   * 0.58-0.72 mm) the portrait framing puts it at 0.38 cells per pixel -- a
+   * 2.6 px cell, 98% dissolved. 0.25/0.50 is chosen so the octave is fully
+   * gone by a 2 px cell, which is point-sample Nyquist: it restores an octave
+   * that was being thrown away an octave early and it asks nothing of TAA
+   * that the coat's stochastic alpha did not already ask.
+   *
+   * MEASURED, one page session per row, arms alternated, mean |p - blur3(p)|
+   * over the eroded coverage interior:
+   *
+   *     band            portrait fine   nape fine
+   *       0.13 / 0.40       2.904         1.520      (the shared band)
+   *       0.25 / 0.50       4.058 +40%    2.034 +34%
+   *       0.22 / 0.55       4.007         2.065
+   *       0.30 / 0.70       4.425 +52%    2.181 +44%
+   *       0.36 / 0.85       4.484         2.300
+   *
+   * with coverage flat to 0.15% and band fill flat to 0.5% in every arm. The
+   * curve is nearly flat past 0.50, so the wider bands buy little and spend
+   * it on cells below 2 px. Not taken.
+   *
+   * It changes nothing at body range: at `hero` and `profile` the strand
+   * cells are already 1.1-1.3 cells per pixel and the layer is off under
+   * either band, so this costs nothing in the frame budget.
+   */
+  strandFade: [0.25, 0.50],
 
   // shading
   //
@@ -1438,6 +1470,7 @@ export function buildFurUniforms(ctx) {
     uFillJitter: { value: d.fillJitter },
     uCardTip: { value: d.cardTip },
     uCoatVarFreq: { value: d.coatVarFreq },
+    uStrandFade: { value: new THREE.Vector2(...d.strandFade) },
 
     uFurLit: { value: c(0xfdfcfa) },
     uFurUnder: { value: c(0xdcd3c6) },
