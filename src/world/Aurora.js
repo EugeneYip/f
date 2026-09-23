@@ -40,7 +40,14 @@ export class Aurora {
     this.skyLightColor = new THREE.Color(0x8fe8c4);
     /** Radiance the curtains throw down onto the snow. Read by SnowMaterial. */
     this.groundLight = new THREE.Color(0, 0, 0);
-    this.baseIntensity = 0.62;
+    // Review 4 measured the aurora pose at +3.5 levels of green excess with a
+    // sky-wide mean of -2.48 -- net magenta -- and concluded there was no
+    // aurora. There is one, but only below the horizon gate (see update()),
+    // and at the old 0.62 it was still thin where it existed: 9.8% of the sky
+    // above +5 levels of green and a sky-wide mean of -1.6, i.e. still net
+    // magenta at a sun of -6 degrees. Section 7 asks for dim and restrained,
+    // not for invisible.
+    this.baseIntensity = 1.0;
     this._drift = 0;
     this._steps = 0;
   }
@@ -188,8 +195,9 @@ export class Aurora {
     const steps = Math.max(4, ctx.quality.get('auroraSteps') || 12);
     this._steps = steps;
     // Retuned after the postfx pipeline landed: the new exposure and
-    // tonemap put the curtains far below where they were authored.
-    this.BASE_SCALE = 0.024;
+    // tonemap put the curtains far below where they were authored. Raised
+    // again for review 4 -- see baseIntensity for the measurement.
+    this.BASE_SCALE = 0.042;
 
     // Arc frame. Rotated so the bands run ACROSS the aurora pose's view
     // rather than straight away from it.
@@ -564,7 +572,10 @@ export class Aurora {
     u.uTime.value = t;
     u.uDrift.value = this._drift;
     u.uIntensity.value = this.intensity;
-    u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 2.2;
+    // The ceiling has to rise with the curtains or it becomes the thing that
+    // sets their brightness. At a -6 degree sun diffuseWhite is 0.26, so 2.2x
+    // was clipping the bright cores flat.
+    u.uMaxRadiance.value = (ctx.sky?.diffuseWhite ?? 0.45) * 4.0;
     // Folds travel along the arc and wrap over a long period.
     u.uFoldPos.value.set(
       ((t * 16.0 + 900) % 3400) - 1700,
@@ -602,7 +613,7 @@ export class Aurora {
     // a white lambertian surface under the current rig) so it cannot drift
     // out of scale with exposure.
     this.groundLight.copy(this.skyLightColor)
-      .multiplyScalar(1.05 * this.intensity * (sky?.diffuseWhite ?? 0.45));
+      .multiplyScalar(1.60 * this.intensity * (sky?.diffuseWhite ?? 0.45));
   }
 
   onQuality(e, ctx) {
