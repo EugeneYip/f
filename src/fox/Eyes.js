@@ -268,15 +268,37 @@ const RIM_FUR_1 = 0.00320;       // ...and owns the surface from here out
 // furry part of the band keeps, as a multiplier on the sky/bounce hemisphere;
 // it is masked to zero on the margin so the black line stays black. Swept
 // against the coat next to the socket — see the commit.
-// MEASURED AGAIN, AND 2.15 OVERSHOT. Swept in one page session at one sim
-// instant (5 arms, 22 TAA frames each, macro_eye column 985): the band's peak
-// against the coat 130-210 px outside it reads +5.3 % at 2.15, +0.5 % at 1.70,
-// -4.9 % at 1.35, -11.4 % at 1.00. The band is short white fur over skin and
-// must DISAPPEAR into the coat, so anything above parity turns §4b's near-
-// black rim into a bright ring with a black hole in it — which is exactly
-// what review 4 blocker 11 is looking at. 1.62 lands it a couple of levels
-// under the coat, where periocular skin belongs.
-const LID_SCATTER = 1.62;
+// MEASURED AGAIN, AND 2.15 OVERSHOT BY A FACTOR OF THREE. The band is short
+// white fur over skin and its job is to DISAPPEAR into the coat; above parity
+// it becomes a bright ring with a black hole in it, which is the googly-doll
+// read review 4 blocker 11 describes.
+//
+// MY FIRST SWEEP OF THIS CONSTANT WAS ITSELF WRONG, and in the way AGENTS.md
+// warns about: the probe was a single column, and its "coat" sample sat
+// 130-210 px above the socket, up on the lit BROW at 187 levels. Against that
+// reference 1.70 looked like parity. The coat a viewer actually compares the
+// band against is the coat 4-20 px outside it, down in the orbital hollow,
+// and that reads 142. Same render, same frame, -45 levels of reference.
+//
+// Re-swept with the honest reference: six arms in one page session at one sim
+// instant, 22 TAA frames each, the band isolated by MASK (lids hidden for the
+// membership test, then tinted per-zone for the margin/skin/fur split) rather
+// than by position, median over ~50 000 band pixels against ~22 000 coat
+// pixels in a 4-20 px shell. The coat reference held at 141.6-142.4 across
+// all six arms, which is what makes the comparison a measurement:
+//
+//   scatter   band p50   vs coat
+//     1.62      181.2     +27.2 %
+//     1.30      172.2     +21.3 %
+//     1.00      161.3     +13.8 %
+//     0.70      147.0      +3.7 %
+//     0.40      126.1     -10.9 %
+//     0.00       69.5     -50.9 %
+//
+// So parity is 0.65, and 0.60 lands ~2 % under it — where periocular skin
+// belongs, and where the near-black margin (p50 15) has 120 levels of coat
+// to be a rim against.
+const LID_SCATTER = 0.60;
 
 /** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
 const chord = (t) => t / Math.sqrt(1 + t * t);
@@ -1569,8 +1591,18 @@ void main(){
   float feFurry  = smoothstep(${RIM_FUR_0.toFixed(5)}, ${RIM_FUR_1.toFixed(5)}, vArc);
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
+  //
+  // ONE OCTAVE AT +/-13 % WAS NOT ENOUGH TO BE HAIR. The coat immediately
+  // outside the socket carries far more local value variation than that, so
+  // a band at the right MEAN still read as a smooth collar of bare skin
+  // against it — and §4f rule 3 allows bare skin at the rhinarium, the eyes
+  // and the paw pads, not a 3.5 mm hairless ring around the fissure. Two
+  // octaves, stretched along the band (hairs run outward across it, not
+  // along it) and fine across it.
   float feHair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
-  vec3 feFur = uLidFur * mix(0.80, 1.06, feHair);
+  float feHairF = snoise(vec3(vU * 137.0, vS * 16.0, 8.7)) * 0.5 + 0.5;
+  float feHairM = feHair * 0.62 + feHairF * 0.38;
+  vec3 feFur = uLidFur * mix(0.74, 1.10, feHairM);
 
   // The periocular ring is the margin colour lifted toward skin, NOT skin
   // darkened — keeping it on the same hue is what stops the ring reading as
@@ -1616,8 +1648,12 @@ void main(){
   // does not.
   vec3 feWN = inverseTransformDirection(normal, viewMatrix);
   vec3 feAmb = mix(uBounceCol, uSkyCol, feWN.y * 0.5 + 0.5);
+  // Modulated by the SAME hair field that tints the band, so the breakup is
+  // in the shading and not only in the albedo. A tint alone rides on top of
+  // one smooth analytic shading gradient and still reads as a lacquered
+  // collar; scattering that varies hair-to-hair is what short fur looks like.
   reflectedLight.indirectDiffuse +=
-    feAmb * diffuseColor.rgb * (uLidScatter * feFurry);
+    feAmb * diffuseColor.rgb * (uLidScatter * feFurry * mix(0.70, 1.26, feHairM));
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeLid';
