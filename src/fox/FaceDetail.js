@@ -412,6 +412,45 @@ export class FaceDetail {
     const tx = new THREE.Vector3().crossVectors(ty, out).normalize();
 
     // --- size the pad to the real nose region -----------------------------
+    //
+    // THE SMOOTH HAIRLESS PATCH ROUND THE NOSE IS NOT THIS FILE AND IT IS NOT
+    // BARE SKIN. Review 4 reads it as bald skin on the muzzle's dorsum, well
+    // beyond the rhinarium, which would be a §4f rule 3 failure. Attributed
+    // at `portrait` by arms in one page session at one sim instant -- base /
+    // nofd (every FaceDetail mesh hidden) / nofur (shellMesh + cardMesh) /
+    // noskin (skinnedMesh moved to layer 31, NOT visible=false, because the
+    // whole rig is parented to it) -- with every class named and the residual
+    // reported:
+    //
+    //   whole frame          coat 1 266 912 px · skin 272 px + 311 shared
+    //   pale dome, strict    FaceDetail  0.0 %   whiskers 17.7 %
+    //   dome above the pad   FaceDetail 19.0 %   (that 19 % is my own pad's
+    //                        upper edge inside the box, not the dome)
+    //   nose pad box         FaceDetail 52.2 %
+    //   muzzle 40 px caudal  FaceDetail  0.0 %
+    //   muzzle boxes, all    skin 0 % of pixels change when the skin mesh
+    //                        stops drawing -- i.e. the coat is opaque over
+    //                        every one of them
+    //
+    // So there is ZERO visible bare skin anywhere on the muzzle: rule 3's
+    // letter holds. What reads as bald is a ~18 mm smooth pale dome with a
+    // hard circular silhouette standing round the rhinarium, and it is the
+    // COAT's inner shells lying on the anatomy SDF's nose blob. The footprint
+    // this file measures off that blob is 23.6 x 20.9 mm -- §4h recorded it
+    // at 30.7 x 23.9, so anatomy has shrunk it, but it is still ~1.8x a 13 mm
+    // rhinarium and 0.8x of it (18.9 x 16.7 mm) is exactly the dome's size in
+    // the render. My drawn pad is clamped to 14.2 x 11.2 mm and covers the
+    // front of the blob; the 2-3 mm annulus left over carries the fur's
+    // `nose` region coat, measured by FurSystem at 1.6 mm, under uNoseFade's
+    // bare-to-4mm / full-by-7mm ramp.
+    //
+    // NOT FIXED HERE ON PURPOSE. Growing the rhinarium to 19 mm to cover the
+    // blob is how §4b's "nose: small, black" gets lost, and it is the move
+    // §4h says this file was already making defensively. It needs the SDF
+    // blob to come down to a 13 mm rhinarium (anatomy) or uNoseFade to be cut
+    // to the DRAWN pad rather than the region centroid (fur). Ownership rule
+    // 1: reported, not patched.
+
     const fit = this._measureNoseFootprint(fox, pA, tx, ty);
     // §4b is explicit that the nose is SMALL. The anatomy agent's nose region
     // is considerably wider than the rhinarium it represents, so the measured

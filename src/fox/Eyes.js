@@ -48,6 +48,31 @@
  *
  * Read defensively from the animation agent: `ctx.fox.blinkL/blinkR` and
  * `ctx.fox.gazeYaw/gazePitch` are used when present and ignored when not.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THE FACE COSTS, because the [high] frame budget keeps failing and the
+ * lid work keeps being suspected. Paired in ONE page session at ONE sim
+ * instant, `portrait`/`high`/1280x800, 90 frames per arm through
+ * FoxDebug.measureFrameMs (which forces a readPixels sync, so the GPU is in
+ * the number), each arm measured TWICE so the repeatability floor is part of
+ * the result rather than an assumption:
+ *
+ *   arm       pass1    pass2    mean     delta vs base
+ *   base      24.490   24.406   24.448     --
+ *   nofd      24.346   24.409   24.377   -0.071 ms   FaceDetail's 5 meshes
+ *   noeye     24.492   24.374   24.433   -0.015 ms   all 6 eye meshes
+ *   nolid     24.379   24.474   24.427   -0.021 ms   both lid bands
+ *   nowhisk   24.440   24.222   24.331   -0.117 ms   53 strands
+ *   base pass1 - base pass2 = 0.084 ms
+ *
+ * So the ENTIRE eye -- globe, cornea, lids, the lid scatter, the rim ramp,
+ * all of it -- is 0.015 ms against a 0.084 ms repeatability floor: not
+ * measurable. The whole face package is about 0.2 ms. None of the frame's
+ * overrun is here, and neither LID_SCATTER nor the RIM_* ramp is worth a
+ * millisecond of anybody's suspicion. (The fur agent separately measured the
+ * gate's own [high] figure at 15.66-22.24 ms on identical code, so a
+ * cross-run 16.22 -> 17.19 is inside that instrument's spread.)
+ * ---------------------------------------------------------------------------
  */
 import * as THREE from 'three';
 import { clamp, saturate, lerp, TAU } from '../util/math.js';
