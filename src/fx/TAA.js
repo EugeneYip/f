@@ -46,6 +46,7 @@ uniform float uClamp;        // 0 disables clipping entirely
 uniform float uLoosen;       // widen the box where the neighbourhood is detailed
 uniform float uAntiGhost;      // 0 while the camera is static
 uniform float uUseCR;          // 0 when reprojection is the identity
+uniform float uDisocclude;     // 0 while the camera AND the sim are frozen
 uniform float uReset;
 varying vec2 vUv;
 
@@ -106,8 +107,25 @@ void main() {
          * step(0.0, prevUv.y) * step(prevUv.y, 1.0);
 
   // Disocclusion test against the view distance stored in history alpha.
+  //
+  // GATED ON MOTION, for the same reason uClamp is. When the camera is still
+  // AND the sim frame has not advanced, the only thing that differs between
+  // history and current is the sub-pixel jitter -- so nothing can have been
+  // disoccluded and every rejection this test makes is a false positive.
+  //
+  // It is not a harmless false positive either. It fires hardest exactly
+  // where the depth ratio across one pixel is largest, which is the horizon:
+  // jitter flips an edge texel between the snowfield at ~200 m and the sky at
+  // the far plane, abs(hz - vz)/vz lands around 3.5, valid goes to 0, alpha
+  // goes to 1 and history is thrown away. The pixel then shows ONE jittered
+  // sample instead of eighteen, and the sky-to-snow transition arrives as a
+  // 40-level cliff in a single pixel no matter how long the harness
+  // accumulates -- measured at x=1800 in wide.png and reported as blocker 14.
+  // Every other edge in frame resolves because its depth contrast is small
+  // enough to stay inside the 0.02-0.08 window; the horizon is the one place
+  // in an arctic scene where it is not.
   float hz = texture2D(tHist, prevUv).a;
-  valid *= 1.0 - smoothstep(0.02, 0.08, abs(hz - vz) / max(vz, 0.05));
+  valid *= 1.0 - smoothstep(0.02, 0.08, abs(hz - vz) / max(vz, 0.05)) * uDisocclude;
 
   // Catmull-Rom is exact at zero offset, so when the camera has not moved a
   // single bilinear tap gives a bit-identical result for a fifth of the cost.
@@ -206,6 +224,7 @@ export class TAA {
       uLoosen: { value: 1.5 },
       uAntiGhost: { value: 0 },
       uUseCR: { value: 1 },
+      uDisocclude: { value: 1 },
       uReset: { value: 1 },
     }, cheap ? { TAA_CHEAP: '' } : {});
 
@@ -295,6 +314,7 @@ export class TAA {
     u.uLoosen.value = p.cfg.clampLoosen;
     u.uAntiGhost.value = p.static_ ? 0 : p.cfg.antiGhost;
     u.uUseCR.value = p.static_ ? 0 : 1;
+    u.uDisocclude.value = p.static_ ? 0 : 1;
     u.uReset.value = reset ? 1 : 0;
 
     this.resolve.render(r, this.histA);
