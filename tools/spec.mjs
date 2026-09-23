@@ -632,6 +632,10 @@ const results = await page.evaluate(async () => {
   {
   atTime();
     const m = maskedFrame('silhouette', false);   // raw render: post must not flatter it
+    // True coverage for the same pose, so the backdrop can be divided out of
+    // the rim rather than counted as if it were fur.
+    const mt = matteOf('silhouette');
+    const covRim = mt ? mt.cov : null;
     if (m) {
       const { W, H, fg, mask } = m;
       // Erode by R px to separate rim from core.
@@ -653,16 +657,46 @@ const results = await page.evaluate(async () => {
       let rimSum = 0, rimN = 0, coreSum = 0, coreN = 0, behindSum = 0;
       for (let i = 0; i < W * H; i++) {
         if (!mask[i]) continue;
-        if (core[i]) { coreSum += lumAt(fg, i); coreN++; }
+        const cc = covRim ? covRim[i] : 1;
+        if (cc > 0.85) { coreSum += lumAt(fg, i); coreN++; }
+        else if (core[i]) { /* eroded core but thin: neither rim nor core */ }
         // `bg` is this exact frame with the animal hidden, so bg at a rim
         // pixel is precisely the radiance the fur is standing in front of.
-        else { rimSum += lumAt(fg, i); behindSum += lumAt(m.bg, i); rimN++; }
+        //
+        // But the RAW rim luminance cannot tell transmission from a GAP. A
+        // fringe that is 20% hair and 80% sky reads as the sky and scores a
+        // perfect 1.0 — which is why this sat at 0.998 while the critic
+        // looked at `silhouette` and found no hot rim on the ruff, tail or
+        // ear edges at all. Divide the backdrop back out using the coverage
+        // matte, exactly as tools/matte.mjs derives it, and what is left is
+        // the fur's OWN radiance:
+        //
+        //     I = C_fur * cov + bg * (1 - cov)   =>   C_fur = (I - bg(1-cov)) / cov
+        //
+        // Only pixels with enough coverage to be fur rather than sky are
+        // counted; below that the division amplifies noise and the pixel is
+        // mostly backdrop anyway.
+        else {
+          // Select the rim from the MATTE's coverage, not from an erosion of
+          // the difference mask. The erosion picks the outermost, faintest
+          // halo by construction -- every pixel it selects is below any
+          // sensible coverage floor, which is why a 0.12 floor kept exactly
+          // zero of them. What transmission wants is genuine PARTIAL fur:
+          // thin enough for light to come through, thick enough to be fur.
+          const c = covRim ? covRim[i] : 1;
+          if (c >= 0.12 && c <= 0.85) {
+            const I = lumAt(fg, i), B = lumAt(m.bg, i);
+            rimSum += (I - B * (1 - c)) / c;
+            behindSum += B;
+            rimN++;
+          }
+        }
       }
       out.transmission = rimN && coreN
         ? { rim: rimSum / rimN, core: coreSum / coreN, ratio: (rimSum / rimN) / (coreSum / coreN),
             behind: behindSum / rimN, seeThrough: (rimSum / rimN) / (behindSum / rimN),
-            rimPx: rimN, corePx: coreN }
-        : null;
+            rimPx: rimN, corePx: coreN, covFloor: 0.12 }
+        : { rimPx: rimN, corePx: coreN, covFloor: 0.12, none: true };
     }
   }
 
@@ -1208,6 +1242,48 @@ const results = await page.evaluate(async () => {
     }
   }
 
+  // 10d. HIGHLIGHT CLIPPING ON THE SUBJECT, not over the frame.
+  //
+  //      The frame-pooled check passed at well under 1% while the portrait
+  //      ruff was 16.54% at/above 252 and 7.53% railed at exactly 255 inside
+  //      a 250x200 box. Pool over a small block and take the WORST one that
+  //      lies on the animal, which is the only place §2.3 cares about.
+  {
+  atTime();
+    const m = matteOf('portrait');
+    if (m) {
+      renderPose('portrait', true);
+      const g = grab();
+      const img = c2.getImageData(0, 0, g.w, g.h).data;
+      const { cov, W, H } = m;
+      const B = 64;
+      let worst = null, blocks = 0;
+      for (let by = 0; by + B <= Math.min(H, g.h); by += B) {
+        for (let bx = 0; bx + B <= Math.min(W, g.w); bx += B) {
+          let on = 0, clip = 0, rail = 0, n = 0;
+          for (let y = by; y < by + B; y += 2) {
+            for (let x = bx; x < bx + B; x += 2) {
+              if (cov[y * W + x] < 0.9) continue;      // subject only
+              on++;
+              const i = (y * g.w + x) * 4;
+              const mx = Math.max(img[i], img[i + 1], img[i + 2]);
+              if (mx >= 252) clip++;
+              if (mx >= 255) rail++;
+              n++;
+            }
+          }
+          if (n < (B / 2) * (B / 2) * 0.5) continue;   // mostly off the animal
+          blocks++;
+          const frac = clip / n;
+          if (!worst || frac > worst.worstFrac) {
+            worst = { worstFrac: frac, railFrac: rail / n, x: bx, y: by };
+          }
+        }
+      }
+      out.subjectClip = worst ? { ...worst, blocks } : null;
+    }
+  }
+
   // 11. AURORA STRUCTURE — §7 asks for vertical filaments.
   //
   //     Measured on GREEN EXCESS, not luminance, and only where the aurora
@@ -1348,17 +1424,44 @@ record('post does not put a floor under the frame', floorLift != null && floorLi
   `0.1st-percentile luminance ${results.floorRaw} without post -> ${f?.p01} with post ` +
   `(lift ${floorLift}); single darkest pixel ${f?.minL?.toFixed(1)} is not asserted on, ` +
   'it is one sample and it flaked between runs');
-record('highlights not clipped', f && f.clipFrac < 0.01,
-  `${((f?.clipFrac ?? 0) * 100).toFixed(2)}% of pixels at/above 252`);
+// Frame-pooled clipping cannot see the subject.
+//
+// §2.3 cares about the ANIMAL blowing out, and a whole-frame fraction
+// drowns it: the critic measured the portrait ruff at **16.54% of pixels at
+// or above 252 and 7.53% railed at exactly 255** inside a 250x200 box while
+// this check read well under 1% over the frame and passed. A local maximum
+// is the quantity; a global mean is not.
+record('highlights not clipped (frame)', f && f.clipFrac < 0.01,
+  `${((f?.clipFrac ?? 0) * 100).toFixed(2)}% of pixels at/above 252 over the ` +
+  `whole frame — see the subject-local check below, which is the one §2.3 wants`);
+{
+  const sc = results.subjectClip;
+  record('highlights not clipped (on the animal)', sc && sc.worstFrac < 0.03,
+    sc ? `worst 64x64 block on the subject: ${(sc.worstFrac * 100).toFixed(2)}% ` +
+         `at/above 252 and ${(sc.railFrac * 100).toFixed(2)}% railed at exactly 255 ` +
+         `(want < 3%), at ${sc.x},${sc.y} of ${sc.blocks} blocks sampled inside ` +
+         `the coverage matte`
+       : 'subject clip probe produced no blocks — a failure, not a pass');
+}
 record('frame has contrast', f && f.sd > 35, `sd ${f?.sd.toFixed(1)}`);
 
 // Horizon: no hard step.
 const hs = results.horizonStep;
-record('no hard horizon step', hs && hs.agreeing >= 4 && hs.worst < 45,
+// NO COHERENT EDGE IS THE GOOD OUTCOME, not an inconclusive one.
+//
+// The predicate required `agreeing >= 4` before it would pass, so a horizon
+// with no detectable step at all FAILED — and then said so in its own
+// message, "[INCONCLUSIVE: no coherent edge found]". The critic measured the
+// horizon independently at a 0.83-1.77 level maximum single-row jump and
+// called this a false alarm inflating the failure count. It was right: a
+// check whose success condition is "I found a seam, but a small one" cannot
+// report the absence of a seam.
+record('no hard horizon step', !!hs && (hs.agreeing < 4 || hs.worst < 45),
   `largest HORIZONTALLY COHERENT jump ${hs?.worst.toFixed(0)} levels at y=${hs?.y} ` +
   `(${hs?.agreeing}/${hs?.cols} columns agree); loudest isolated point ` +
   `${hs?.loudestIsolated?.toFixed(0)} — isolated points are sparkle, not seams` +
-  (hs && hs.agreeing < 4 ? ' [INCONCLUSIVE: no coherent edge found at all]' : ''));
+  (hs && hs.agreeing < 4 ? ' — no coherent edge found, which is the PASS ' +
+    'condition: there is no seam to measure' : ''));
 
 // --- checks added from REVIEW-2's "gate gaps" -----------------------------
 
@@ -1375,15 +1478,23 @@ const tr = results.transmission;
 // that transmits approaches the radiance of its backdrop and nearly
 // disappears into it, which is the whole look §1 is asking for.
 record('backlit fur is lit THROUGH, not just less dark than its core',
-  tr && tr.seeThrough >= 0.80,
-  tr ? `rim ${tr.rim.toFixed(1)} against a backdrop of ${tr.behind.toFixed(1)} ` +
+  !!(tr && tr.seeThrough != null && tr.seeThrough >= 0.80),
+  tr && tr.seeThrough != null ? `rim ${tr.rim.toFixed(1)} against a backdrop of ${tr.behind.toFixed(1)} ` +
        `= ${tr.seeThrough.toFixed(3)} (want >= 0.80; 1.0 would be fur as bright ` +
        `as the sky behind it). Rim/core is ${tr.ratio.toFixed(3)} and is now ` +
        `reported only — it compared two dark things and passed at 1.09 while ` +
        `the rim was 32% darker than the snow`
-     : 'n/a');
+     + `. NOTE this is the RAW render: at 244 against a 197 backdrop both sit ` +
+       `near the top of the range, so a tonemapper can compress the lift to ` +
+       `nothing. REVIEW-5 looked at the POST frame and reported no visible hot ` +
+       `rim on ruff, tail or ear edges. Both can be true, and if they are the ` +
+       `defect is in the grade, not the coat`
+     : `UNMEASURABLE: ${tr?.rimPx ?? 0} rim pixels cleared the ${tr?.covFloor ?? '?'} ` +
+       `coverage floor. If that is zero the rim is almost entirely sky seen ` +
+       `through gaps, which is itself the finding — there is no fur there to ` +
+       `transmit anything.`);
 record('[reported, not asserted] rim/core luminance ratio', true,
-  tr ? `rim ${tr.rim.toFixed(1)} / core ${tr.core.toFixed(1)} = ${tr.ratio.toFixed(3)} ` +
+  tr && tr.ratio != null ? `rim ${tr.rim.toFixed(1)} / core ${tr.core.toFixed(1)} = ${tr.ratio.toFixed(3)} ` +
        `(want >= 1.12; 1.0 means opaque fur)` : 'could not mask the animal');
 
 // Fur must cover camera-facing surfaces, not just the outline. The tail was
