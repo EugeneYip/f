@@ -171,6 +171,11 @@ function defaults() {
       // pre-fix behaviour and exists so the defect stays A/B-able in one page
       // session; it is not a look knob and there is no reason to ship it off.
       dejitterReproject: true,
+      // Use the one-tap history fetch whenever the CAMERA is still, which is
+      // when Catmull-Rom is provably the identity. `false` restores the old
+      // condition (which also required the sim to be frozen) so the saving
+      // stays A/B-able in one session. Not a look knob either.
+      cheapHistoryWhenStill: true,
     },
     debug: 'off',   // off | ao | bloom | rays | coc | hdr | depth
   };
@@ -616,7 +621,8 @@ export class PostFX {
     if (taaOn && !skip.taa) {
       colour = this.taa.render({
         current: this.rtComposite.texture, depth: depthTex,
-        invViewProj: invViewProjU, near, far, static_: isStatic, cfg: cfg.taa,
+        invViewProj: invViewProjU, near, far, static_: isStatic,
+        cameraStill: cut.still, cfg: cfg.taa,
       });
       if (cfg.sharpen * this.sharpenScale > 0.001) {
         // rtComposite has been consumed; reuse it instead of a 4th full-res

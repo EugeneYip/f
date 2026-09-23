@@ -93,8 +93,18 @@ void main() {
   float vz = fxViewZ(d, uNear, uFar);
 
   // --- neighbourhood statistics, in compressed YCoCg ----------------------
+  //
+  // DEAD WORK WHEN THE CLAMP IS OFF. Every one of these taps feeds lo/hi
+  // and nothing else, and lo/hi reach the output only through
+  // mix(histY, clamp(histY, lo, hi), uClamp). With a static camera AND a
+  // static sim -- which is every frame the review harness and shoot.mjs ever
+  // look at -- uClamp is 0, so the 3x3 gather is nine full-res RGBA16F fetches
+  // whose result is multiplied by zero. uClamp is a uniform, so this branch is
+  // uniform across the draw and costs no divergence.
   vec3 m1 = vec3(0.0), m2 = vec3(0.0);
   vec3 cmin = vec3(1e9), cmax = vec3(-1e9);
+  vec3 lo = vec3(-1e9), hi = vec3(1e9);
+  if (uClamp > 0.0) {
 #ifdef TAA_CHEAP
   /* 5-tap cross instead of the full 3x3. The corners contribute least to the
      clipping box, and the low tier exists for weak hardware. */
@@ -130,8 +140,9 @@ void main() {
      resolve was deleting the hairs the fur system draws. */
   float detail = smoothstep(0.015, 0.12, sigma.x);
   vec3 pad = sigma * (uLoosen * detail);
-  vec3 lo = max(cmin - pad, m1 - uClampGamma * (1.0 + uLoosen * detail) * sigma);
-  vec3 hi = min(cmax + pad, m1 + uClampGamma * (1.0 + uLoosen * detail) * sigma);
+  lo = max(cmin - pad, m1 - uClampGamma * (1.0 + uLoosen * detail) * sigma);
+  hi = min(cmax + pad, m1 + uClampGamma * (1.0 + uLoosen * detail) * sigma);
+  }
 
   // --- reprojection --------------------------------------------------------
   // BOTH matrices are jitter-free, so this is a pure motion vector. Feeding
@@ -336,7 +347,7 @@ export class TAA {
     return { cut, still };
   }
 
-  /** @param p {{ current, depth, invViewProj, near, far, static_, cfg }} */
+  /** @param p {{ current, depth, invViewProj, near, far, static_, cameraStill, cfg }} */
   render(p) {
     const r = this.renderer;
     const reset = this.needsReset;
@@ -360,7 +371,26 @@ export class TAA {
     u.uClamp.value = p.static_ ? 0 : 1;
     u.uLoosen.value = p.cfg.clampLoosen;
     u.uAntiGhost.value = p.static_ ? 0 : p.cfg.antiGhost;
-    u.uUseCR.value = p.static_ ? 0 : 1;
+    /* CATMULL-ROM IS ABOUT THE CAMERA, NOT THE SIM.
+     *
+     * This used to be keyed to `static_`, which is "camera still AND the sim
+     * frame has not advanced". But there is no velocity buffer in this
+     * resolve: the reprojection is camera-only, so with the camera still
+     * prevUv == vUv exactly, whatever the animal is doing. The file header
+     * already states the consequence -- "Catmull-Rom is exact at zero offset,
+     * so when the camera has not moved a single bilinear tap gives a
+     * bit-identical result for a fifth of the cost" -- and that argument
+     * never depended on the sim being frozen.
+     *
+     * It mattered because the ONE path that measures this project's frame
+     * budget is exactly the case the old condition missed. audit.mjs times
+     * `D.step(1/60); D.render()` forty times from a fixed pose: the camera
+     * never moves and the sim advances every frame, so static_ was false, and
+     * the budget was being charged for a nine-tap bicubic history fetch whose
+     * result equals the one-tap fetch it replaces. The clamp, the anti-ghost
+     * and the disocclusion test stay keyed to `static_` -- those DO have to
+     * react to the animal moving. */
+    u.uUseCR.value = (p.cameraStill && p.cfg.cheapHistoryWhenStill !== false) ? 0 : 1;
     u.uDisocclude.value = p.static_ ? 0 : 1;
     u.uReset.value = reset ? 1 : 0;
 
