@@ -40,9 +40,9 @@ export class Horizon {
       // ragged skyline in a 1800 px frame. The old nearest ring was at 560 m
       // and 44% hazed at its BASE, which is why three rings of geometry
       // measured as a flat +14/255 wash rather than as a profile.
-      { r: 340, h: 10.5, min: 2.2, base: -120, aerialBase: 0.44, aerialCrest: 0.90, seed: 5153, rough: 1.0 },
-      { r: 560, h: 26, min: 7,  base: -140, aerialBase: 0.38, aerialCrest: 0.88, seed: 7717, rough: 1.0 },
-      { r: 690, h: 44, min: 13, base: -160, aerialBase: 0.58, aerialCrest: 0.94, seed: 3391, rough: 0.85 },
+      { r: 340, h: 10.5, min: 2.2, base: -120, aerialBase: 0.80, aerialCrest: 0.96, seed: 5153, rough: 1.0 },
+      { r: 560, h: 26, min: 7,  base: -140, aerialBase: 0.62, aerialCrest: 0.93, seed: 7717, rough: 1.0 },
+      { r: 690, h: 44, min: 13, base: -160, aerialBase: 0.74, aerialCrest: 0.96, seed: 3391, rough: 0.85 },
       { r: 840, h: 66, min: 20, base: -180, aerialBase: 0.78, aerialCrest: 0.972, seed: 9043, rough: 0.7 },
     ];
     // Ice fog. `top` is the cylinder's rim, not the visible height: the band
@@ -201,7 +201,7 @@ export class Horizon {
         uDither: { value: 0.010 },
         uWhite: this.uWhite,
         uHaze: this.uHaze,
-        uHazeMix: { value: 0.55 },
+        uHazeMix: { value: 0.80 },
         uHazeGain: { value: 1.62 },
       },
       vertexShader: /* glsl */ `
@@ -252,7 +252,8 @@ export class Horizon {
           // terrain rim, which meant the visible band was only the top ~12% of
           // the old parameter and every gradient keyed to it came out flat.
           // This was what made the range read as a painted wall.
-          float hN = clamp(vWorld.y / max(vTop, 0.5), 0.0, 1.0);
+          float hRaw = vWorld.y / max(vTop, 0.5);
+          float hN = clamp(hRaw, 0.0, 1.0);
 
           // Snowfield / rock break-up, in patches rather than stripes.
           float det = vnoise(vAz * 62.0 + hN * 3.1) * 0.55
@@ -270,6 +271,16 @@ export class Horizon {
           vec3 haze = mix(sampleSky(normalize(vec3(dh.x, 0.010, dh.z)), uSunDir),
                           uHaze * uWhite * uHazeGain, uHazeMix);
           float aerial = mix(uAerial.x, uAerial.y, hN * hN);
+          // EVERYTHING BELOW THE HORIZON LINE OF THIS RING IS FILLER. The
+          // geometry runs to -120 m only so the range can never leave a gap
+          // under the terrain rim, and that skirt has no business carrying a
+          // ridge's shading: hN clamps to 0 down there, so the whole wall came
+          // out as ONE constant, and at the low tier -- where the clipmap rim is only
+          // 168 m out and leaves a lot of it showing -- that constant is the
+          // review's "flat grey LOD band with a hard top edge". Converge it on
+          // the haze over ~0.25 of a crest height so the join is not an edge
+          // of its own.
+          aerial = mix(aerial, 0.995, smoothstep(0.02, -0.25, hRaw));
           // Vary the haze along the ring; real distance comes and goes.
           float azVar = vnoise(vAz * 2.7 + 5.0) * 0.55 + vnoise(vAz * 6.1) * 0.45;
           aerial = clamp(aerial + (azVar - 0.5) * 0.20, 0.0, 0.995);
