@@ -40,12 +40,28 @@ export class Horizon {
       // ragged skyline in a 1800 px frame. The old nearest ring was at 560 m
       // and 44% hazed at its BASE, which is why three rings of geometry
       // measured as a flat +14/255 wash rather than as a profile.
-      { r: 340, h: 10.5, min: 2.2, base: -120, aerialBase: 0.20, aerialCrest: 0.80, seed: 5153, rough: 1.0 },
+      { r: 340, h: 10.5, min: 2.2, base: -120, aerialBase: 0.44, aerialCrest: 0.90, seed: 5153, rough: 1.0 },
       { r: 560, h: 26, min: 7,  base: -140, aerialBase: 0.38, aerialCrest: 0.88, seed: 7717, rough: 1.0 },
       { r: 690, h: 44, min: 13, base: -160, aerialBase: 0.58, aerialCrest: 0.94, seed: 3391, rough: 0.85 },
       { r: 840, h: 66, min: 20, base: -180, aerialBase: 0.78, aerialCrest: 0.972, seed: 9043, rough: 0.7 },
     ];
-    this.fog = { r: 520, top: 30, bottom: -60 };
+    // Ice fog. `top` is the cylinder's rim, not the visible height: the band
+    // itself is the exponential below, and the rim only has to clear it.
+    //
+    // This used to be 30 m at 520 m = 3.3 degrees of geometry carrying a
+    // 1.1-degree band, which left everything from ~1 to ~6 degrees above the
+    // horizon showing the SKY MODEL's own horizon -- and that is the olive.
+    // Along a 1000 km grazing path the Rayleigh source is extinguished
+    // bluest-first, so a sky lit from above converges on a warm neutral; on
+    // the sunward side of `wide` it measured B-R +2.4 and G-R -3.1, i.e.
+    // green as the top channel, which is exactly the critic's (93,99,97).
+    // No amount of snow-blink inside the scattering integral fixes that,
+    // because the integral's own ceiling is about half the snow's radiance
+    // (the ground is half the sphere). What actually sits there in a polar
+    // photograph is not air, it is ICE FOG over a snowfield, and its
+    // radiance does approach the snow's. So give the band the altitude the
+    // real thing has and let it own that part of the frame.
+    this.fog = { r: 520, top: 110, bottom: -60 };
 
     /**
      * Radiance of lit snow, republished every frame from Sky.diffuseWhite.
@@ -82,7 +98,13 @@ export class Horizon {
       const mesh = new THREE.Mesh(this._ridgeGeometry(L), this._ridgeMaterial(sky, L, snow));
       mesh.frustumCulled = false;
       mesh.name = `ridge${i}`;
-      mesh.renderOrder = -9000 + i;   // far ring first; they are opaque anyway
+      // The near ring is at 340 m and the ice fog at 520 m, so most of the
+      // fog column is BEHIND it and it has to draw over the band. Neither
+      // writes depth (both are transparent), so render order is the only
+      // thing deciding, and at -9000 the fog was painting the near ring out
+      // completely -- the skyline went to a clean line the moment the band
+      // got its real altitude. The far three stay behind it.
+      mesh.renderOrder = i === 0 ? -40 : -9000 + i;
       this.group.add(mesh);
       this.rings.push(mesh);
     }
@@ -180,7 +202,7 @@ export class Horizon {
         uWhite: this.uWhite,
         uHaze: this.uHaze,
         uHazeMix: { value: 0.55 },
-        uHazeGain: { value: 1.32 },
+        uHazeGain: { value: 1.62 },
       },
       vertexShader: /* glsl */ `
         attribute float aH;
@@ -299,9 +321,9 @@ export class Horizon {
         uDither: { value: 0.010 },
         uWhite: this.uWhite,
         uHaze: this.uHaze,
-        uFogMix: { value: 0.70 },
-        uFogGain: { value: 1.32 },
-        uFogAlpha: { value: 0.70 },
+        uFogMix: { value: 0.90 },
+        uFogGain: { value: 2.30 },
+        uFogAlpha: { value: 0.92 },
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;
@@ -333,7 +355,10 @@ export class Horizon {
           float az = atan(dh.x, dh.z);
           // Ice fog sits ON the horizon line and thins upward fast.
           float t = (vWorld.y - uRange.x) / (uRange.y - uRange.x);
-          float band = exp(-pow(max(0.0, (vWorld.y - 2.0)) / 17.0, 1.7))
+          // 42 m at 520 m is 4.6 degrees; the softer exponent carries a tail
+          // to ~10 degrees, which is what dissolves the top edge instead of
+          // ending the band on a line.
+          float band = exp(-pow(max(0.0, (vWorld.y - 2.0)) / 42.0, 1.35))
                      * smoothstep(0.0, 0.22, t);
           float lumpy = 0.68 + 0.42 * (vnoise(az * 5.3 + 11.0) * 0.6 + vnoise(az * 17.0) * 0.4);
           // Taper to exactly zero before the cylinder's top rim, or the rim

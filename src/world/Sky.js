@@ -118,9 +118,17 @@ export class Sky {
       /** Snow blink: the fraction of a white snowfield's radiance that is
        *  available to the in-scatter term. 0.5 is the geometric ceiling --
        *  the ground is half the sphere -- and the real figure is lower
-       *  because that light is attenuated on its way up. Tuned so the
-       *  horizon band lands on bible section 3's #aac4e0. */
-      bounceScale: 0.30,
+       *  because that light is attenuated on its way up.
+       *
+       *  It CANNOT on its own put the horizon band on bible section 3's
+       *  #aac4e0, and the old comment here claiming it had been tuned to do
+       *  that was wrong: 0.30 -> 0.44 (a 47% lift, and 0.5 is the ceiling)
+       *  moved the measured band by five levels. The integral's own limit is
+       *  about half the snow's radiance, so the band that reaches #aac4e0 in
+       *  a polar photograph is not air at all -- it is ice fog, and it is
+       *  Horizon.js that owns it now. This value is kept honest rather than
+       *  pushed: 0.44 of a 0.5 geometric ceiling. */
+      bounceScale: 0.44,
       /** e-folding altitude (km) of the ground-view factor. Low, so the term
        *  is horizon-weighted: a grazing ray spends hundreds of km inside this
        *  layer and a zenith ray two. */
