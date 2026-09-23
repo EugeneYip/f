@@ -444,6 +444,72 @@ export const ROSTRUM = {
  * 18 mm of coat is an actual concavity. `notch.k` is its fillet and is what
  * keeps it a dish rather than §4d's "abrupt and angular" crease.
  */
+/*
+ * ## The honest before/after, on ONE tree, which 20211cb could not give
+ *
+ * 20211cb's matte pair was two runs with 7df3911 landing between them, and it
+ * said so. This is the same measurement with nothing else moving: knobs off
+ * and knobs on, same commit, same tool, same session.
+ *
+ * `tools/matte.mjs --poses profile`, upper contour of the head from the nose
+ * to the brow (x 350..430), deficiency below its own upper convex hull:
+ *
+ *                       defMax   at x   defMean   steepest step
+ *   nasalDrop 0, notch off  12.1   383     5.90     2.00 px/px
+ *   SHIPPED                 23.5   403     9.08     4.75 px/px
+ *
+ * Noise floor, taken from the same two runs over the untouched withers band:
+ * defMax 30.5 / 30.9, defMean 13.49 / 13.68 — about +-0.4 px. So the stop is
+ * a ~28-sigma feature, it is where the nasion is rather than halfway down the
+ * muzzle, and the four separate 2 px/px breaks of the unbroken curve have
+ * become one 4.75 px/px break. 20211cb's cross-run pair read 12.7 -> 34.7,
+ * i.e. its AFTER was ~11 px optimistic. The stop is real and it is smaller
+ * than that commit claimed.
+ *
+ * ## AND BOTH REMAINING KNOBS ARE SPOKEN FOR. Swept; do not re-sweep.
+ *
+ * `nasalDrop` 6 -> 20 mm, on the built SDF, sagittal dorsum, with the notch
+ * ON (20211cb swept it with the notch off, where the muzzle cone's own slope
+ * is still the whole story):
+ *
+ *     drop mm    6      9     12     16     20
+ *     angle   26.8   27.8   28.6   29.4   29.9   deg, nasal-to-frontal
+ *     defect  12.5   13.5   14.2   15.2   15.7   mm, skin hull defect
+ *
+ * so it still moves the SKIN, and on the canopy it does nothing at all.
+ * Paired matte, two runs back to back, 6 mm against 12 mm: defMax 23.5 ->
+ * 23.6, defMean 9.08 -> 8.77, against that +-0.4 px floor. 20211cb predicted
+ * this from the dilation argument — "0 -> 16 mm takes the skin angle 5.6 ->
+ * 19.1 deg and the canopy angle nowhere at all" — and this is it confirmed on
+ * the render instead of argued. The notch has already taken what there was to
+ * take; the two levers are not additive.
+ *
+ * `frontalLift` is the one knob in this block that had never been swept, and
+ * it is the only one that still reaches the canopy, because it TRANSLATES the
+ * dorsum rather than carving it:
+ *
+ *     lift mm    0      3      6      9     12     16
+ *     angle   26.8   29.1   31.4   33.6   35.6   38.1   deg
+ *     defect  12.5   13.8   15.5   17.3   19.3   22.1   mm
+ *     dome    297.8  299.8  302.0  304.3  306.5  309.8  mm at z = 202
+ *
+ * IT IS LEFT AT 0 BECAUSE IT BUYS THE STOP FROM THE EAR. The dome rises with
+ * the forehead, and §4c's visible-height rule is the ear's apex measured
+ * against that dome. Measured on the same builds:
+ *
+ *     lift mm        0      3      6
+ *     ear proud   45.0   44.0   42.0   mm
+ *     proud/base  0.90   0.88   0.84   §4c asks for ~1:1
+ *
+ * 3 mm of lift gives back the whole of what 0363d6a's `rBase` widening just
+ * bought, and 6 mm gives back three times it. Same class of trade as §4i's
+ * withdrawal of the 55 % target: reaching a number by spending a landmark.
+ *
+ * What is left of the softness is the COAT RAMP, which is fur's and which
+ * 20211cb measured: the coat runs 9.0 mm at z = 264 to 18.3 mm at z = 228, a
+ * gradient of 0.26 mm/mm in the same direction as the rise, which tilts the
+ * canopy even where it reproduces the concavity.
+ */
 export const STOP = {
   nasalDrop: 0.0060,
   frontalLift: 0.0000,
