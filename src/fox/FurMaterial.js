@@ -1243,6 +1243,24 @@ export const FUR_DEFAULTS = {
    * one that costs triangles.
    */
   cardDuty: 0.85,
+  /*
+   * AND THE CEILING ON ONE HAIR'S HALF-WIDTH IN ITS CELL, which the duty
+   * above needs in order to be legal. `d` runs 0..1 across a hair cell, so
+   * rad >= 1 fills the cell: the gap to the next hair closes and the card
+   * becomes one opaque plate. It also voids uCardHairAlign's guarantee, whose
+   * own note reasons "since rad <= 0.6 the alpha there is 0 by construction".
+   * At duty 0.85 the raw draw is 0.425 .. 1.275 and 32% of it is over 1.0.
+   *
+   *   uCardDutyMax   band fill L   top p10   gaps L   run L   cov
+   *     9.0 (off)       0.429       1.92     21.95     2.7   619 492
+   *     0.85            0.406       2.20      7.65     2.5   619 464
+   *     0.70            0.381       1.96      7.81     2.0   619 432
+   *
+   * 0.85 costs 5% of the fill -- the arithmetic says 6% -- for 15% of the top
+   * contour p10 and a third of the merge-and-break transitions, at identical
+   * coverage. 0.70 gives the fill back up and buys nothing.
+   */
+  cardDutyMax: 0.85,
   cardHairLen: 0.85,
   cardHairFade: 0.10,
 
@@ -1469,6 +1487,7 @@ export function buildFurUniforms(ctx) {
     uCardHairAlign: { value: d.cardHairAlign },
     uCardRootRag: { value: d.cardRootRag },
     uCardDuty: { value: d.cardDuty },
+    uCardDutyMax: { value: d.cardDutyMax },
     uCardHairLen: { value: d.cardHairLen },
     uCardHairFade: { value: d.cardHairFade },
     uCardInteriorLen: { value: d.cardInteriorLen },

@@ -1428,6 +1428,7 @@ uniform float uCardHairs;      // hairs per card, x the authored 2-5; see below
 uniform float uCardHairAlign;  // 1 = the hair lattice lands on the card's edges
 uniform float uCardRootRag;    // per-hair root fade depth; 0 = one straight spine
 uniform float uCardDuty;       // share of a card's AREA that is hair; see below
+uniform float uCardDutyMax;    // ceiling on one hair's half-width in its cell
 uniform float uCardHairLen;    // shortest per-hair length, in card lengths
 uniform float uCardHairFade;   // per-hair tip ramp, in card lengths
 
@@ -1490,8 +1491,21 @@ void main(){
    * subdivides the same covered area into more, finer strands; it cannot add
    * any. That is why uCardHairs 2.4 -> 5.0 moved macro detail and the contour
    * and left the fringe's fill where it was. See FUR_DEFAULTS.cardDuty.
+   *
+   * AND IT HAS A CEILING FOR A STRUCTURAL REASON, not a taste one. d runs
+   * 0..1 across a hair cell, so rad >= 1 means the hair FILLS its cell: the
+   * gap to its neighbour closes, adjacent hairs merge, and the card becomes
+   * one opaque plate with straight sides. That also silently voids
+   * uCardHairAlign's guarantee -- its note above reasons "since rad <= 0.6
+   * the alpha there is 0 by construction", and the construction is what keeps
+   * the card's own quad boundary from being a hard alpha step.
+   *
+   * At uCardDuty 0.85 the raw draw is 0.425 .. 1.275 and 32% of hairs are
+   * over 1.0, which is what turned the macro_eye cards from combs into large
+   * straight-edged petals. uCardDutyMax caps it so every hair keeps a gap and
+   * alpha is still 0 at vCard.x 0 and 1. It costs ~6% of the mean duty.
    */
-  float rad = uCardDuty * (0.50 + 1.00 * hr);
+  float rad = min(uCardDuty * (0.50 + 1.00 * hr), uCardDutyMax);
   float aa  = clamp(fwidth(s) * 1.6, 0.02, 1.2);
   float a   = 1.0 - smoothstep(rad - aa, rad + aa, d);
 
