@@ -684,6 +684,47 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // and the profile contour holds at head 1.251 / body 1.427 / legs 1.635
   // against the 1.15 floor (the felt is slightly less opaque, so the body band
   // comes back from 1.769 -- still clear).
+  //
+  // AND THE FLOOR UNDER IT -- the 0.62 -- IS THE PETALS AT macro_eye, but
+  // lowering it is a measured dead end. Do not spend another wave on it.
+  //
+  // ATTRIBUTION FIRST, because the handed-down diagnosis was wrong. The large
+  // translucent striated petals at the macro framing were predicted to be
+  // "the card's own silhouette". They are not: positive control in one page
+  // session at macro_eye / 1400x900, interior fine detail over the eroded
+  // coverage interior,
+  //
+  //     base              4.127      petals present
+  //     cards hidden      4.248      petals UNCHANGED, in shape and position
+  //     shells hidden     1.269      petals GONE
+  //
+  // and the renders agree with the numbers. The petals are the LOCK -- one
+  // clump cell, 15-25 mm on the face, which is 115-190 px at that framing --
+  // and what fills it is this felt term, because max(a, under) below hands
+  // the felt every gap the guard hairs cut.
+  //
+  // So I gated the floor on sLod (correct by construction: aHair is already
+  // mix(mean, a, sLod), so body range stays bit-identical) and swept it.
+  // It went the WRONG WAY:
+  //
+  //     floor   macro_eye fine   portrait fine   profile fine
+  //      0.62       4.127            4.513          1.145     shipped
+  //      0.30       3.463            3.934          1.145
+  //      0.10       3.310            3.652          1.145
+  //      0.00       3.299            3.585          1.145
+  //
+  // profile was bit-identical in all four arms, so the gate works; the close
+  // framings lost a fifth of their fine detail and the petals stayed, only
+  // hazier. The reason is that every shell samples the SAME object-space
+  // strand field, so the gaps line up through the whole coat: opening them
+  // does not reveal a hair behind, it reveals the smooth skin at the bottom
+  // of the stack. Reverted, and the knob with it.
+  //
+  // What that leaves as the live hypothesis for the petals: a lock's OUTLINE
+  // is a smooth Voronoi edge ragged only by vnoise3 at 5.3x the clump
+  // frequency (+/-0.08 of a cell, so +/-5-9 px against a 150 px petal). To
+  // read as hair at macro it would have to be ragged at STRAND scale -- the
+  // strand field is already computed right here in aHair.
   under *= mix(1.0, 0.62 + 0.38 * aHair, uFeltStrand);
 
   a = max(a, under) * densityScale * uDensity;
