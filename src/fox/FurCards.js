@@ -289,6 +289,59 @@ export function buildFurCards(src, occlusion, count, seed = 0xfa17) {
  * has. So the deeper the coat gets, the more completely the ear merges into
  * the head — which means raising these two weights cannot recover an ear that
  * has no notch in it, and lowering them cannot either. Route the shape.
+ *
+ * ## AND HERE IS WHERE `matte silhouette is hair at profile: head` FAILS.
+ *
+ * That check is the last open silhouette item (1.145 against a 1.15 floor
+ * when it was handed to me, 1.000-1.080 in every run since). It is a 10th
+ * PERCENTILE, so it is decided by which rows are worst, and nobody had ever
+ * looked at WHICH rows those are. On the exact coverage matte at `profile`,
+ * at spec's own 1920x1200 / 1.48 px per mm, spec's own 1.5 mm box filter,
+ * the head band is y 386..578 and the rows under 1.15 are:
+ *
+ *   coat as shipped   389 391 395 397 399 401 405 409 427 | 465 467 497 533 569 571
+ *   BARE MESH         (none up here)                      | 518 520 524 526 528 556 562 564 570
+ *   shells, no cards  389 391 393 397 401 405 407 413 421 423 425 433 435 437 445 ... 571
+ *
+ * Nine of the coat's fifteen failures are one contiguous block in y 389..427,
+ * which is the TOP 20% of the band: the ear tip and the crown. Their 2%-to-90%
+ * fringe runs 5-16 px, i.e. 4-11 mm, i.e. THREE TO EIGHT box samples. tv/net
+ * over three samples cannot reach 1.15 unless one of them happens to
+ * overshoot; the check is sample-starved there, not reading a smooth edge.
+ *
+ * Two controls say the same thing from opposite sides. Hiding the cards puts
+ * the whole band at exactly 1.000 with 56-66% of rows monotone, so the cards
+ * ARE what breaks this outline and the metric does respond to them. And the
+ * BARE MESH reads p10 1.077 -- HIGHER than the coated 1.05 -- with its own
+ * failures in a completely different place, y 518-570, the muzzle. A check
+ * whose bare-mesh control outscores the coat is not, on this band, measuring
+ * the coat.
+ *
+ * There is also a structural bias worth knowing before anyone tunes into it:
+ * the band is `top .. top + 0.33 * height`, and `top` is the topmost COVERED
+ * row. Deepening the coat raises `top`, which pulls more of the thin-fringe
+ * crown rows into the band and drags the percentile down. That is why a
+ * change can improve the head MEDIAN (1.341 -> 1.414) and the fraction of
+ * rows under the floor (0.213 -> 0.170) while the p10 falls (1.08 -> 1.045).
+ *
+ * SWEPT AND NONE OF IT REACHES 1.15 -- head p10, one session, one instant:
+ *
+ *   shipped                                  1.050   (repeat run: 1.045)
+ *   head-region density 1.00 -> 0.70         1.036
+ *   uCardTipEdge 1.40 -> 0.60                1.057
+ *   uCardJitter 1.05 -> 1.60                 1.041
+ *   uCardFloor 10 -> 12 mm (the cap)         1.080   +2.3% coverage, and it
+ *                                                    fills the tail's waist
+ *                                                    (brush/waist height
+ *                                                    2.17 -> 1.61)
+ *   uCardCurve 1.0 -> 1.6 (extrapolating)    1.079   same cost
+ *
+ * The two that move it most both pay for it by inflating the coat, and the
+ * same build measured twice moved the fraction-under-floor 0.170 -> 0.233, so
+ * the whole spread above is inside this metric's own noise. Do not spend a
+ * round tuning the coat to this number: the failing rows are an ear tip whose
+ * geometry changed today (0363d6a), and the fix is either more ear to fringe
+ * or a band definition that does not put 3-sample rows in a percentile.
  */
 function cardWeight(regionId) {
   const r = REGION_TABLE[Math.round(regionId)];
