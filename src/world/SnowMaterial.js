@@ -79,6 +79,15 @@ import { rng } from '../util/math.js';
 const _clear = new THREE.Color();
 const _wp = new THREE.Vector3();
 
+/** Bible section 3's #aac4e0, linear, normalised to unit luminance so the
+ *  LEVEL is set by the rig and only the HUE is the constant. Identical to the
+ *  vector src/world/Horizon.js builds for the ice fog band. */
+const HAZE_UNIT = (() => {
+  const c = new THREE.Color(0xaac4e0);
+  const l = Math.max(1e-6, 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b);
+  return new THREE.Vector3(c.r / l, c.g / l, c.b / l);
+})();
+
 /**
  * Sphere proxies for the animal, used ONLY for contact occlusion on the snow.
  *
@@ -194,6 +203,10 @@ export class SnowMaterial {
         uSSS: { value: 1.7 },
         uAerial: { value: new THREE.Vector3(0.016, 0.62, 0.62) },
         uHaze: { value: new THREE.Color(0xaac4e0) },
+        // Airlight: xyz the radiance the distance converges on, w the
+        // exp-squared density (three's FogExp2 value, so the near field is
+        // untouched). Republished each frame in _updateAirlight().
+        uAirlight: { value: new THREE.Vector4(0.36, 0.49, 0.73, 0.0125) },
         uSkirtDrop: { value: 60.0 },
         // --- subject contact occlusion (see snContactOcc in snow.glsl.js) ---
         uOccl: { value: OCCLUDERS.map(() => new THREE.Vector4(0, 0, 0, 0)) },
@@ -219,7 +232,11 @@ export class SnowMaterial {
       vertexShader: snowResolve(SNOW_VERT),
       fragmentShader: snowResolve(SNOW_FRAG),
       lights: true,
-      fog: true,
+      // three's scene fog is NOT used: it converges on Environment's
+      // 0x9fbcdc while the horizon band converges on #aac4e0 at lit-snow
+      // level, and the step between the two is a visible edge at the terrain
+      // rim. uAirlight replaces it. See the fog term in SNOW_FRAG.
+      fog: false,
       defines: {
         SUN_TAPS: this._sunTaps(q),
         SPARKLE_OCT: this._sparkleOct(q),
@@ -344,10 +361,28 @@ export class SnowMaterial {
     // than caching it: a stale texel size silently rescales the depth bias.
     const sm = ctx.environment?.sun?.shadow?.mapSize;
     if (sm && sm.x > 0) u.uShadowTexel.value.set(1 / sm.x, 1 / sm.y);
+    this._updateAirlight(ctx);
     this._updateOccluders(ctx);
     const w = ctx.wind;
     const wl = Math.hypot(w.x, w.z) || 1;
     this.field.uWindXZ.value.set(w.x / wl, w.z / wl);
+  }
+
+  /**
+   * The colour the far field converges on.
+   *
+   * Keyed to the SAME two numbers the ice fog band uses -- unit-luminance
+   * #aac4e0 for the hue and ctx.sky.diffuseWhite for the level -- so the
+   * snow and the haze standing over it cannot drift apart when the rig
+   * moves. The 2.07 is Horizon's fog band gain (2.30) times its haze mix
+   * (0.90), i.e. the level that band actually reaches.
+   */
+  _updateAirlight(ctx) {
+    const w = ctx.sky?.diffuseWhite;
+    if (!(w > 0)) return;              // keep the last good value, never zero
+    const a = this.uniforms.uAirlight.value;
+    const k = w * 2.07;
+    a.set(HAZE_UNIT.x * k, HAZE_UNIT.y * k, HAZE_UNIT.z * k, a.w);
   }
 
   /**

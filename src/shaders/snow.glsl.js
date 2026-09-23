@@ -358,7 +358,6 @@ uniform vec3 uSunDir;
 uniform float uSkirtDrop;
 
 #include <common>
-#include <fog_pars_vertex>
 #include <shadowmap_pars_vertex>
 
 SNOW_CONSTS
@@ -432,7 +431,6 @@ void main(){
   vec3 transformedNormal = normalMatrix * nrm;
   gl_Position = projectionMatrix * mvPosition;
 
-  #include <fog_vertex>
 
   // NO NORMAL-OFFSET BIAS ON THE SNOW.
   //
@@ -486,6 +484,13 @@ uniform vec3 uSheen;   // roughness fresh, roughness packed, specular scale     
 uniform float uSSS;
 uniform vec3 uAerial;   // density, strength, hue-vs-grey
 uniform vec3 uHaze;
+// AIRLIGHT. The radiance a ray reaches once it has crossed enough air to
+// forget what it started on -- i.e. the horizon haze band's own radiance,
+// published by SnowMaterial from the SAME unit-luminance #aac4e0 and the same
+// lit-snow level that src/world/Horizon.js gives the ice fog. x/y/z is that
+// radiance, w is the exponential-squared density. See the note at the fog
+// term at the end of main().
+uniform vec4 uAirlight;
 // 0 off. 1 shadow mask, 2 ridge self-shadow, 3 clipmap level, 4 sparkle,
 // 5 detail normal, 6 compaction. Debug only; costs one uniform compare.
 uniform float uDebugView;
@@ -493,7 +498,6 @@ varying float vFw;
 
 #include <common>
 #include <packing>
-#include <fog_pars_fragment>
 #include <shadowmap_pars_fragment>
 
 /**
@@ -963,8 +967,24 @@ void main(){
     else if (uDebugView < 8.5) col = vec3(gShadowDbg.z, gShadowDbg.w, 0.0);
     else col = vec3(1.0 - contact);
   }
+  // OUR OWN FOG, not three's.
+  //
+  // scene.fog is FogExp2(0x9fbcdc) and lives in src/core/Environment.js; the
+  // horizon haze band is bible section 3's #aac4e0 scaled by lit-snow
+  // radiance and lives in src/world/Horizon.js. Two aerial-perspective
+  // targets in two files, and the far snow converged on the darker one while
+  // the sky above it converged on the brighter -- which is the flat band with
+  // a hard top edge at the low tier, and most of why the terrain rim's
+  // silhouette (a SQUARE clipmap seen edge-on) is legible at all. A rim with
+  // nothing to contrast against has no polyline in it.
+  //
+  // Same exp-squared law and the same density, so the near field is
+  // unchanged; only the colour the distance converges ON moves, and it moves
+  // onto the band the snow is standing under.
+  float air = 1.0 - exp(-dist * dist * uAirlight.w * uAirlight.w);
+  col = mix(col, uAirlight.xyz, air);
+
   gl_FragColor = vec4(col, 1.0);
-  #include <fog_fragment>
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
