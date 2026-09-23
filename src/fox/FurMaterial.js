@@ -684,6 +684,24 @@ export const FUR_DEFAULTS = {
    * mm long, because nothing here moved a card. The coat reads as fine long
    * fur rather than as a wet sheepdog; a genuinely compact winter pile needs
    * the strand SHORTER, and the only two terms that do that are priced above.
+   *
+   * tools/spec.mjs, the same build measured with cardHairs 1.0 / shellDeep
+   * 0.40 and with the shipped 2.4 / 0.55:
+   *
+   *     check                                    before   after
+   *       fur reads as hair at macro: muzzle      7.14     7.73   fine
+   *       (fine-share)                            0.76     0.78
+   *       macro reference carries hair detail    11.41    11.80   fine
+   *       matte silhouette is hair: head p10      1.138    1.139   (still FAIL)
+   *       [unvalidated] fur covers camera-facing  1.10     0.98   (warn both)
+   *
+   * So the macro checks gain, the head band does not move, and the one thing
+   * that costs is the unvalidated tail-interior warn -- which was already
+   * under its own 1.2 floor and whose author records that it "passes at 2.74
+   * while a critic reading the same frame called the tail a flat white blade",
+   * i.e. it does not track the defect it is named for. The rendered tail at
+   * `tail` is softer and denser after, not flatter: shots/fur-before/tail.png
+   * against shots/fur-after/tail.png.
    */
   cardHairs: 2.4,
 };
