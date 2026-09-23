@@ -849,6 +849,16 @@ export class PostFX {
    *
    * Absolute numbers are a ceiling when other processes share the GPU.
    *
+   * AND `postTotal` HERE IS TOO LARGE. `frame()` below does a 1x1 readPixels
+   * after every single frame, which stalls the pipeline once per frame. That
+   * penalises a multi-pass render-target chain far more than it penalises a
+   * scene-to-canvas render, so the full-minus-scene difference overstates the
+   * chain. Measured against a paired, 16-frames-per-arm A/B of
+   * ctx.postfx.enabled on audit.mjs's own step+render path, post is 2.78 ms
+   * (MAD 0.228) where this method reports 4.2. Use the per-STAGE ratios from
+   * here -- they share the same penalty and cancel -- and take the post total
+   * from an enabled/disabled pair instead.
+   *
    * PAIRED AND REPEATED, because a single baseline is not survivable here.
    * Several agents drive headless Chromium against this GPU at once, and the
    * load is BURSTY -- one audit run read `low` at 11.78 ms and `medium` at
