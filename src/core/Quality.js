@@ -40,6 +40,25 @@ export const TIERS = {
     label: 'High',
     dpr: 1.0, maxDpr: 2.0,
     shadowMapSize: 3072, shadowCascades: 3, softShadow: true,
+    // HELD AT 13000, and the reason is measured rather than conservative.
+    //
+    // The fur agent swept card count against its new pile metrics and found
+    // 26000 the only arm to improve BOTH band fill and contour p10 (0.435
+    // fill, best left p10 at 1.41) where every other lever traded one for the
+    // other, and it reported the whole card mesh at 0.545 ms in a paired ABBA
+    // at hero/idle/high/1280x800. So I tried it, and on the same machine at
+    // loadFactor 1.03 the audit reads:
+    //
+    //     13000 -> high 17.19 ms     18000 -> 17.62     26000 -> 18.43
+    //
+    // against a 16.7 budget. The look gain is real but small -- the dark gaps
+    // between strands close -- and the cost is not the 0.545 ms the isolated
+    // mesh measures, because more cards is more OVERDRAW, not more mesh.
+    //
+    // §10 is a contract and `high` is already over it at 13000. Buying a
+    // marginal improvement with a budget that is already in deficit is the
+    // wrong order of operations: find the 1-2 ms first, then spend it here,
+    // where the exchange rate is genuinely the best on the table.
     furShells: 18, furFins: true, furCards: 13000, furAniso: true,
     terrainSegments: 384, terrainRadius: 190,
     snowParticles: 12000, snowLayers: 3,

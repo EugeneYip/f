@@ -923,6 +923,16 @@ const results = await page.evaluate(async () => {
     const scan = (n, len, at) => {
       const tvs = []; let short = 0;
       for (let i = 0; i < n; i += 2) {
+        // SKIP SCANS THAT START ALREADY COVERED.
+        //
+        // If the animal leaves the frame, the first sample on that scan is
+        // already inside it: there is no fringe to measure, the ramp has zero
+        // length, and the cliff rule then scores it 1.0. At `portrait` that
+        // made the right and bottom edges report p10 1.000 with 48% and 64%
+        // "below the hair floor" purely because the subject is cropped. The
+        // cliff rule is right for a hard edge and wrong for a frame boundary,
+        // and telling them apart is this one line.
+        if (at(i, 0) > 0.02) continue;
         let a = 0;
         while (a < len - 1 && at(i, a) < 0.02) a++;
         if (a >= len - 2) continue;

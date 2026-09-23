@@ -358,12 +358,41 @@ const main = async () => {
     const drift = hi && hi.repeatMs
       ? Math.abs(hi.repeatMs - hi.frameMs) / Math.max(hi.frameMs, 1e-6) : 0;
     report.highDriftFrac = +drift.toFixed(3);
-    report.contended = (msSpread < 0.08 && triSpread > 2) || drift > 0.15;
+    // A THIRD ARM: an absolute floor on the cheapest tier.
+    //
+    // The two arms above are both RELATIVE and both blind to a machine that
+    // was already loaded before the sweep began. A fur agent caught exactly
+    // that: one run read low 21.04, medium 20.87, high 69.2 and still
+    // reported `contended: false`, because the tiers kept their ratios and
+    // `high` agreed with its own repeat. Every arm compared the run to
+    // itself.
+    //
+    // `low` on an idle machine measures 5.2-5.6 ms across many runs. It is
+    // the cheapest, most repeatable number this harness produces, so it
+    // doubles as a reference workload: if it is more than twice its idle
+    // figure, nothing measured in that run means anything.
+    // 1.3x, not 2x. Idle runs put `low` at 5.2-5.7 ms, i.e. within 1.04 of
+    // the reference, so the headroom to a 1.3 trip is comfortable. 2x was
+    // measured to be too loose in practice: a run reading low 7.3 (1.33x)
+    // came back with `high` at 31.06 ms and would have enforced budgets
+    // against it. The cheap tier is less sensitive to load than the
+    // expensive one, so its trip point has to be correspondingly tighter.
+    const LOW_IDLE_MS = 5.5, LOAD_TRIP = 1.3;
+    const loadFactor = perf.low ? perf.low.frameMs / LOW_IDLE_MS : 1;
+    report.loadFactor = +loadFactor.toFixed(2);
+    report.contended = (msSpread < 0.08 && triSpread > 2) || drift > 0.15
+      || loadFactor > LOAD_TRIP;
     if (report.contended) {
       if (drift > 0.15) {
         console.log(`\n  NOTE: the SAME tier measured ${hi.frameMs} ms and ${hi.repeatMs} ms ` +
           `ten seconds apart (${(drift * 100).toFixed(0)}% drift).\n` +
           '        The machine is not quiet. Budgets are not enforced this run.');
+      }
+      if (loadFactor > LOAD_TRIP) {
+        console.log(`\n  NOTE: the cheapest tier measured ${perf.low.frameMs} ms against ` +
+          `an idle reference of ${LOW_IDLE_MS} ms (${loadFactor.toFixed(1)}x).\n` +
+          '        The machine was already loaded before the sweep started.\n' +
+          '        Budgets are not enforced this run.');
       }
       if (msSpread < 0.08 && triSpread > 2) console.log(`\n  NOTE: frame time varies only ${(msSpread * 100).toFixed(1)}% across tiers ` +
         `whose triangle counts vary ${triSpread.toFixed(1)}x.\n` +
