@@ -204,8 +204,19 @@ base and tapering upward to a soft point. It is small and thickly furred
   a 52 mm base at the current lean.
 - The tip is **rounded, not flat** — a soft apex, not an arc. Note a sharper
   apex on a thin pinna has sub-cell rim curvature and will reintroduce the ear
-  stair-stepping of review blocker 5; thicken the pinna slightly to compensate
-  and watch the worst neighbour-normal angle.
+  stair-stepping of review blocker 5; watch the worst neighbour-normal angle.
+
+  > **"Thicken the pinna slightly to compensate" was wrong and is struck.**
+  > `EAR_NORMAL` is 71 % Z, and Z lies in the profile view's shadow plane — so
+  > thickening moves the blade *across* the silhouette this rule is about.
+  > Measured: `thickTip` 0.92 → 1.10 takes the blade 10 mm below the tip from
+  > 25.5 mm **up** to 27.5 mm, i.e. it makes the paddle worse on exactly the
+  > framing §4c exists to fix. The real lever turned out to be the blade's
+  > radius **profile**: at `power` 1.8 the blade held ~95 % of `rBase` through
+  > its first third and then domed over, which is the semicircular paddle
+  > itself. `power` → 1.0 makes the radius linear in u — a wedge — and took
+  > the blade 22 % narrower 10 mm below the tip with the apex radius 12.6 →
+  > 9.1 mm.
 - Keep the wide-set, low, outward-leaning placement from §4b. That part was right.
 
 ### Muzzle: short but genuinely tapering to a point
