@@ -170,6 +170,7 @@ uniform float uHairLenMin;
 uniform float uDensity;
 uniform float uFill;
 uniform float uPathKMax;       // cap on the oblique-path opacity boost
+uniform float uShellDeep;      // shells below this share of shellFill take the cheap path
 uniform float uFillTop;        // where the undercoat stops, x shellFill
 uniform float uFillJitter;     // +/- fraction, per clump/strand
 uniform float uCardTip;        // v past which a card stops being edge-gated
@@ -999,7 +1000,7 @@ ${isShell ? /* glsl */ `
   // Shells this deep are solid felt and almost entirely hidden behind the coat
   // above them. Neither the strand/micro/clump field nor the specular and
   // transmission lobes can change what you see, so skip all of it.
-  bool deep = tJ < shellFill * 0.40;
+  bool deep = tJ < shellFill * uShellDeep;
 
   vec3 site = vRoot;
   // The cheap path still has to honour the COVERAGE mask. furHair applies
@@ -1376,6 +1377,7 @@ ${FUR_SHADE}
 uniform float uCardInner;
 uniform float uCardTipEdge;    // vEdge exponent at a card's TIP; see below
 uniform float uCardOpacity;
+uniform float uCardHairs;      // hairs per card, x the authored 2-5; see below
 
 varying vec4  vCard;
 varying float vEdge;
@@ -1385,7 +1387,15 @@ void main(){
   float rnd = vCard.z;
 
   // Several hairs per card, each with its own radius, length and phase.
-  float n  = 2.0 + floor(rnd * 3.99);
+  //
+  // uCardHairs multiplies that count. It is the one way to raise the number of
+  // HAIRS on this animal without raising the number of CARDS: the geometry,
+  // the draw call and the covered area are all identical, only the width of
+  // the per-hair cell inside a card changes. That matters because the card
+  // budget is now a performance budget (16.63 ms against 16.7 at the high
+  // tier), so
+  // more cards is not available and more hairs is free.
+  float n  = uCardHairs * (2.0 + floor(rnd * 3.99));
   float s  = vCard.x * n + rnd * 7.31;
   float fi = floor(s);
   float fr = fract(s);

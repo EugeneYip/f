@@ -361,6 +361,38 @@ export const FUR_DEFAULTS = {
   // alpha 1.0 several pixels before the coat's outer surface, which both seals
   // the outline into a smooth curve and kills the transmission term above.
   pathKMax: 2.5,
+  /*
+   * Shells below this share of shellFill take the cheap path in the shell
+   * fragment shader: no strand/micro/clump field, no per-strand cylinder
+   * normal, no specular or transmission lobe. They are solid felt with the
+   * whole coat stacked above them, so nothing they compute can reach the eye.
+   *
+   * It was a literal 0.40. It is a knob now because the frame budget stopped
+   * having headroom -- `high` measures 16.70 +/- 0.06 ms against a 16.7 ms
+   * budget, so the gate's own pass/fail is a coin flip at HEAD and anything
+   * added to the coat has to be paid for. Interleaved in one page session at
+   * audit's exact measurement (1280x800, high, hero, D.step + D.render x40
+   * behind a readPixels fence), 4 reps:
+   *
+   *     uShellDeep   frame ms   profile coverage   head/body/legs p10   macro fine
+   *       0.40        16.70         189 731        1.151/1.899/1.764       5.374
+   *       0.55        16.42         189 731        1.151/1.899/1.764       5.238
+   *       0.70        16.22         189 732        1.151/1.899/1.764       5.083
+   *       0.80        16.01         189 734        1.151/1.899/1.764       4.872
+   *
+   * The silhouette is untouched -- coverage moves by 3 px in 190 000 and the
+   * three contour bands are identical to three decimals, because the outer
+   * shells are the ones on the outline and this only reaches the inner ones.
+   * What it does cost is interior detail at MACRO, where the coat is hundreds
+   * of pixels deep and you can genuinely see into it: 2.5% of the fine-detail
+   * measure at 0.55, 5.4% at 0.70, 9.3% at 0.80. 0.55 is the value whose
+   * saving (0.28 ms, 6% of the shells' own 4.30 ms) is worth that, and it is
+   * seven times the 0.04 ms that cardHairs 2.4 costs.
+   *
+   * For scale, measured the same way: the shells cost 4.30 ms of the frame,
+   * the cards 0.51 ms, and everything else on the screen 12.44 ms.
+   */
+  shellDeep: 0.55,
   fillTop: 1.12,
   fillJitter: 0.30,
   cardTip: 0.45,
@@ -591,6 +623,69 @@ export const FUR_DEFAULTS = {
   // tip. 0 restores the pre-clump coat (an even spray of independent hairs);
   // much above 0.7 the locks pinch to points and the coat reads wet.
   cardClump: 0.55,
+  /*
+   * HAIRS PER CARD, as a multiple of the authored 2-5. 1.0 is byte-for-byte
+   * the coat that shipped before this.
+   *
+   * "The coat reads shaggy -- long clumped strands hanging down, a wet
+   * sheepdog rather than a dense arctic fox pile." Attributed first, on the
+   * shaded frame at `profile` in one page session at one instant: hiding the
+   * CARDS leaves a soft granular mass with no strands in it at all, so the
+   * strands are cards and not the shells' hair field. Measured at the
+   * framing the harness actually ships (2100x1350 backbuffer, i.e. shoot's
+   * 1400x900 at dsf 1.5 -- at 1280x800 the same arms are indistinguishable),
+   * a visible strand is 4-7 mm wide and 45-90 mm long against a 47 mm flank
+   * coat. That aspect ratio IS the defect.
+   *
+   * The two knobs that shorten a strand both cost the outline, and the price
+   * is the one already refused for the head band:
+   *
+   *     arm                      coverage   head p10  body p10  legs p10
+   *       shipped                 158 589     1.110     1.733     1.487
+   *       uCardFloor 0            146 575     1.000     1.128     1.058
+   *       uCardLength 1.20->1.05  149 192     1.101     1.220     1.393
+   *
+   * -7.6% and -5.9% of the animal, and the body band collapses. Not bought.
+   *
+   * The knobs that are free do not move it. At 2100x1350, coverage and all
+   * three bands within their own run-to-run noise, and the render identical
+   * to the eye: uCardClump 0.55 -> 0 / 0.15 / 0.30, uClumpAO 0.75 -> 0,
+   * uClumpPull 0.74 -> 0.30. And uCardTipEdge, which this file's own comment
+   * calls "the one number that decides how much card is visible over the
+   * INTERIOR", is a no-op on a body seen side-on: vEdge -> 0 there, so
+   * pow(vEdge, anything) -> 0 and the mix lands on uCardInner whatever the
+   * exponent is. 1.40 -> 2.0 -> 3.0 moved the interior luminance by 0.01 of
+   * 159. uCardInner 0.17 -> 0 is the term that actually fades interior cards
+   * (interior contrast 3.79 -> 3.31), and it fades them everywhere without
+   * touching the strands on the outline, which is where the shag reads.
+   *
+   * So: leave the geometry alone and raise the HAIR count inside it. The card
+   * budget is a performance budget now (16.63 ms against 16.7 at the high
+   * tier), so more cards is not available -- but more hairs per card is free.
+   * Same vertices, same draw call, same fragments, same covered area; only the
+   * per-hair cell inside a card gets narrower. Measured at `profile`,
+   * 2100x1350, one session, one instant:
+   *
+   *     uCardHairs  coverage   interior contrast  head p10  body p10  legs p10
+   *       1.0        426 454         5.298          1.133     2.188     2.168
+   *       1.6        427 147         5.026          1.244     2.596     2.213
+   *       2.4        426 966         4.775          1.223     2.427     2.384
+   *       3.5        427 130         4.564          1.244     2.357     2.363
+   *
+   * Coverage is flat to +0.1% and every band holds or improves, so this is not
+   * bought with silhouette. The interior contrast falling is the point: the
+   * same mass, resolved into more and finer hairs, stops reading as separated
+   * locks. 3.5 reads denser still and is NOT shipped, because at MACRO the
+   * hairs start going sub-pixel and the card LOD dissolves them to a flat
+   * ribbon -- fine detail at `macro_eye` runs 5.341 (1.0), 5.401 (2.4), 5.198
+   * (3.5), so 2.4 is the largest value that costs the macro framings nothing.
+   *
+   * WHAT THIS DOES NOT FIX, so it is not claimed: the strands are still 45-90
+   * mm long, because nothing here moved a card. The coat reads as fine long
+   * fur rather than as a wet sheepdog; a genuinely compact winter pile needs
+   * the strand SHORTER, and the only two terms that do that are priced above.
+   */
+  cardHairs: 2.4,
 };
 
 /**
@@ -730,6 +825,7 @@ export function buildFurUniforms(ctx) {
     uDensity: { value: d.density },
     uFill: { value: d.fill },
     uPathKMax: { value: d.pathKMax },
+    uShellDeep: { value: d.shellDeep },
     uFillTop: { value: d.fillTop },
     uFillJitter: { value: d.fillJitter },
     uCardTip: { value: d.cardTip },
@@ -803,6 +899,7 @@ export function buildFurUniforms(ctx) {
     uCardCurve: { value: d.cardCurve },
     uCardDroop: { value: d.cardDroop },
     uCardOpacity: { value: d.cardOpacity },
+    uCardHairs: { value: d.cardHairs },
   };
 }
 
