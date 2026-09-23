@@ -1235,12 +1235,37 @@ export const FUR_DEFAULTS = {
    *     left p10 to 1.000, and interiorLen 0.12 buys 0.032 ms, inside noise.
    *     Both are left where they are.
    *
+   * AND WHAT IT COSTS, at `profile`, which is where the silhouette gates
+   * live. Same session, same instant, `prev` being all four values restored:
+   *
+   *   arm        cov       band fill L/R/T/B        contour p10 L/R/T/B
+   *     prev   185 130   .228/.253/.314/.243      1.36/1.82/1.48/1.49
+   *     SHIPPED 194 162  .422/.471/.571/.467      1.16/1.77/1.18/1.78
+   *     nocards 151 059  .573/.438/.503/.573      1.00/1.00/1.00/1.00
+   *
+   * The band fill nearly doubles on every edge and coverage goes UP 4.9%, and
+   * THE LEFT AND TOP CONTOUR p10s PAY FOR IT: 1.36 -> 1.16 and 1.48 -> 1.18,
+   * both still over 4f's 1.15 floor but with 0.01 and 0.03 of margin where
+   * they had 0.21 and 0.33. Read that before moving anything here.
+   *
+   * IT IS ALSO WHY THAT METRIC CANNOT BE THE ONE THAT DECIDES THIS. tv/net is
+   * total variation over net rise, so it is maximised by an outline that
+   * alternates hair and gap and minimised by a monotone ramp -- a dense pile's
+   * outline is closer to monotone than a spray's, and the metric therefore
+   * scores the DEFECT higher than the fix. It is a fine guard against a bare
+   * mesh edge (nocards reads 1.000 on all four) and it is not a coat-quality
+   * measure. The band fill above is the one that separates them.
+   *
    * WHAT IS STILL WRONG, measured rather than argued: the band is still 63 px
    * deep at `portrait` against 18 px for the coat with no cards at all, and
    * the strand width has gone 1.3 -> 2.7 px because duty widens a hair inside
    * a fixed cell. More cards is the one arm that improved the fill further
    * (0.435 at 26k, and the best left p10 in the sweep at 1.41) and it is the
-   * one that costs triangles.
+   * one that costs triangles -- which is the cheap resource here: 1.27M of a
+   * 3.5M budget, and the WHOLE card mesh's fragment cost is 0.545 ms of a
+   * 6 ms fur budget (paired, hero/idle/high/1280x800, cards hidden against
+   * base). If anyone wants both the fill and the contour margin back, the
+   * furCards tier budget is where it is.
    */
   cardDuty: 0.85,
   /*

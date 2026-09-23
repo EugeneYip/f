@@ -389,6 +389,35 @@ export class FurSystem {
     }
   }
 
+  /*
+   * FUR'S MEASURED SHARE OF THE FRAME, because §10's 6 ms has never had one
+   * next to it and the whole-frame budget is failing. Paired ABBA inside one
+   * page session at `hero` / idle / `high` / 1280x800, audit.mjs's own timing
+   * loop (12 warm frames, 40 timed step+render, 1x1 readPixels to drain),
+   * meshes hidden by LAYER so nothing bone-parented goes with them:
+   *
+   *     arm                              frame ms    delta
+   *       base                             17.54
+   *       cards hidden                     17.00     -0.545
+   *       shells hidden                    13.36     -4.185
+   *       BOTH hidden (fur's total)        12.84     -4.705
+   *       furShells 18 -> 11               15.62     -1.920
+   *       all card FRAGMENTS discarded     17.29     -0.140
+   *
+   * So fur is 4.705 ms of a 6 ms budget and 89% of that is the shells; the
+   * entire card mesh is 0.545 ms and its whole FRAGMENT stage is 0.140. Card
+   * work is not where this frame's overrun is, and buying silhouette with
+   * more cards is close to free.
+   *
+   * AND THE GATE'S [high] NUMBER IS NOT STABLE ON THIS MACHINE. Identical
+   * code read 15.66, 17.27, 17.43, 17.59, 17.76, 17.98, 20.05, 20.70, 21.35,
+   * 22.24 and once 69.2 ms in one afternoon, with WindowServer at 43% CPU
+   * throughout. audit's drift clause compares `high` with its own repeat ten
+   * seconds later, so it is blind to a slowdown that is ALREADY in place when
+   * `low` is measured -- the 69.2 run reported drift 0.054 and contended
+   * false while reading low=21.04 against a budget of 8. Difference arms
+   * inside one session; never across runs.
+   */
   update(dt, ctx) {
     if (!this.uniforms) return;
     syncFurUniforms(this.uniforms, ctx);
