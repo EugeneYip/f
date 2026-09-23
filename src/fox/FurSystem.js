@@ -80,6 +80,63 @@ const EYE_CLEAR_MIN = 0.008;
 const EYE_CLEAR_MAX = 0.016;
 
 /**
+ * Minimum on-screen spacing between consecutive shells, in backbuffer pixels.
+ *
+ * THIS IS THE FRAME'S MISSING MILLISECOND, AND IT IS NOT A TRADE.
+ *
+ * A shell costs 0.23 ms at `hero`/`high`/1280x800 whatever its index — paired
+ * ABBA, six interleaved measurements per arm, minimum over them because
+ * contention can only ADD time:
+ *
+ *     18 shells (shipped)   15.96 min / 16.16 med
+ *     14 shells             15.03 min / 15.09 med     -0.93 / -1.07 ms
+ *
+ * and cutting them does not cost detail, it BUYS detail, which is the part
+ * that took a positive control to believe. The shell fragment shader already
+ * dissolves the whole hair field into its analytic mean as consecutive shells
+ * approach a pixel of each other — `detail = smoothstep(0.9, 3.2, shellPx)`,
+ * added to kill the moire chevrons that near-identical copies of one noise
+ * field beat into. At 18 shells and 1280x800 the DEEPEST coat on the animal
+ * is 47 px front to back, so the spacing is 2.6 px and that fade is eating
+ * the strands. Measured on the coverage matte plus mean |p - blur3(p)| over
+ * the eroded coverage interior, arms alternated in one page session:
+ *
+ *     framing    shells   coverage   band fill L   depth L   interior fine
+ *       hero       18       99 092      0.458        22.1        1.937
+ *       hero       14       99 048      0.455        21.8        1.997  +3.1%
+ *       hero       12       99 150      0.459        22.0        2.017  +4.1%
+ *       portrait   18      496 515      0.428        57.3        2.646
+ *       portrait   14      495 846      0.431        58.5        2.706  +2.3%
+ *       portrait   12      496 383      0.428        57.4        2.693  +1.8%
+ *       profile    18      150 258      0.537        20.5        1.051
+ *       profile    14      150 172      0.537        20.5        1.083  +3.0%
+ *
+ * Coverage flat to 0.04%, band fill and band depth flat to 1%, interior fine
+ * detail up 2-3% everywhere, and 12 is already past the peak at the close
+ * framing. Measured again with uStrandRoot held fixed, so the gain is the
+ * spacing and not the compensation applyQuality() applies with it.
+ *
+ * So the ceiling is the spacing and not a shell count, and it degrades
+ * correctly in both directions: a bigger backbuffer or a closer camera
+ * resolves more depth and is allowed more shells, adaptive resolution
+ * scaling shrinks the count with the buffer, and at `shoot.mjs`'s 1.5x
+ * device scale the review renders keep all 18 — which is right, because at
+ * 1.5x the spacing is 4.3 px and none of them is redundant. The contract
+ * this pays is §10's, which is 1x DPR.
+ *
+ * 3.2 px is the value chosen, and what picks it is §5's 12-20 band rather
+ * than the frame: at 1280x800 it puts `hero` at 14 (the arm measured above),
+ * `profile` at 16, `tail` at 14 and `silhouette` at 12, so no framing that
+ * was inside the band leaves it. 3.4 px would take `silhouette` to 11. The
+ * close framings sit below 12 either way and did before this: the coverage
+ * LOD already gives `portrait` 10 and `macro_eye`/`nape` 9.
+ *
+ * WHAT THIS IS NOT: it is not the 0.55 ms that uShellDeep 0.55 -> 0.85 buys.
+ * That one is re-measured and re-refused in FurMaterial.
+ */
+const SHELL_PX_MIN = 3.2;
+
+/**
  * Bare radius and slot anisotropy for the parting, from the eye Eyes.js built.
  *
  * `furSkinMask2` measures an anisotropic distance from the bind-space socket
@@ -177,6 +234,8 @@ export class FurSystem {
     this.stochasticAmount = 0.55;
     this.lod = { near: 1.5, far: 3.2, cull: 7.0, minShells: 4 };
     this.stats = {};
+    this._coatMax = 0;
+    this._coatMaxTries = 0;
     this._tmp = new THREE.Vector3();
   }
 
@@ -353,6 +412,8 @@ export class FurSystem {
   /** Keep the published stats honest after a tier change, not just at init. */
   _refreshStats() {
     const tris = this.fox?.geometry?.getIndex()?.count ?? 0;
+    this._coatMax = 0; this._coatMaxTries = 0;   // uCoatScale may have moved
+    this.stats.coatMax = this.coatMax();
     this.stats.shells = this.shellCount;
     this.stats.shellTris = (tris / 3) * (this.shellCount ?? 0);
     this.stats.cards = this.cardStats?.cards ?? 0;
@@ -459,8 +520,24 @@ export class FurSystem {
     // so 9 shells are still well under a millimetre apart and read the same as 18.
     const fov = (ctx.camera.fov ?? 40) * Math.PI / 180;
     const subjectSpan = 0.38;   // fox height including coat, metres
-    const coverage = subjectSpan / Math.max(2 * d * Math.tan(fov * 0.5), 1e-4);
+    const visibleH = Math.max(2 * d * Math.tan(fov * 0.5), 1e-4);   // metres
+    const coverage = subjectSpan / visibleH;
     n *= lerp(1, 0.50, smoothstep(0.50, 1.25, coverage));
+
+    // ...and a ceiling on the SPACING, which is the sharper criterion of the
+    // two and the one that was missing. Coverage says how many pixels the
+    // shells cover; spacing says whether two of them can be told apart at
+    // all. Below SHELL_PX_MIN they cannot, and the fragment shader says so
+    // itself by collapsing the hair field into its mean — see the note on
+    // that constant for the pair of measurements.
+    //
+    // The coat depth is MEASURED off the built geometry (regionCoatDepth, the
+    // same expression the shader reads), never assumed: a hardcoded 55 mm
+    // would silently stop tracking the moment anatomy retunes the length map,
+    // and the deepest region is the conservative one to protect.
+    const bufH = ctx.bufferSize?.height ?? ctx.size?.height ?? 800;
+    const coatPx = this.coatMax() * (bufH / visibleH);
+    if (coatPx > 0) n = Math.min(n, coatPx / SHELL_PX_MIN);
 
     n = clamp(Math.round(n), l.minShells, this.shellCount);
     if (n !== this.shellGeometry.instanceCount) {
@@ -603,6 +680,32 @@ export class FurSystem {
       out[i] = cnt[i] ? (sum[i] / cnt[i]) * scale * (ra[i].y || 1) : 0;
     }
     return out;
+  }
+
+  /**
+   * Deepest region's coat depth in metres, measured off the built geometry
+   * and memoised. The shell-spacing ceiling divides by it.
+   *
+   * IT IS RETRIED RATHER THAN ASSUMED. applyQuality() runs inside init()
+   * before uRegionA is filled, so the first call returns 0 -- and a ceiling
+   * computed from 0 would be a ceiling of 0 shells. An unmeasurable depth
+   * therefore disables the ceiling (`coatPx > 0` fails and the coverage LOD
+   * stays in sole charge, which is the shipped behaviour) and the next frame
+   * tries again. If it never succeeds it says so ONCE, rather than silently
+   * running without the ceiling for the rest of the session: an instrument
+   * that removes itself is this project's most expensive failure mode.
+   */
+  coatMax() {
+    if (this._coatMax > 0) return this._coatMax;
+    if (this._coatMaxTries > 120) return 0;
+    if (++this._coatMaxTries === 120) {
+      console.warn('[fur] regionCoatDepth() never returned a depth; the ' +
+        'shell-spacing ceiling is disabled and the coverage LOD is alone.');
+    }
+    const d = this.regionCoatDepth();
+    this._coatMax = d ? Math.max(...d) : 0;
+    if (this._coatMax > 0) this.stats.coatMax = this._coatMax;
+    return this._coatMax;
   }
 
   reachReport() {
