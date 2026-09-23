@@ -331,6 +331,34 @@ const RIM_FUR_1 = 0.00190;       // ...and owns the surface from here out
 // to be a rim against.
 const LID_SCATTER = 0.60;
 
+// How far the middle of the lid band stands proud of the globe, as a fraction
+// of the globe radius. THIS IS HALF OF THE PALE RING OUTSIDE THE DARK ONE.
+//
+// Swept in one page session at one sim instant, five arms, 22 TAA frames
+// each, read along the up meridian in true millimetres of arc from the free
+// edge (the px->degree map comes from the page's own projection; see the
+// note on RIM_* above). Two things move together, and both are the ridge:
+//
+//   swell              0.070   0.050   0.032   0.016   0.000
+//   lum at vArc 1.42    27.2    35.1    44.7    53.5    65.0   <- inner slope
+//   lum at vArc 1.80    74.1    87.5   100.3   112.4   125.2
+//   crest (2.4-4.0)   145-148 143-148 145-148 140-148 140-148
+//   trough (4.6-5.2)    112.5   114.8   118.5   122.6   122.5   <- far slope
+//   trough vs face      -30%    -29%    -27%    -26%    -26%
+//   trough WIDTH        5 deg   4 deg   2 deg   1 deg   1 deg
+//
+// The crest does not brighten with the swell -- the band is always DARKER
+// than the face beyond it (145 against 164), so the ring does not read as
+// pale because it is bright. It reads as a ring because the ridge's far
+// slope turns away from the sky and lays a shadow LINE round the outside of
+// it, and that line goes from 5 degrees of arc wide to 2. The inner slope
+// does the same thing on the other side, which is why less swell also makes
+// the dark rim narrower for free (27 -> 45 at vArc 1.42 mm).
+//
+// 0.032 keeps a modelled fold and 0.000 is a decal on a sphere, so it is not
+// a case of less is better all the way down. Held at 0.032 = 0.35 mm.
+const LID_SWELL = 0.032;
+
 /** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
 const chord = (t) => t / Math.sqrt(1 + t * t);
 
@@ -364,6 +392,7 @@ uniform float uApW, uApUp, uApDn, uApTilt, uBlinkU, uBlinkD;
 uniform float uSpread;
 uniform float uLidYaw, uLidPitch;
 uniform float uLidScatter;
+uniform float uLidSwell;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
 uniform vec3 uCamL, uSunL, uUpL, uSunCol, uSkyCol, uBounceCol;
@@ -1230,6 +1259,7 @@ export class Eyes {
       // How much light short lid fur scatters back on top of what an ordinary
       // dielectric keeps. See the note at the lid's lights_fragment_end.
       uLidScatter: { value: LID_SCATTER },
+      uLidSwell: { value: LID_SWELL },
 
       uApW: { value: apW }, uApUp: { value: AP_UP },
       uApDn: { value: AP_DN }, uApTilt: { value: AP_TILT },
@@ -1582,7 +1612,14 @@ void main(){
   // thickness that is proud enough at the margin to cast a real edge, swells
   // into the fold, then tucks back onto the globe so the outer boundary
   // vanishes under the skin instead of ending in a visible rim.
-  float feProud = uR * (0.010 + 0.048 * exp(-aS * 9.0) + 0.070 * 4.0 * aS * (1.0 - aS));
+  // THE FOLD'S SWELL IS A UNIFORM because it is the pale ring. The middle
+  // term stands the band 0.070 R = 0.76 mm off the globe at aS = 0.5 and
+  // tucks it back to 0.11 mm at aS = 1, so the fold is a RIDGE with a lit
+  // crest and a shaded far slope, and at macro that is a bright annulus and
+  // a dark line running right round the eye. Measured along the up meridian
+  // (see the sweep in the commit). Uniform so it can be swept in one page
+  // session at one sim instant rather than by re-rendering the file.
+  float feProud = uR * (0.010 + 0.048 * exp(-aS * 9.0) + uLidSwell * 4.0 * aS * (1.0 - aS));
   vec3 transformed = feDir * (feGlobeR(feDir) + feProud);
   vLP = transformed;
 `);
