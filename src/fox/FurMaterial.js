@@ -931,6 +931,49 @@ export const FUR_DEFAULTS = {
    * entirely a SHELL shading question, with the cards no longer papering over
    * it. That is the next thing, and it is not this knob.
    */
+  /*
+   * THREE THINGS MEASURED AFTER THE DENSITY FIX, all negative, all recorded
+   * here so the next agent does not spend a wave on them. `portrait`,
+   * 1400x900, one session, one instant, on the same coverage matte; `int` is
+   * the mean radiance of the animal over BLACK inside the matte eroded 25 px,
+   * so it is the coat's own light with the backdrop and post removed.
+   *
+   * 1. INTERIOR CARDS DO NOT GIVE THE INTERIOR ITS TEXTURE. The waxy
+   *    textureless cheek and skull at `portrait` is the most visible defect
+   *    left, and lengthening the interior cards is not the lever:
+   *
+   *        cardInteriorLen   interior strand rms   cov       left p10
+   *          0.30 (shipped)        4.07          619 471       1.21
+   *          0.55                  3.90          620 136       1.23
+   *          0.80                  4.05          621 462       1.39
+   *
+   *    Flat inside noise. c0ae204 already said why -- with the cards gone the
+   *    interior reads 131.2 where the coat reads 131.2 -- and this confirms it
+   *    from the other direction: the interior is the SHELLS' image and card
+   *    length cannot change it. (0.80 does buy 0.18 of left contour p10 and
+   *    0.3% of coverage for nothing, which is worth knowing separately.)
+   *
+   * 2. THE COAT'S BRIGHTNESS IS NOT A FUNCTION OF SHELL COUNT, so the
+   *    "15 levels darker at high than at low" is not unconserved per-shell
+   *    energy:
+   *
+   *        furShells   6      11     18     26
+   *        interior  197.7  196.3  197.2  197.1
+   *
+   *    1.4 levels across a 4.3x range of shells, non-monotonic. And the whole
+   *    TIER, which also switches furAniso, uMicroOn, the env map size and the
+   *    card budget, reads `low` 193.8 against `high` 196.8 -- 3 levels, and
+   *    DARKER at low, the opposite direction to the brief. uAniso 0 and
+   *    uMicroOn 0 are worth -1.0 and -1.2 levels each. So whatever the 15
+   *    levels is, it is downstream of this material: it is in the graded
+   *    frame, not in the coat's radiance.
+   *
+   * 3. `low`'s OUTLINE IS MONOTONE EVERYWHERE -- all four contour p10s read
+   *    1.000 at the low tier against 1.20/1.00/1.78/1.00 at high, with band
+   *    fill 0.371 against 0.428. 6 shells and 2500 cards cannot break it.
+   *    That is a Quality.js number and not fur's to change, but no metric on
+   *    the project measures any tier but `high`, so it has never been seen.
+   */
   cardInteriorLen: 0.30,
   cardEdgeLen: [0.40, 0.62],
   // Fraction of a card's lateral distance to its lock's site taken out by the
