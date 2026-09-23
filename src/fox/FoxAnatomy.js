@@ -1022,12 +1022,67 @@ const TRUNK = TRUNK_PROFILE.map(([z, top, bot, sx, reg]) =>
 // 55 mm down the tail because a region boundary is there, not because the
 // animal narrows there.
 //
-// If the notch is wanted at the anatomical root instead, the lever is where
-// `tailBase` ends. If the skin should help, this array needs an actual
-// waist; it does not have one today. Left alone deliberately — the fur agent
-// is mid-run on the tail's coat and a simultaneous skin change would make
-// their A/B unreadable.
-const TAIL_R = [0.0266, 0.0278, 0.0274, 0.0262, 0.0246, 0.0224, 0.0196, 0.0162, 0.0126, 0.0095];
+// ## The waist, added. Sweep and the ruler that chose it.
+//
+// The fur agent has since finished the coat side (FurMaterial REGION_TABLE
+// 24-26: root coat 18 mm against mid-tail's 36) and reports that the croup's
+// coat is NOT the lever — only the tail's own. So the remaining half of the
+// notch is this array, and it had no waist to give: 27.7 mm at the root
+// against a 30.1 mm maximum, 9 % of swell over the whole brush, with the
+// minimum nowhere in particular.
+//
+// Same ruler as the table above, re-run on this tree (it reproduces the
+// numbers above to 0.2 mm, which is what says it is the same ruler).
+// Lateral half-width, mm, by root radius r0/r1 in mm:
+//
+//     z (mm)          -194  -200  -206  -212  -224  -242  -272  swell
+//     26.6 / 27.8     29.7  27.7  27.7  28.5  29.5  30.1  29.7    9 %
+//     22.0 / 27.8     26.6  23.6  24.0  25.7  28.0  30.2  29.7   26 %
+//     19.5 / 25.0     25.4  21.2  21.2  22.8  25.0  27.8  29.7   40 %
+//     17.0 / 24.0     24.6  19.1  19.0  20.8  23.5  27.0  29.7   56 %   <-
+//     14.0 / 21.0     24.4  16.8  15.7  17.5  20.1  24.7  30.3   92 %
+//
+// 17.0 / 24.0 is the last row whose minimum is still a waist rather than a
+// pinch: 19.0 mm of half-width is 3.2 cells at the 6 mm `high` grid (the
+// mesher's watertightness floor is ~1.5) and the shipped tail08 is already
+// 16.2, so it is inside ground the mesher has held before. 14.0 puts the
+// root at 2.6 cells AND makes the croup-to-root drop 44.6 -> 15.7 across two
+// stations, which is a step the surface nets cannot fillet.
+//
+// The minimum lands at z = -200..-206, which is the anatomical root — not at
+// z = -254, where the canopy's step was and where a `tailBase`/`tailMid`
+// region boundary still is. That is the point of doing it in the skin: the
+// rise from root to brush is now carried by geometry across 70 mm instead of
+// by one shader region boundary in one 6 mm station.
+//
+// ## HOW MUCH OF IT REACHES THE VIEWER: not much, and here is the number.
+//
+// Measured on `tools/matte.mjs --poses profile`, the upper contour over the
+// croup-to-tail run (x 800..1080), deficiency below its own upper convex
+// hull, px. Noise floor from the SAME three runs on the withers-to-croup
+// band, which no arm touched: defMax 36.1 / 34.8 / 36.0, i.e. +-1.3 px.
+//
+//     arm (r0/r1, mm)      defMax   at x    defMean
+//     26.6 / 27.8 shipped    21.6   1031      9.60
+//     17.0 / 24.0 this       25.2    834     10.16
+//      8.0 / 11.0 control    37.6    851     11.99
+//
+// So the skin is a REAL lever on the tail-root notch and a WEAK one: monotone
+// with the arm, but only ~0.4 px of contour per mm of skin removed, and my
+// 8.7 mm buys 3.6 px against a 1.3 px floor. It is not `occipitalTuck` — it
+// moves — but anyone hoping to build the notch out of the skin should read
+// the control row first: severing the root to 8 mm, which is past what the
+// mesher can hold, still only trebles a 21 px feature.
+//
+// What DID change qualitatively is WHERE the deepest dip is. It was at
+// x = 1031, mid-tail, which is e70ddc2's region boundary; it is now at
+// x = 834-851, the croup/tail junction. The notch is at the root now even
+// though it is barely deeper.
+//
+// And the animal did not shrink (4f rule 4): matte coverage 127009 -> 126907
+// px total, -0.08 %, and the tail band 20472 -> 20515, +0.21 %, both inside
+// the +-0.3 % the untouched head band scatters by between runs.
+export const TAIL_R = [0.0170, 0.0240, 0.0274, 0.0262, 0.0246, 0.0224, 0.0196, 0.0162, 0.0126, 0.0095];
 
 
 /**
