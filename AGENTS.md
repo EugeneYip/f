@@ -270,6 +270,33 @@ horizon check by cutting art-bible snow sparkle 71%. If you believe a threshold
 is wrong, report it with the measurement and leave it failing — the
 orchestrator owns `tools/**` and will change it.
 
+## TAA accumulates ACROSS A/B arms unless something resets it
+
+`src/fx/TAA.js` resolves with `uAlpha = 1/(n+1)` and lets `n` run to 250
+while the scene is static. In a hand-rolled in-page loop that applies arm 1,
+renders, applies arm 2, renders, arm 2 is therefore a 1/50 blend of itself
+over arm 1's converged image, and arm 6 is 1/251. The face agent proved it
+with three IDENTICAL arms, 48 frames each: **135.8 / 110.9 / 99.4**. The
+number tracked the arm's POSITION, and a tint arm's green was still visible
+in the base image three arms later. With `ctx.postfx.reset()` between arms:
+67.1 / 67.1 / 67.1, bit identical.
+
+Contamination can only SHRINK a difference. A positive result from a
+contaminated harness still stands; a NULL result from one means nothing.
+
+`tools/ab.mjs` and `tools/spec.mjs` are NOT affected, but only by accident:
+both call `D.setPose` per arm, and `setPose` treats a pose change as a hard
+cut and already calls `postfx.reset()`. Measured on ab.mjs, three identical
+arms differ by 254/198 px with an explicit reset and 238/177 without --
+indistinguishable. If you write your own arm loop, or if you render several
+arms WITHOUT changing pose, you get the contaminated version.
+
+So: reset TAA explicitly at the top of every arm. Do not rely on setPose.
+
+And note ab.mjs's own noise floor while you are there: identical arms are
+not bit-identical. ~250 px of 2.3M and 12 levels is the floor; a difference
+smaller than that is not a difference.
+
 ## git is broken on this machine: prefix every call
 
 The system `git` at /usr/bin/git is Xcode's shim, and the Xcode license has

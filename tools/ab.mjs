@@ -84,7 +84,12 @@ await page.evaluate(() => { const D = window.FoxDebug; D.setAdaptive(false); D.s
 
 await mkdir(path.resolve(ROOT, OUT), { recursive: true });
 let rootAt = null;
+// Indexed, because a repeated variant used to overwrite its own png. That
+// matters precisely when you repeat one deliberately: a self-test of three
+// identical arms produced ONE file and silently hid whether they matched.
+let armIdx = 0;
 for (const v of VARIANTS) {
+  const armTag = `${String(armIdx++).padStart(2, '0')}.${v}`;
   const src = APPLY[v];
   if (!src) { console.error(`unknown variant: ${v}`); continue; }
   const note = await page.evaluate(({ src, POSE }) => {
@@ -100,10 +105,44 @@ for (const v of VARIANTS) {
     // a same-state comparison showed 104 -> 0 occlusion -- an A/B tool that
     // silently varies the scene between arms is worse than no A/B tool.
     // Render advances no time, so the arms are now the same instant.
+    //
+    // RESET TAA FIRST, or arm k is a blend of itself over every arm before
+    // it. TAA resolves with uAlpha = 1/(n+1) and lets n run to 250 while the
+    // scene is static, so without a reset arm 2 is a 1/50 blend over arm 1's
+    // converged image and arm 6 is 1/251 -- the history is never dropped
+    // between arms. The face agent demonstrated it with three IDENTICAL
+    // arms, 48 frames each, same masked pixels: 135.8 / 110.9 / 99.4. The
+    // number tracked the arm's POSITION, and a tint arm's green was still
+    // visible three arms later. With the reset: 67.1 / 67.1 / 67.1, bit
+    // identical.
+    //
+    // Contamination can only SHRINK a difference, so past POSITIVE results
+    // still stand and past NULL results would mean nothing.
+    //
+    // MEASURED, and this tool turns out NOT to have been affected: three
+    // identical arms differ by 254 and 198 px of 2.3M (max 12 levels) WITH
+    // the reset, and 238 and 177 px WITHOUT it -- indistinguishable. The
+    // reason is that each arm calls setPose, and setPose treats a pose
+    // change as a hard cut and already calls postfx.reset(). So this tool
+    // was protected INCIDENTALLY, by a line in Debug.js written for an
+    // unrelated reason, which nobody maintaining either file would know to
+    // preserve. That is why the call below stays and why it THROWS rather
+    // than optional-chaining: the protection is now explicit and local.
+    //
+    // Note the residual: identical arms are NOT bit-identical here. ~250 px
+    // and 12 levels is this tool's noise floor; a difference smaller than
+    // that is not a difference.
+    const _pf = window.FoxDebug.ctx().postfx;
+    if (!_pf || typeof _pf.reset !== 'function') {
+      throw new Error('ab: postfx.reset() is missing — without it every arm ' +
+        'after the first is a TAA blend over its predecessors, and a null ' +
+        'result from this tool would be meaningless. Refusing to measure.');
+    }
+    _pf.reset();
     for (let i = 0; i < 22; i++) window.FoxDebug.render();
     return { ...window.FoxDebug.stats(), root: window.FoxDebug.probe?.()?.root ?? null };
   }, { src, POSE });
-  await page.screenshot({ path: path.join(ROOT, OUT, `${POSE}.${v}.png`), timeout: 20000 });
+  await page.screenshot({ path: path.join(ROOT, OUT, `${POSE}.${armTag}.png`), timeout: 20000 });
   await page.evaluate(() => { try { window.__undo?.(); } catch {} });
   // Enforce it: arms that are not the same instant are not an A/B.
   if (note.root) {
