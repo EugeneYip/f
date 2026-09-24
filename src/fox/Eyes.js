@@ -50,6 +50,32 @@
  * `ctx.fox.gazeYaw/gazePitch` are used when present and ignored when not.
  *
  * ---------------------------------------------------------------------------
+ * A MULTI-ARM IN-PAGE A/B MUST RESET TAA BETWEEN ARMS, and nothing in this
+ * tree did. Recorded here rather than in AGENTS.md because that file is the
+ * orchestrator's, and this is the kind of finding that costs a whole round
+ * when it is not written down where the next agent will trip over it.
+ *
+ * TAA.js resolves with uAlpha = 1/(n+1) and caps n at 250 while the scene is
+ * static. Nothing resets it when an A/B applies its next arm, so the SECOND
+ * arm of a page session is a 1/50 blend of itself over the FIRST arm's
+ * converged image, and the sixth is a 1/251 blend. Demonstrated with three
+ * IDENTICAL arms, 48 frames each, measuring the same masked pixels:
+ *
+ *     base 135.8     base2 110.9     base3 99.4
+ *
+ * -- the value tracks arm POSITION, not arm content, and an earlier arm that
+ * had tinted the eye pure green was still plainly visible in the base3 PNG
+ * three arms later. With ctx.postfx.reset() called after applying each arm
+ * and before rendering, the same three arms measure 67.1 / 67.1 / 67.1, bit
+ * identical, and a real variant separates cleanly and repeatably.
+ *
+ * tools/ab.mjs renders 22 frames per variant and does not reset, so its
+ * variants 2..N are mostly variant 1. Contamination can only SHRINK a
+ * difference, so a positive result from it still stands; a null result from
+ * it means nothing at all.
+ * ---------------------------------------------------------------------------
+ *
+ * ---------------------------------------------------------------------------
  * WHAT THE FACE COSTS, because the [high] frame budget keeps failing and the
  * lid work keeps being suspected. Paired in ONE page session at ONE sim
  * instant, `portrait`/`high`/1280x800, 90 frames per arm through
