@@ -108,7 +108,17 @@ import { HASH, SIMPLEX3, WORLEY3, UTIL } from '../shaders/noise.glsl.js';
 // Our globe is 21.1 mm across, which is a 20-35 kg dog's eye rather than a
 // fox's — but it is set by the socket the anatomy agent carved, not by us, so
 // it is reported rather than fought. See the note on the fissure below.
-const CORNEA_R = 0.815;     // corneal cap radius / globe radius
+// CORNEA_R IS NO LONGER A CONSTANT — see `_buildEye`. It is solved per eye so
+// the LIMBUS lands on CORNEA_DIA whatever the socket does to the globe, which
+// is what the sourced result above actually says: corneal diameter is
+// size-invariant across canids and globe diameter is not. 13.5 mm is the
+// callipered Cerdocyon thous figure (13.52 horizontal / 13.53 vertical).
+const CORNEA_DIA = 0.0135;
+// ...but never more than this share of the globe DIAMETER. Past about 0.86 the
+// cap radius approaches R, zc collapses toward zero and the smooth-max has
+// nothing left to blend, so the profile turns into a hemisphere with a crease
+// round its equator instead of an eye.
+const CORNEA_OF_GLOBE = 0.84;
 const CORNEA_BULGE = 0.075; // apex stands this much proud of the scleral sphere
 const BLEND_K = 0.055;      // limbal smooth-max blend width
 const IRIS_DEPTH = 0.295;   // anterior chamber: apex -> iris plane
@@ -163,7 +173,14 @@ const IRIS_R = 0.90;        // iris radius / limbus radius (cornea magnifies it 
 // just do (it opens 97.9 degrees in total) but only if the globe is not
 // rotated so far nasally that the fissure cannot stay centred on it. Hence
 // CONVERGE_MAX_OFF below.
-const AP_W_CEIL = 1.10;     // never wider than this, whatever the socket allows
+// 1.10 (47.7 degrees) was the binding ceiling the moment the globe shrank and
+// the limbus moved out to 52 degrees: the fissure would then have been pinned
+// INSIDE the limbus and the lid margins would have cropped the iris left and
+// right — the black O-ring, arrived at from the other side. The ceiling that
+// is supposed to bind is the measured socket wall plus `limbusTh +
+// SCLERA_CLEAR`; this one is only a backstop against a wild measurement, so
+// it is set where it cannot be the thing that decides the fissure.
+const AP_W_CEIL = 1.90;     // never wider than this, whatever the socket allows
 const AP_W_FLOOR = 0.62;    // ...nor narrower; below this the eye is a slit
 
 // AND THE CEILING THAT ACTUALLY BINDS IS THE LIMBUS, NOT A CONSTANT.
@@ -185,8 +202,14 @@ const AP_W_FLOOR = 0.62;    // ...nor narrower; below this the eye is a slit
 // above CONVERGE_RECESS or `convMax` goes to the follow angle alone.
 const SCLERA_CLEAR = 3.0 * Math.PI / 180;
 const AP_WALL_MARGIN = 1.5 * Math.PI / 180;  // keep the canthus off the wall
-const AP_UP = 0.477;        // upper margin height at u = 0
-const AP_DN = 0.413;        // lower margin depth  at u = 0
+// AP_UP / AP_DN ARE DERIVED PER EYE (see `_buildEye`), not authored. They used
+// to be gnomonic tangents — 0.477 / 0.413, i.e. 25.5 and 22.4 degrees off the
+// optical axis — and a fixed ANGLE is a fissure whose height in millimetres
+// scales with the globe. The derivation the note below gives ("held near 0.63
+// x corneal diameter") is about the CORNEA, so state it that way and let both
+// follow the socket.
+const AP_H_OF_CORNEA = 0.63;  // fissure height / corneal diameter, at u = 0
+const AP_UD_SPLIT = 0.536;    // ...of which this share sits above the axis
 const AP_TILT = 0.045;      // canthal tilt — outer corner rides higher
 
 // How far proud of the *surrounding skin* the corneal apex is seated. The
@@ -207,7 +230,7 @@ const MAX_SEAT_PUSH = 0.0058;   // never shove the eye more than this far out
 const MAX_SEAT_PULL = -0.0022;  // ...nor sink it
 
 // Globe-to-socket fit. Past the aperture the globe must sit inside the skin.
-const FIT_ANGLE = 50 * Math.PI / 180;
+const FIT_ANGLE = 60 * Math.PI / 180;
 const FIT_MARGIN = 0.97;
 
 // ORBITAL AXIS vs VISUAL AXIS. `fox.eyes[side].look` is the socket's surface
@@ -410,7 +433,7 @@ const F0_TEAR = 0.028;      // tear film, n = 1.336
  * Unused declarations in a given stage are free — GLSL compilers strip them.
  */
 const EYE_UNIFORMS = /* glsl */ `
-uniform float uR, uRc, uZc, uK;
+uniform float uR, uRc, uZc, uK, uCapDz;
 uniform float uIrisR, uLimbusR, uPupilR, uFibreN, uCollarette, uEta, uIrisZ;
 uniform float uCaustic, uWetness, uSunInt;
 uniform float uApW, uApUp, uApDn, uApTilt, uBlinkU, uBlinkD;
@@ -477,9 +500,18 @@ float feGlobeR(vec3 d){
   // Past the corneal cap the surface IS the scleral sphere, exactly, and the
   // fixed point above is not defined there: it divides by a clamped d.z and
   // flies outward, which turns a long lid band into a flare standing off the
-  // face. The cap ends at rho = uRc, i.e. d.z = sqrt(1 - (uRc/uR)^2) ~ 0.58,
-  // so hand the answer over to the sphere across that crossing.
-  return mix(t, uR, smoothstep(0.62, 0.52, d.z));
+  // face. The cap ends at rho = uRc, i.e. d.z = sqrt(1 - (uRc/uR)^2), so hand
+  // the answer over to the sphere across that crossing.
+  //
+  // uCapDz IS A UNIFORM BECAUSE THE CAP RATIO IS NO LONGER A CONSTANT. This
+  // was written as smoothstep(0.62, 0.52, d.z), the crossing for the old
+  // fixed uRc/uR = 0.815. The cornea is now sized in millimetres and the
+  // globe by the socket fit, so the ratio moves: at uRc/uR = 0.90 the
+  // crossing is 0.436, and a hardcoded 0.62 hands the lid over to the
+  // SPHERE while the cap is still 0.6 mm proud of it -- a closing lid then
+  // saws straight through the cornea, which is the artefact this whole
+  // fixed point exists to avoid.
+  return mix(t, uR, smoothstep(uCapDz + 0.04, uCapDz - 0.06, d.z));
 }
 `;
 
@@ -545,7 +577,7 @@ function buildCornea(Rc, zc, thetaMax, segW, segH) {
  * vertex position is evaluated in the shader from (aU, aS, aLid) so that a
  * blink costs one uniform write and no CPU work at all.
  */
-function buildLids(R, apW, nu, ns, spreadAt) {
+function buildLids(R, apW, ap, nu, ns, spreadAt) {
   const count = 2 * (nu + 1) * (ns + 1);
   const pos = new Float32Array(count * 3);
   const aU = new Float32Array(count);
@@ -562,8 +594,8 @@ function buildLids(R, apW, nu, ns, spreadAt) {
       for (let i = 0; i <= nu; i++) {
         const u = (i / nu) * 2 - 1;
         const ax = u * apW;
-        const ay = (sign > 0 ? AP_UP * Math.pow(Math.max(1 - u * u, 0), 0.58)
-          : -AP_DN * Math.pow(Math.max(1 - u * u, 0), 0.72)) + AP_TILT * u;
+        const ay = (sign > 0 ? ap.up * Math.pow(Math.max(1 - u * u, 0), 0.58)
+          : -ap.dn * Math.pow(Math.max(1 - u * u, 0), 0.72)) + ap.tilt * u;
         const l = Math.hypot(ax, ay, 1) || 1;
         const inx = ax / l, iny = ay / l, inz = 1 / l;
         const rl = Math.hypot(inx, iny) || 1;
@@ -700,7 +732,10 @@ export class Eyes {
     console.info(
       `[eyes] globe r ${(e.R * 1000).toFixed(2)} mm · cornea r ${(e.Rc * 1000).toFixed(2)} mm · ` +
       `apex ${(e.apexZ * 1000).toFixed(2)} mm · skin ${(e.skin * 1000).toFixed(2)} mm · ` +
-      `coat ${(e.coat * 1000).toFixed(2)} mm · seated ${(e.seat * 1000).toFixed(2)} mm · ` +
+      `coat ${(e.coat * 1000).toFixed(2)} mm · seated ${(e.seat * 1000).toFixed(2)} mm ` +
+      `(coat wanted ${(e.seatWanted * 1000).toFixed(2)}, socket allowed ` +
+      `${(e.seat * 1000).toFixed(2)})` + (e.seat < e.seatWanted - 1e-5
+        ? ` · SOCKET-BOUND, cornea sits ${((e.seatWanted - e.seat) * 1000).toFixed(2)} mm deeper` : '') + ' · ' +
       `iris ø ${(2 * e.irisR * 1000).toFixed(1)} mm · cornea ø ${(2 * e.limbusR * 1000).toFixed(1)} mm · ` +
       // CHORD, not tangent-plane. The margin at u = 1 sits at angle
       // atan(apW) off the optical axis, so its half-width on the globe is
@@ -714,8 +749,8 @@ export class Eyes {
       // fissure is longer than its own globe. They are not the same quantity.
       // `clears limbus` is the comparison that does transfer.
       `fissure ${(2 * e.R * chord(e.apW) * 1000).toFixed(1)}x` +
-      `${(e.R * (chord(AP_UP) + chord(AP_DN)) * 1000).toFixed(1)} mm ` +
-      `(${(2 * chord(e.apW) / (chord(AP_UP) + chord(AP_DN))).toFixed(2)}:1, ` +
+      `${(e.R * (chord(e.ap.up) + chord(e.ap.dn)) * 1000).toFixed(1)} mm ` +
+      `(${(2 * chord(e.apW) / (chord(e.ap.up) + chord(e.ap.dn))).toFixed(2)}:1, ` +
       `fissure/cornea ${(e.R * chord(e.apW) / e.limbusR).toFixed(2)})`,
     );
     // How far the fissure has failed to keep up with the globe, unsigned.
@@ -766,25 +801,117 @@ export class Eyes {
         (meta.cornealProud ?? 0.003);
     }
     rNominal = clamp(rNominal, 0.006, 0.020);
-    const rFit = this._fitGlobeRadius(fox, meta);
-    const R = rFit > 0 ? clamp(Math.min(rNominal, rFit), 0.55 * rNominal, rNominal)
-                       : rNominal;
 
-    const Rc = CORNEA_R * R;
+    // SOLVE THE RADIUS AND THE SEAT TOGETHER, WITH THE SOCKET WINNING. They
+    // are not independent, and until this round they were solved as if they
+    // were: `_fitGlobeRadius` certified a radius against the socket measured
+    // from the socket CENTRE, and the globe was then pushed `seat` further
+    // out along the optical axis to lift the cornea clear of the coat. Every
+    // millimetre of that push is spent out of the clearance the fit had just
+    // certified, in the forward hemisphere where the skin is nearest.
+    //
+    // THE FIRST ATTEMPT AT THIS FIX WENT THE WRONG WAY ROUND, and the way it
+    // failed is worth keeping, because it is counter-intuitive: shrinking the
+    // globe to fit made the protrusion WORSE. The apex has to land at
+    // meas + clear whatever the radius is, so the seated centre sits at
+    // meas + clear - R(1 + BULGE): a SMALLER globe puts its centre FURTHER
+    // OUT. Measured, that iteration ran to R = 6.36 mm and the seat cap at
+    // 5.80 mm and still left the globe 2.85 mm outside the skin, against
+    // 3.80 mm before it. Two thirds of the shrink bought nothing.
+    //
+    // So the seat is the variable that gives way, not the radius. `seatCeil`
+    // is the largest push for which the socket still swallows the globe, and
+    // the coat clearance is honoured only as far as that. A cornea sitting a
+    // millimetre deeper in the hair than ideal is a shading question; a globe
+    // outside the skull is a hard blue polygon drawn against the sky.
+    const meas = this._measureSkin(fox, meta, rNominal);
+    const coat = this._measureCoat(fox, meta, rNominal);
+    const clear = APEX_CLEARANCE + Math.min(COAT_CLEAR_SHARE * Math.max(coat, 0), COAT_CLEAR_MAX);
+    const seatCeil = (rx) => {
+      if (this._fitGlobeRadius(fox, meta, MAX_SEAT_PUSH) >= rx) return MAX_SEAT_PUSH;
+      let lo = MAX_SEAT_PULL, hi = MAX_SEAT_PUSH;
+      for (let i = 0; i < 12; i++) {
+        const m = 0.5 * (lo + hi);
+        if (this._fitGlobeRadius(fox, meta, m) >= rx) lo = m; else hi = m;
+      }
+      return lo;
+    };
+    let R = rNominal, seat = 0;
+    for (let it = 0; it < 3; it++) {
+      const want = meas > 0 ? clamp(meas + clear - R * (1 + CORNEA_BULGE),
+        MAX_SEAT_PULL, MAX_SEAT_PUSH) : 0;
+      seat = Math.min(want, seatCeil(R));
+      // With the seat already bounded by the fit this normally leaves R
+      // alone; it only bites when even MAX_SEAT_PULL cannot contain the ball
+      // the anatomy published, in which case the ball is genuinely too big
+      // for its socket and shrinking is the only remaining move.
+      const rFit = this._fitGlobeRadius(fox, meta, seat);
+      R = rFit > 0 ? clamp(Math.min(rNominal, rFit), 0.55 * rNominal, rNominal) : rNominal;
+    }
+    const seatWanted = meas > 0 ? clamp(meas + clear - R * (1 + CORNEA_BULGE),
+      MAX_SEAT_PULL, MAX_SEAT_PUSH) : 0;
+
+    // THE CORNEA IS SIZED IN MILLIMETRES, NOT AS A FRACTION OF THE GLOBE, and
+    // that is the finding that makes the shrink above safe to make.
+    //
+    // The sources already quoted at the top of this file say it outright:
+    // globe size differs significantly between a 5 kg wild canid and a small
+    // dog (p < 0.0155) and CORNEAL diameter does not (p > 0.122). A small
+    // canid is proportionally almost all cornea. So when the socket fit takes
+    // the globe down, the visible eye must NOT come down with it — the iris
+    // and the limbal ring are the part of this render the last review listed
+    // under "what is genuinely good", and shrinking them to keep a constant
+    // ratio would trade a blocker for a worse one.
+    //
+    // CORNEA_R is therefore solved for, per eye, so the limbus lands on
+    // CORNEA_DIA/2 — bisection on the same limbus test used below, which is
+    // the only way to be sure the two agree. It is capped at CORNEA_OF_GLOBE
+    // of the globe diameter because a cap radius approaching R degenerates:
+    // zc goes to zero, the smooth-max has nothing to blend, and the profile
+    // turns into a hemisphere with a crease round it.
+    const limbusOf = (cf) => {
+      const rc = cf * R, zcx = R * (1 + CORNEA_BULGE) - rc;
+      for (let i = 1; i <= 96; i++) {
+        const rho = (i / 96) * rc * 0.999;
+        const zs = Math.sqrt(Math.max(R * R - rho * rho, 0));
+        const zcn = zcx + Math.sqrt(Math.max(rc * rc - rho * rho, 0));
+        if (zs > zcn) return rho;
+      }
+      return 0.5 * R;
+    };
+    const limbusWant = Math.min(0.5 * CORNEA_DIA, CORNEA_OF_GLOBE * R);
+    let lo = 0.50, hi = 0.97;
+    for (let i = 0; i < 24; i++) {
+      const mid = 0.5 * (lo + hi);
+      if (limbusOf(mid) < limbusWant) lo = mid; else hi = mid;
+    }
+    const corneaF = clamp(0.5 * (lo + hi), 0.50, 0.97);
+
+    const Rc = corneaF * R;
     const zc = R * (1 + CORNEA_BULGE) - Rc;       // cornea sphere centre on +Z
     const k = BLEND_K * R;
     const apexZ = R * (1 + CORNEA_BULGE);
-
-    // Limbus: where the corneal cap falls back inside the scleral sphere.
-    let limbusR = 0.5 * R;
-    for (let i = 1; i <= 64; i++) {
-      const rho = (i / 64) * Rc * 0.999;
-      const zs = Math.sqrt(Math.max(R * R - rho * rho, 0));
-      const zcn = zc + Math.sqrt(Math.max(Rc * Rc - rho * rho, 0));
-      if (zs > zcn) { limbusR = rho; break; }
-    }
+    const limbusR = limbusOf(corneaF);
     const irisZ = apexZ - IRIS_DEPTH * R;
     const irisR = IRIS_R * limbusR;
+
+    // THE APERTURE IS SIZED OFF THE CORNEA, NOT OFF THE GLOBE, for the same
+    // reason. (x, y) here are gnomonic tangents — tan(angle) off the optical
+    // axis — so a constant AP_UP is a constant ANGLE, and a constant angle on
+    // a smaller globe is a shorter fissure in millimetres. The note above
+    // already derived the height it wants as a fraction of CORNEAL DIAMETER
+    // ("held near 0.63 x corneal diameter"); this just stops that derivation
+    // being silently re-scaled by whatever the socket does to R.
+    const apHalf = 0.5 * AP_H_OF_CORNEA * 2 * limbusR;
+    const tanOfChord = (mm) => {
+      const s = clamp(mm / R, 0, 0.985);
+      return Math.tan(Math.asin(s));
+    };
+    const ap = {
+      up: clamp(tanOfChord(apHalf * 2 * AP_UD_SPLIT), 0.20, 1.60),
+      dn: clamp(tanOfChord(apHalf * 2 * (1 - AP_UD_SPLIT)), 0.18, 1.60),
+      tilt: AP_TILT,
+    };
 
     // --- the optical axis, in the anchor's own frame ----------------------
     // `meta.look` lives in the skinned mesh's object space; the anchor hangs
@@ -823,16 +950,11 @@ export class Eyes {
     const restYawRaw = clamp(Math.atan2(conv.x, Math.max(conv.z, 1e-3)), -0.55, 0.55);
     const restPitch = clamp(Math.asin(clamp(conv.y, -1, 1)), -0.35, 0.35);
 
-    // --- seat the eye so the cornea clears the coat ------------------------
-    // March out along the optical axis and find the skin. The fur agent fades
-    // the coat to roughly a quarter of its length at the aperture, so aim the
-    // apex a couple of millimetres proud of the skin and cap how far we may
-    // push so a bad measurement can never eject the eyeball out of the head.
-    let seat = 0;
-    const meas = this._measureSkin(fox, meta, R);
-    const coat = this._measureCoat(fox, meta, R);
-    const clear = APEX_CLEARANCE + Math.min(COAT_CLEAR_SHARE * Math.max(coat, 0), COAT_CLEAR_MAX);
-    if (meas > 0) seat = clamp(meas + clear - apexZ, MAX_SEAT_PULL, MAX_SEAT_PUSH);
+    // (The seat was solved together with the radius above, bounded by the
+    // socket. `seatWanted` is what the coat clearance asked for and `seat` is
+    // what the socket allowed; the difference is printed at init so the next
+    // reader can see whether the eye is sitting deeper than ideal, and by how
+    // much, instead of having to re-derive it.)
 
     // --- the palpebral aperture, from the socket rather than from a number --
     const win = this._measureAperture(fox, meta, R, Rc, zc, k, seat);
@@ -900,7 +1022,7 @@ export class Eyes {
     ball.name = `eyeBall${side}`;
     root.add(ball);
 
-    const u = this._makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW);
+    const u = this._makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW, ap);
 
     const globe = new THREE.Mesh(
       buildGlobe(R, Rc, zc, k, segs.GW, segs.GH),
@@ -921,8 +1043,9 @@ export class Eyes {
     cornea.castShadow = false;
     ball.add(cornea);
 
-    const spreadAt = this._lidSpreadSampler(fox, meta, R, apW, seat, lidYaw);
-    const lids = new THREE.Mesh(buildLids(R, apW, segs.LU, segs.LS, spreadAt), this._lidMaterial(u));
+    const spreadAt = this._lidSpreadSampler(fox, meta, R, apW, ap, seat, lidYaw);
+    const lids = new THREE.Mesh(buildLids(R, apW, ap, segs.LU, segs.LS, spreadAt),
+      this._lidMaterial(u));
     lids.name = `eyeLids${side}`;
     lids.castShadow = false;
     lids.receiveShadow = false;
@@ -937,7 +1060,7 @@ export class Eyes {
     return {
       side, anchor, root, ball, globe, cornea, lids, u, axis,
       R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat, coat, skin: meas,
-      apW, apTh, limbusTh, win, restYawRaw, convMax, lidYaw, follow,
+      apW, apTh, ap, limbusTh, win, restYawRaw, convMax, lidYaw, follow, seatWanted,
       nasalRoom, tempRoom,
       restYaw, restPitch,
       blink: 0, gazeYaw: 0, gazePitch: 0,
@@ -957,7 +1080,7 @@ export class Eyes {
    * smoothly enough around one socket that more would be wasted raycasts.
    * Falls back to a constant if the SDF is not available.
    */
-  _lidSpreadSampler(fox, meta, R, apW, seat = 0, lidYaw = 0) {
+  _lidSpreadSampler(fox, meta, R, apW, ap, seat = 0, lidYaw = 0) {
     const COLS = 25;
     const f = fox.field;
     const flat = () => LID_SPREAD;
@@ -998,8 +1121,8 @@ export class Eyes {
         const u = (i / (COLS - 1)) * 2 - 1;
         const shp = (pw) => Math.pow(Math.max(1 - u * u, 0), pw);
         const lap = 0.022 * smoothstep01(0.78, 1.0, Math.abs(u));
-        const ay = sign > 0 ? AP_UP * shp(0.58) + AP_TILT * u - lap
-          : -AP_DN * shp(0.72) + AP_TILT * u + lap;
+        const ay = sign > 0 ? ap.up * shp(0.58) + ap.tilt * u - lap
+          : -ap.dn * shp(0.72) + ap.tilt * u + lap;
         const ax = u * apW;
         const l = Math.hypot(ax, ay, 1);
         const th0 = Math.acos(clamp(1 / l, -1, 1));
@@ -1150,15 +1273,41 @@ export class Eyes {
   }
 
   /**
-   * Largest globe radius that the socket can swallow.
+   * Largest globe radius that the socket can swallow, measured from the
+   * globe centre AS SEATED.
    *
-   * Marches out from the eyeball centre on a cone at FIT_ANGLE and takes the
-   * nearest skin hit over eight azimuths. Beyond the palpebral aperture the
-   * globe has to be INSIDE the skin, or it bulges through the face; inside the
-   * aperture it is the lids' job to cover it. Returns -1 if the field is not
-   * available, in which case the caller keeps the nominal radius.
+   * Marches out on a cone at FIT_ANGLE and takes the nearest skin hit over
+   * sixteen azimuths. Beyond the palpebral aperture the globe has to be
+   * INSIDE the skin, or it bulges through the face; inside the aperture it is
+   * the lids' job to cover it. Returns -1 if the field is not available, in
+   * which case the caller keeps the nominal radius.
+   *
+   * THE SEAT ARGUMENT IS THE WHOLE BUG THIS ROUND, and it is worth the
+   * paragraph because the check existed and read clean while the defect it
+   * guards was the largest thing on the face. The fit was measured from
+   * `meta.centre` — the socket centre — and the globe was then pushed
+   * `seat` millimetres further out along the optical axis to clear the coat.
+   * Every millimetre of that push spends a millimetre of the clearance the
+   * fit had just certified, in the forward hemisphere, where the skin is
+   * nearest. Measured on the live rig at `portrait` with the socket sampled
+   * from the SEATED centre (16 azimuths, distances in mm):
+   *
+   *   off-axis    0     30      45      60      75      90
+   *   nearest    6.3    6.7     7.7     9.9    14.1    19.5
+   *   globe R   10.87  10.87   10.87   10.87   10.87   10.87
+   *
+   * — so the seated globe stood 2.2-4.2 mm OUTSIDE the skin from 30 to 60
+   * degrees off axis, all the way round. On the near eye that is the pale
+   * dome the review calls a googly doll eye; on the FAR eye, at `portrait`,
+   * it is a hard blue polygon chip drawn past the head's own silhouette,
+   * partly against the sky. Same 2.7 mm, two blockers.
+   *
+   * FIT_ANGLE is 60 rather than 50 degrees for the same reason: the fissure
+   * itself reaches 42.5 degrees horizontally, so a cone at 50 degrees is
+   * still partly inside the opening the lids are meant to cover and it
+   * certifies skin that is not there.
    */
-  _fitGlobeRadius(fox, meta) {
+  _fitGlobeRadius(fox, meta, seat = 0) {
     const f = fox.field;
     if (!f?.raycast || !meta?.centre || !meta?.look) return -1;
     const c = meta.centre, n = meta.look;
@@ -1170,13 +1319,14 @@ export class Eyes {
     t = [t[0] / tl, t[1] / tl, t[2] / tl];
     const b = [n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2],
       n[0] * t[1] - n[1] * t[0]];
+    const o = [c[0] + n[0] * seat, c[1] + n[1] * seat, c[2] + n[2] * seat];
 
     const ca = Math.cos(FIT_ANGLE), sa = Math.sin(FIT_ANGLE);
     let best = Infinity;
-    for (let i = 0; i < 8; i++) {
-      const az = (i / 8) * TAU, cb = Math.cos(az), sb = Math.sin(az);
+    for (let i = 0; i < 16; i++) {
+      const az = (i / 16) * TAU, cb = Math.cos(az), sb = Math.sin(az);
       const d = [0, 1, 2].map((j) => n[j] * ca + (t[j] * cb + b[j] * sb) * sa);
-      const hit = f.raycast(c[0] + d[0] * 1e-3, c[1] + d[1] * 1e-3, c[2] + d[2] * 1e-3,
+      const hit = f.raycast(o[0] + d[0] * 1e-3, o[1] + d[1] * 1e-3, o[2] + d[2] * 1e-3,
         d[0], d[1], d[2], 0.06);
       if (hit > 0) best = Math.min(best, 1e-3 + hit);
     }
@@ -1234,9 +1384,10 @@ export class Eyes {
   }
 
   // -------------------------------------------------------------- uniforms --
-  _makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW) {
+  _makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW, ap) {
     return {
       uR: { value: R }, uRc: { value: Rc }, uZc: { value: zc }, uK: { value: k },
+      uCapDz: { value: Math.sqrt(Math.max(0, 1 - (Rc / R) * (Rc / R))) },
       uIrisZ: { value: irisZ }, uIrisR: { value: irisR }, uLimbusR: { value: limbusR },
       uPupilR: { value: 0.36 }, uEta: { value: 1.0 / 1.376 },
       uFibreN: { value: 118.0 }, uCollarette: { value: 0.41 },
@@ -1286,8 +1437,8 @@ export class Eyes {
       uLidScatter: { value: LID_SCATTER },
       uLidSwell: { value: LID_SWELL },
 
-      uApW: { value: apW }, uApUp: { value: AP_UP },
-      uApDn: { value: AP_DN }, uApTilt: { value: AP_TILT },
+      uApW: { value: apW }, uApUp: { value: ap.up },
+      uApDn: { value: ap.dn }, uApTilt: { value: ap.tilt },
       uBlinkU: { value: 0 }, uBlinkD: { value: 0 },
       uSpread: { value: LID_SPREAD },
       // Rotation of the LID frame relative to the GLOBE frame, so the globe's
