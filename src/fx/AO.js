@@ -29,6 +29,10 @@ uniform float uProjScale;    // half-res pixels per metre at 1 m depth
 uniform float uMaxPx;
 uniform float uMinPx;
 uniform float uNoiseOffset;  // decorrelates the dither across TAA samples
+uniform float uCohLo;        // depth-field roughness where the fade starts
+uniform float uCohHi;        // ... and where it is fully applied
+uniform float uCohAmount;    // 0 = inert (the pre-existing behaviour)
+uniform float uDebugRough;   // 1 = output the roughness statistic instead of AO
 varying vec2 vUv;
 
 vec3 viewPosAt(vec2 uv) {
@@ -89,6 +93,30 @@ void main() {
   float wMin = viewDist / max(uProjScale, 1e-4);
   float wx = clamp(length(dx), wMin, wMin * 24.0);
   float wy = clamp(length(dy), wMin, wMin * 24.0);
+
+  // IS THE DEPTH BUFFER A SURFACE HERE AT ALL?
+  //
+  // The horizon integral below assumes the depth field is a locally
+  // continuous height field. Over the coat it is not. Shells are alpha-cut
+  // and drawn inner-to-outer, so whichever shell survives the stochastic cut
+  // at a pixel is what stamps the depth, and neighbouring texels report
+  // different hair layers -- a lottery over 48 mm of flank coat. GTAO then
+  // finds occluders inside the coat's own thickness everywhere and returns a
+  // blanket rather than a crease. The estimator is not wrong; it has been
+  // handed an input it has no contract for.
+  //
+  // The second difference is the discriminator. A real surface -- however
+  // steep, however curved at the scale of the KERNEL -- is very nearly
+  // linear across ONE texel, so |zl + zr - 2z| is tiny next to the texel's
+  // own world size. A lottery is not. Taking the MIN of the two axes is what
+  // keeps a silhouette: a depth cliff is a huge second difference along one
+  // axis and a smooth surface along the other, so it survives; incoherence
+  // in BOTH axes at once is the coat.
+  float cX = abs(pl.z + pr.z - 2.0 * p.z);
+  float cY = abs(pd.z + pu.z - 2.0 * p.z);
+  float rough = min(cX, cY) / max(wMin, 1e-6);
+  float cohK = 1.0 - uCohAmount * smoothstep(uCohLo, uCohHi, rough);
+  if (uDebugRough > 0.5) { gl_FragColor = vec4(fxSat(rough * 0.1), viewDist, 0.0, 1.0); return; }
 
   float noise  = fxIGN(gl_FragCoord.xy + uNoiseOffset * 7.0);
   float noise2 = fxIGN(gl_FragCoord.yx * 1.371 + uNoiseOffset * 3.17 + 11.0);
@@ -154,6 +182,8 @@ void main() {
   }
 
   visibility /= float(AO_SLICES);
+  // Fade toward "unoccluded" wherever the input was not a surface.
+  visibility = mix(1.0, visibility, cohK);
   gl_FragColor = vec4(fxSat(visibility), viewDist, 0.0, 1.0);
 }
 `;
@@ -214,6 +244,10 @@ export class AO {
       uMaxPx: { value: 42 },
       uMinPx: { value: 2.5 },
       uNoiseOffset: { value: 0 },
+      uCohLo: { value: 0 },
+      uCohHi: { value: 1 },
+      uCohAmount: { value: 0 },
+      uDebugRough: { value: 0 },
     }, { AO_SLICES: this.slices, AO_STEPS: this.steps });
 
     this.denoise = new FxPass('aoDenoise', DENOISE_FRAG, {
@@ -247,6 +281,10 @@ export class AO {
     g.uMaxPx.value = p.cfg.maxScreenRadius;
     g.uMinPx.value = p.cfg.minScreenRadius;
     g.uNoiseOffset.value = p.noiseOffset;
+    g.uCohLo.value = p.cfg.coherenceLo ?? 0;
+    g.uCohHi.value = p.cfg.coherenceHi ?? 1;
+    g.uCohAmount.value = p.cfg.coherenceAmount ?? 0;
+    g.uDebugRough.value = p.cfg.debugRough ? 1 : 0;
 
     this.denoise.u.uRadiusPx.value = p.cfg.denoiseRadius;
     this.denoise.u.uDepthSigma.value = p.cfg.denoiseDepthSigma;

@@ -239,6 +239,11 @@ function defaults() {
          entirely. The depth-relative bilateral weight is what keeps a radius
          this size from leaking occlusion across the fox/snow boundary. */
       denoiseRadius: 5.0, denoiseDepthSigma: 0.035,
+      /* Depth-field coherence gate. See AO.js: the horizon integral has no
+         contract on a stochastic-alpha coat, whose depth buffer is a lottery
+         over 48 mm rather than a surface. `amount` 0 is inert and is the A/B
+         control. */
+      coherenceLo: 0.05, coherenceHi: 0.5, coherenceAmount: 1.0, debugRough: false,
     },
     dof: {
       // f/4 rather than f/2.8: the review poses focus at 0.13-1.6 m, where a
