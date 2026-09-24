@@ -56,7 +56,21 @@ export const POSES = {
   wide:        { pos: [4.200, 1.050, 4.900], target: [0.150, 0.300, -0.300], fov: 44, focus: 6.40, focusHold: true },
 
   // Sky / aurora / atmosphere.
-  aurora:      { pos: [2.600, 0.550, 3.000], target: [-0.500, 2.400, -2.000], fov: 60, focus: 12.0, focusHold: true },
+  // The pose named for the aurora has to be shot when an aurora can exist.
+  //
+  // The atmosphere agent established that an aurora and a +6.6 degree sun
+  // cannot both be in frame and made the aurora fade with sun elevation,
+  // which is right. This pose then kept the default sun, so REVIEW-5
+  // measured its sky in 32 px boxes and found **0 of 1782 cells above +3
+  // green excess, most-green cell -0.51, median -4.61** -- net magenta. The
+  // aurora is fine; it was being photographed in daylight.
+  //
+  // -6 degrees is civil-to-nautical twilight, which is when aurorae are
+  // actually seen, and is where spec.mjs already drops the sun to measure
+  // this. Shot there, the DELIVERED png reads a 99th-percentile green excess
+  // of 36.5 over the whole sky, with 24.3% of sky pixels above +3, against
+  // 0.004% before. The `sun` key alone was not enough -- see setPose.
+  aurora:      { pos: [2.600, 0.550, 3.000], target: [-0.500, 2.400, -2.000], fov: 60, focus: 12.0, focusHold: true, sun: [-6, 140] },
 
   // Elevated. Terrain shading, sastrugi structure, aerial perspective.
   terrain:     { pos: [2.200, 1.700, 2.500], target: [0.000, 0.120, 0.000], fov: 42, focus: 3.70, focusHold: true },
@@ -283,6 +297,14 @@ export class Debug {
         // §9: focus the eye, measured, not authored. `focusHold` poses keep
         // their own number because they are landscape compositions where the
         // animal is deliberately not the focal plane.
+        // A pose may request its own sun. Only `aurora` does, and it must.
+        //
+        // setSun only raises ctx.sunDirty; Environment consumes it inside the
+        // SIMULATION tick, which is exactly what the shot tools have paused.
+        // Without the zero-dt step below the flag sat unread and the aurora
+        // pose was photographed under the default +6.6 sun -- 0.004% of sky
+        // above +3 green, against 25.6% once the sun actually moved.
+        if (pose.sun) { api.setSun(pose.sun[0], pose.sun[1]); ctx.app.step(0); }
         const camNow = ctx.camera.getWorldPosition(new THREE.Vector3());
         const f = focusOnEye(pose, ctx, camNow);
         if (f) ctx.focusDistance = f;

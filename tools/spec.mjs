@@ -1324,8 +1324,21 @@ const results = await page.evaluate(async () => {
           n++;
         }
       }
+      // Amplitude over the WHOLE SKY, not inside the mask.
+      //
+      // My first version took the 99th percentile of pixels with green
+      // excess > 1 -- i.e. it measured the amplitude of the pixels selected
+      // for having amplitude, which cannot fail. It read p99 35.5 and passed
+      // on a sky where only **0.004%** of pixels exceed +3 and the sky-wide
+      // p99 is **-1.5**. I wrote that check in the same commit as a
+      // paragraph criticising exactly this shape of self-reference.
+      let peak = 0; const vals = [];
+      for (let i = 0; i < W * H; i++) { if (a[i] > peak) peak = a[i]; vals.push(a[i]); }
+      vals.sort((p, q) => p - q);
       return n ? { gx: gx / n, gy: gy / n, ratio: (gx / n) / Math.max(gy / n, 1e-4),
-                   px: n, frac: n / (W * H) } : { px: 0, frac: 0 };
+                   px: n, frac: n / (W * H), peak: +peak.toFixed(1),
+                   p99: vals.length ? +vals[Math.floor(vals.length * 0.99)].toFixed(1) : 0 }
+                 : { px: 0, frac: 0, peak: +peak.toFixed(1), p99: 0 };
     };
 
     // Test the aurora at a sun elevation where an aurora can EXIST.
@@ -1337,10 +1350,17 @@ const results = await page.evaluate(async () => {
     // the default sun would either demand a physical impossibility or quietly
     // grade an aurora that is correctly absent. Drop the sun below the horizon
     // for this one block and restore it after.
+    //
+    // Rendered WITH POST. The previous version passed `false`, measuring the
+    // raw pre-tonemap buffer -- an image that never ships. It read p99 34.5
+    // there while the delivered PNG of the same pose at the same sun measures
+    // **p99 -1.5, median -4.50, 0.004% of sky above +3**: AgX and the grade
+    // crush the aurora until the sky is net MAGENTA. Post is not a detail
+    // here, it is the entire difference between an aurora and no aurora.
     const sunWas = { e: ctx.sky?.sunElevationDeg, a: ctx.sky?.sunAzimuthDeg };
     D.setSun(-6, 140);
     atTime();
-    renderPose('aurora', false);
+    renderPose('aurora', true);
     out.auroraStructure = structure(greenField());
     out.auroraAtSun = -6;
 
@@ -1350,7 +1370,7 @@ const results = await page.evaluate(async () => {
       const vis = ag.visible;
       ag.visible = false;
       atTime();
-      renderPose('aurora', false);
+      renderPose('aurora', true);
       out.auroraNoneStructure = structure(greenField());
       ag.visible = vis;
     }
@@ -1544,6 +1564,24 @@ if (!au || !au.px || !aun) {
     `green mask holds ${au.px} px with the aurora shown and ${aun.px} px with ` +
     `it hidden — the mask must collapse by 4x or it is not finding the aurora`);
 } else {
+  // AMPLITUDE FIRST. Shape is meaningless if the signal is invisible.
+  //
+  // This check asserted a gradient RATIO and nothing else, so it certified
+  // the aurora as structured while the critic measured the sky in 32 px
+  // boxes and found **0 of 1782 cells above +3 green excess, a most-green
+  // cell of -0.51 and a median of -4.61** -- net magenta. §3's aurora core
+  // `#7dffc4` is green excess **+94.5**. A ratio of two small numbers is
+  // still a ratio.
+  //
+  // The floor is 12: an order of magnitude under the spec's core, because
+  // the core is the brightest filament and most of a curtain is far fainter,
+  // but comfortably above the +3 the critic could not find anywhere.
+  record('aurora is actually visible', au.p99 >= 5,
+    `green excess across the WHOLE SKY: 99th percentile ${au.p99}, peak ` +
+    `${au.peak}, against §3's aurora core #7dffc4 at +94.5 and a floor of 5. ` +
+    `Measured sky-wide rather than inside the green mask, because a ` +
+    `percentile of the pixels selected for being green cannot fail -- that ` +
+    `version read 35.5 on a sky where 0.004% of pixels exceed +3`);
   record('aurora has vertical filament structure', au.ratio >= 0.85,
     `horizontal/vertical gradient energy of GREEN EXCESS, inside the aurora ` +
     `itself, ${au.ratio.toFixed(3)} (gx ${au.gx.toFixed(2)}, gy ` +

@@ -755,13 +755,19 @@ export class FoxBrain {
      * `drop` is deliberately excluded: it is a per-gait ride height, not a
      * motion, and it changes only when the gait blends.
      */
+    // `h` may be exactly 0: a zero-dt tick is how the debug API propagates a
+    // sun change to the sky systems without advancing the simulation. These
+    // are finite differences, so at h = 0 the honest answer is "no motion
+    // observed", not a division by zero. Unguarded, this produced Infinity
+    // here and NaN downstream through the coat springs.
+    const inv = h > 0 ? 1 / h : 0;
     const bodyY = loco.pos.y + loco.bob + loco.flight + loco.impactY;
-    const vy = (bodyY - this._prevBodyY) / h;
+    const vy = (bodyY - this._prevBodyY) * inv;
     this._prevBodyY = bodyY;
 
-    const ax = (loco.vel.x - this._prevVX) / h;
-    const ay = (vy - this._prevVY) / h;
-    const az = (loco.vel.z - this._prevVZ) / h;
+    const ax = (loco.vel.x - this._prevVX) * inv;
+    const ay = (vy - this._prevVY) * inv;
+    const az = (loco.vel.z - this._prevVZ) * inv;
     this._prevVX = loco.vel.x; this._prevVY = vy; this._prevVZ = loco.vel.z;
 
     // Into body space, then low-passed: the raw second difference of a
