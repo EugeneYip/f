@@ -1013,7 +1013,7 @@ const results = await page.evaluate(async () => {
     // Walk inward from an edge; `at(i, k)` is coverage k steps in along scan
     // i. One routine serves all four directions.
     const scan = (n, len, at, skip = null) => {
-      const tvs = []; let short = 0, dropped = 0;
+      const tvs = [], fills = []; let short = 0, dropped = 0;
       for (let i = 0; i < n; i += 2) {
         // Scans crossing the bare rhinarium, which §4f rule 3 requires to be
         // bare. Counted, never silently discarded.
@@ -1053,13 +1053,23 @@ const results = await page.evaluate(async () => {
         // A ramp shorter than two sampling intervals is not an unmeasurable
         // row, it is a monotonic crossing: the worst value the metric can
         // express. Record it as such.
-        if (prof.length < 3) { short++; tvs.push(1.0); continue; }
+        if (prof.length < 3) { short++; tvs.push(1.0); fills.push(0); continue; }
+        // BAND FILL: mean coverage across the 2%-to-90% transition.
+        //
+        // The tv/net score alone can be passed by making the coat WORSE. The
+        // fur agent proved it with ten arms: no arm raises fill and lowers
+        // bad%, because tv/net is maximised by hair-gap ALTERNATION and
+        // minimised by a monotone ramp -- so a dense pile scores below a
+        // sparse spray. Both arms that passed did so by thinning the pile or
+        // inflating it into a picket fence of separated guard hairs with grey
+        // shell mass between them. It rendered as a mop and was reverted.
+        fills.push(prof.reduce((p2, q) => p2 + q, 0) / prof.length);
         let tv = 0;
         for (let k = 0; k < prof.length - 1; k++) tv += Math.abs(prof[k + 1] - prof[k]);
         const net = Math.abs(prof[prof.length - 1] - prof[0]);
         if (net > 0.3) tvs.push(tv / net);
       }
-      return { tvs, short, dropped };
+      return { tvs, fills, short, dropped };
     };
     const pct = (a, f) => (a.length
       ? +a.slice().sort((p, q) => p - q)[Math.min(a.length - 1, Math.floor(f * a.length))].toFixed(3)
@@ -1126,6 +1136,7 @@ const results = await page.evaluate(async () => {
     })) {
       res.edges[e] = {
         n: sc.tvs.length, noseDropped: sc.dropped,
+        fillMedian: pct(sc.fills, 0.50),
         tvP10: pct(sc.tvs, 0.10), tvMedian: pct(sc.tvs, 0.50),
         badFrac: sc.tvs.length
           ? +(sc.tvs.filter((v) => v < 1.15).length / sc.tvs.length).toFixed(3) : null,
@@ -2013,7 +2024,25 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
     record('silhouette structure probe detects a known-bare edge', false,
       `coated ${sub.median} vs fur-off control ${ctl.median} — the coat must ` +
       `raise the ratio at least 1.25x above bare mesh or the metric is blind`);
-  } else {
+  }
+
+  // DE-NESTED from the hardness probe's `else`, which used to swallow every
+  // check below it.
+  //
+  // The seven matte and contour checks lived inside `else` of the
+  // `silhouette hardness probe` chain, so whenever that probe failed --
+  // either because it could not measure, or because the coat did not raise
+  // the ratio 1.25x above bare mesh -- ALL SEVEN SILENTLY DISAPPEARED. It
+  // failed at 1.765 against a required 1.783 and the run came back with 34
+  // checks instead of 43. I spent two rounds blaming a degraded render and
+  // my own edits for checks that were simply never reached.
+  //
+  // This is the failure AGENTS.md names -- "never let a check disappear when
+  // it cannot measure" -- and I had already fixed one instance of it this
+  // session in `source tree stable`. A gating check whose failure deletes
+  // its dependants is worse than no gate: it goes quiet exactly when
+  // something is wrong.
+  {
     // --- the authoritative version, on a true coverage matte -------------
     //
     // Everything above this line measures a foreground-minus-background mask,
@@ -2059,13 +2088,41 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
     // dorsum and underside both razor-sharp.
     for (const e of ['left', 'right', 'top', 'bottom']) {
       const ed = results.matteProfile?.edges?.[e];
+      // TWO conditions, because the tv/net score alone can be passed by
+      // making the coat worse.
+      //
+      // The fur agent ran ten arms and located every failing scan rather
+      // than tuning against the percentage. No arm raises band fill and
+      // lowers bad%: tv/net is maximised by hair-gap ALTERNATION and
+      // minimised by a monotone ramp, so a DENSE PILE SCORES BELOW A SPARSE
+      // SPRAY. `uCardDuty 0.60` passed by thinning the pile; `uCardFloor
+      // .022 + len 1.40` passed by inflating coverage 18% into a picket
+      // fence of long separated guard hairs with grey shell mass between
+      // them. That one was rendered, looked like a mop, and was reverted.
+      // Both arms that made the fringe genuinely FULLER scored worse.
+      //
+      // So the fill floor is a gaming guard, not a quality target: 0.40 sits
+      // under the measured base (0.429-0.508 across the four edges) and over
+      // the thinned arm (0.390). CALIBRATED, not sourced.
+      //
+      // DO NOT TUNE THE COAT AGAINST THESE FOUR CHECKS. They point at a real
+      // defect -- the fur agent traced every failing scan to the dorsal
+      // topline, the throat/belly and the chest front, i.e. the regions with
+      // the shallowest transition band (26 px top and 40 px bottom against
+      // 84 px on the tail side) -- but the defect is coat DEPTH in the
+      // length map, which is anatomy's, not card distribution.
+      const fillOk = ed && ed.fillMedian != null && ed.fillMedian >= 0.40;
       record(`contour has no bare run at profile: ${e}`,
-        !!(ed && ed.badFrac != null && ed.badFrac <= 0.02),
+        !!(ed && ed.badFrac != null && ed.badFrac <= 0.02 && fillOk),
         ed ? `${((ed.badFrac ?? 0) * 100).toFixed(1)}% of ${ed.n} scans below the ` +
              `1.15 hair floor (p10 ${ed.tvP10}, median ${ed.tvMedian}) — §4f allows ` +
-             `2%. ${ed.noseDropped ?? 0} scans excluded as rhinarium, which §4f ` +
+             `2%, AND band fill ${ed.fillMedian} against a floor of 0.40 ` +
+             `(${fillOk ? 'fill ok' : 'FILL TOO LOW — the pile has been thinned'}). ` +
+             `${ed.noseDropped ?? 0} scans excluded as rhinarium, which §4f ` +
              `rule 3 requires to be BARE: before this exclusion the nose alone ` +
-             `was 3.8% of left-edge scans against a 2% budget`
+             `was 3.8% of left-edge scans against a 2% budget. Note tv/net ` +
+             `rewards a sparse spray over a dense pile — do not tune the coat ` +
+             `against this number; see the comment above the check`
            : 'edge not measured');
     }
 
