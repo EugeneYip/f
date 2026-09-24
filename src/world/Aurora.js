@@ -219,10 +219,12 @@ export class Aurora {
     const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
-    // Mipmapped: the march samples this at up to ~1000 km, where adjacent
-    // pixels step several texels and the filaments moire badly. Automatic LOD
-    // is useless inside a raymarch (the UV jumps between steps), so the
-    // shader picks the level explicitly from the sample distance.
+    // Mipmapped: a sheet is crossed at up to ~1000 km, where one pixel spans
+    // several texels and the filaments moire badly. There are no screen-space
+    // derivatives to lean on -- the UV comes from a solved intersection, not
+    // from an interpolated varying -- so the shader picks the level itself
+    // from the crossing distance. At 4096 wide this matters more than it did
+    // at 1024: one pixel is already 1.3 texels at the middle band.
     tex.generateMipmaps = true;
     tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.magFilter = THREE.LinearFilter;
@@ -234,12 +236,12 @@ export class Aurora {
   // -- curtains -------------------------------------------------------------
 
   /**
-   * Was: widen the sheets as the step count falls, because at `low` (6 steps)
-   * most rays missed them entirely. There is no march any more -- each sheet
-   * is crossed analytically -- so the curtain is now identical at every tier
-   * and this hook only exists to keep `onQuality` honest about the star count.
+   * Uniforms derived from other uniforms. Was `_applySteps`, and used to widen
+   * the sheets as the step count fell because at `low` (6 steps) most rays
+   * missed them entirely. There is no march any more, so the curtain is
+   * identical at every tier and nothing here depends on quality.
    */
-  _applySteps() {
+  _deriveUniforms() {
     const u = this.uniforms;
     if (!u) return;
     const f = u.uFoldW.value;
@@ -336,7 +338,7 @@ export class Aurora {
       uSkyKill: { value: 2.8 },
     };
 
-    this._applySteps(steps);
+    this._deriveUniforms();
 
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
