@@ -1722,9 +1722,48 @@ export function buildField() {
     ra: 0.0198, rb: 0.0150, squash: [0.92, 1.0, 1.0], k: 0.010, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.05], flowRadial: 0.40, tint: TINT_FUR,
   });
+  /**
+   * ### The metacarpus ENDS AT THE KNUCKLES, and why it used to end on the floor
+   *
+   * This capsule used to run to `b.y = 0.0250` with `rb = 0.0178`, i.e. its
+   * lower end cap bottomed out at exactly `SOLE_Y` (0.0072) — `addPaw`'s own
+   * comment says so and raised `SOLE_Y` to match it. So the WRIST was part of
+   * the ground-facing surface of the foot. That is the definition of a
+   * plantigrade stance, and it is REVIEW-5 blocker 14's "plantigrade" and its
+   * "smooth cone sliced flat by the ground plane" in one primitive.
+   *
+   * It is also, measured, the whole of `the drawn foot meets the drawn snow`.
+   * Decomposed on the `paws` coverage matte with the coat split into shells
+   * and cards inside ONE page session at ONE sim instant (worst of four feet,
+   * mm below the projected snow line):
+   *
+   *     skin only   14.2      shells only   21.3      shells + cards   37.6
+   *
+   * The cards alone reproduce the full figure to 0.1 mm at every paw, so the
+   * lowest drawn pixel under every foot is a CARD. Cards reach ~1.2x the local
+   * coat perpendicular to the skin (`FurCards`' own target band), and the
+   * surface they were growing from here is `legFrontLower` at 16 mm — not
+   * `pawFront` at 9.5. A downward-facing `legFrontLower` cap on the sole plane
+   * therefore hangs ~19 mm of card below the foot. Cutting `pawFront` 22 -> 9.5
+   * (see the FUR table) could never reach that, because the offending coat was
+   * never the paw's.
+   *
+   * So the cap comes off the floor and tucks INSIDE the pad (pad top is
+   * `SOLE_Y + padR` = 30.4 mm; this ends at 30.0 - 13.5 = 16.5 mm), which
+   * leaves the pad and the toes as the only ground-facing surface and the only
+   * coat that can hang below the snow is `pawFront`'s own.
+   *
+   * `rb` 17.8 -> 13.5 mm is §4f run on the limb: the skin slims 4.3 mm while
+   * the furred radius moves 4.3 mm at most (12.5 mm of coat sits on it here
+   * after `FoxSurface`'s 0.78 distal taper), and the paw now flares over the
+   * pastern by 26.0 / 13.5 = 1.93 instead of 26.0 / 17.8 = 1.46. A foot
+   * broader than the ankle above it is what makes a canid limb read as a limb.
+   * 13.5 mm is 2.25 cells at the 6 mm `high` voxel — thinner than that and the
+   * mesher facets it, which is the trap `addPaw`'s toe comment documents.
+   */
   f.addMirrored({
-    name: 'carpusR', a: [0.0474, 0.0605, 0.0552], b: [0.0458, 0.0250, 0.0730],
-    ra: 0.0156, rb: 0.0178, squash: [1.0, 1.0, 0.92], k: 0.012, ...furOf(R.legFrontLower),
+    name: 'carpusR', a: [0.0474, 0.0605, 0.0552], b: [0.0458, 0.0300, 0.0716],
+    ra: 0.0156, rb: 0.0135, squash: [1.0, 1.0, 0.92], k: 0.010, ...furOf(R.legFrontLower),
     flowDir: [0, -1, 0.12], flowRadial: 0.40, tint: TINT_FUR,
   });
   addPaw(f, furOf, 0.0455, 0.0722, +1, R.pawFront, 0.0232, 0.0250);
@@ -1743,17 +1782,38 @@ export function buildField() {
     flowDir: [0, -1, -0.30], flowRadial: 0.35, tint: TINT_FUR,
   });
   // Long metatarsus — the "backwards knee" is the hock joint at its top.
+  //
+  // Same correction as `carpusR`, same reason: `b.y = 0.0255` with
+  // `rb = 0.0164` put this capsule's end cap at y = 0.0091, on the sole plane,
+  // so `hock`'s 17 mm coat (and the ~20 mm of card that follows it) was
+  // growing off a downward-facing surface under the hind foot. It now ends at
+  // the METATARSOPHALANGEAL joint and tucks inside the hind pad (top 28.8 mm).
+  //
+  // It also TAPERS now (14.0 -> 12.5) instead of flaring (14.0 -> 16.4). A
+  // canid metatarsus is narrowest at its distal end; flaring it into the
+  // ground is what made the hind limb a cone rather than a cannon bone.
   f.addMirrored({
-    name: 'metatarsusR', a: [0.0461, 0.0900, -0.1755], b: [0.0452, 0.0255, -0.1315],
-    ra: 0.0140, rb: 0.0164, squash: [0.88, 1.0, 1.0], k: 0.012, ...furOf(R.hock),
+    name: 'metatarsusR', a: [0.0461, 0.0900, -0.1755], b: [0.0452, 0.0310, -0.1330],
+    ra: 0.0140, rb: 0.0125, squash: [0.88, 1.0, 1.0], k: 0.010, ...furOf(R.hock),
     flowDir: [0, -1, 0.35], flowRadial: 0.40, tint: TINT_FUR,
   });
   // Calcaneal tuber: the heel bone projects caudally as the Achilles lever and
   // is what makes a hock read on a live canid. Without it the joint is just a
   // bend in a tube and the fur fills it in.
+  //
+  // REVIEW-5 blocker 14 still reads "no hock", and the reason is arithmetic:
+  // the tuber reached z = -0.1977 while the metatarsus at the same height
+  // reached -0.1877, so it stood 10 mm proud — of which a k = 10 mm fillet ate
+  // most, under 13 mm of coat. A protrusion smaller than its own fillet is not
+  // a landmark. The tuber now carries to z = -0.2000 (r 9.5 -> reach -0.2095,
+  // 22 mm proud) and rises to y = 0.1015 so the Achilles line above it is
+  // visible, with k dropped to 8 mm so the corner survives the blend. 9.5 mm
+  // is 1.6 cells, which is under-sampled for a SPHERE, but this is a capsule
+  // 16 mm long and the mesher resolves its axis fine; the failure mode the
+  // toe comment describes needs a short radius in every direction at once.
   f.addMirrored({
-    name: 'calcaneusR', a: [0.0461, 0.0935, -0.1735], b: [0.0461, 0.0975, -0.1885],
-    ra: 0.0125, rb: 0.0092, squash: [0.84, 1.0, 1.0], k: 0.010, ...furOf(R.hock),
+    name: 'calcaneusR', a: [0.0461, 0.0940, -0.1725], b: [0.0461, 0.1015, -0.2000],
+    ra: 0.0128, rb: 0.0095, squash: [0.84, 1.0, 1.0], k: 0.008, ...furOf(R.hock),
     flowDir: [0, -0.55, -0.84], flowRadial: 0.45, tint: TINT_FUR,
   });
 
