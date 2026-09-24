@@ -61,6 +61,22 @@
 //    sky, outside the head's silhouette, so the far eye is placed outside the
 //    muzzle rather than mis-sorted against it. src/fox/Eyes.js -- face agent.
 //
+// 3. REVIEW-6's "the shoulder has been pulled hard enough to eat the light
+//    source." Also not the shoulder -- see the derivation in DoF.js, it was
+//    the defocus highlight clamp holding the sky to 7.0 against in-focus snow
+//    at 9.6. With the knee put back to 1.0, the exact pre-change hard clamp,
+//    the disc still measured 236.0 against a ground of 248.0.
+//
+//    What IS still open after that fix, and is NOT post: the disc's wide
+//    skirt. Its radial profile now reads 252 / 242 / 206 / 185 / 170 at
+//    r = 0 / 20 / 45 / 70 / 110 px against a sky floor near 158. The core is
+//    now a peak rather than the flat 235 / 235 plateau it was, but everything
+//    from r = 45 outward did not move by more than 2 levels under ANY post arm
+//    tried -- knee 1.0 or 0.75, DoF skipped, bloom skipped, bloom strength 0.
+//    Bloom contributes about 1 level across the whole skirt. That 96 px glow
+//    is generated before the chain, in the sky's own sun term:
+//    src/world/Sky.js and src/shaders/sky.glsl.js, atmosphere agent.
+//
 import * as THREE from 'three';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { clamp, damp, smoothstep } from '../util/math.js';
