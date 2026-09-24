@@ -175,6 +175,47 @@ export const SNOW = {
   FP_TAU_DEPTH: 21.0,     // e-folding time (s); ~60 s to visually vanish
   FP_TAU_RIM: 10.0,       // rims blow away first
   FP_TAU_COMP: 26.0,      // the compacted (bluer, glossier) snow lingers
+
+  // --- how shaded snow keeps its relief -------------------------------------
+  //
+  // Measured, one page session, one sim instant, the arms differing only by a
+  // uniform, and a same-state control that came back bit-identical (HF sd to
+  // three decimals) in every box:
+  //
+  //   hero, 300x90 boxes          HF sd   with detail normals off
+  //   lit    (1450,930)          13.671            6.654
+  //   shadow  (700,1090)          1.274            1.226
+  //
+  // The same detail normals carry 7.0 levels of high-frequency contrast in the
+  // sun and 0.05 in shade. That is the whole of blocker 3, and it is not a
+  // missing normal: it is that the sky term had no directional response worth
+  // the name. skyVis was saturate(0.52 + 0.48 * N.y), which for a micro-facet
+  // tilted 15 degrees off vertical moves by 1.6% -- correct for a UNIFORM
+  // hemisphere, and a uniform hemisphere is not what is over this snow.
+  //
+  // Two things are added, both physical, both mean-preserving on a flat
+  // surface so nothing in the far field or at the horizon moves:
+  //
+  // SKY_ANISO — the circumsolar and horizon glow. A twilight sky is several
+  //   times brighter toward the sun and along the horizon than at the zenith,
+  //   so a facet tilted sunward collects measurably more skylight than one
+  //   tilted away. This is the dominant reason real snow shows its relief in
+  //   shade, and it survives a cast shadow because the animal blocks the SUN,
+  //   not the sky. (What the animal does block of the sky is snContactOcc,
+  //   which is already in skyVis.) Normalised against what a flat surface
+  //   collects, so a distant flat field is untouched.
+  // SKY_GLOW_LIFT — how far above the sun the glow's centroid sits. The band
+  //   is broad; a pure sun direction would make this a second sun.
+  // SKY_CAV — micro cavity occlusion. The baked detail map has carried a
+  //   height-proxy occlusion in its .w channel since it was written and
+  //   sn_detail was returning a vec3, so .w had never once been read.
+  // SPK_SHADE — a shaded facet still catches the bright part of the sky. Not
+  //   a sun glint and nowhere near one, but the alternative measured 0.0
+  //   glints per 10 000 px against 79 in the sun, which is a dead plane.
+  SKY_ANISO: 1.15,
+  SKY_GLOW_LIFT: 0.22,
+  SKY_CAV: 1.30,
+  SPK_SHADE: 0.10,
 };
 
 const FIXED = new Set(['TABLE']);
@@ -647,9 +688,15 @@ vec3 sn_hash23(vec2 c){
 }
 
 // Detail normal, tangent space, from the baked tileable map.
-vec3 sn_detail(vec2 uv, float scale){
+//
+// xy is the tangent-space normal, z the crystal density, w the height-proxy
+// cavity occlusion (DETAIL_BAKE_FRAG writes 0.5 + h * 0.7 there). This used
+// to return a vec3 and drop w on the floor, so the one channel in the map
+// that says which micro-facets can see the sky was baked every run and never
+// read. See S_SKY_CAV.
+vec4 sn_detail(vec2 uv, float scale){
   vec4 t = texture2D(uDetail, uv * scale);
-  return vec3(t.xy * 2.0 - 1.0, t.z);
+  return vec4(t.xy * 2.0 - 1.0, t.zw);
 }
 
 /**
@@ -789,7 +836,7 @@ void main(){
   float wGrn = 1.0 - smoothstep(uDetailScale.y * 0.9, uDetailScale.y * 5.0, px);
   float wMic = 1.0 - smoothstep(uDetailScale.x * 0.9, uDetailScale.x * 5.0, px);
 
-  vec3 dRip = vec3(0.0, 0.0, 0.5), dGrn = vec3(0.0, 0.0, 0.5), dMic = vec3(0.0, 0.0, 0.5);
+  vec4 dRip = vec4(0.0, 0.0, 0.5, 0.5), dGrn = vec4(0.0, 0.0, 0.5, 0.5), dMic = vec4(0.0, 0.0, 0.5, 0.5);
   if (wRip > 0.01) dRip = sn_detail(vec2(wuv.x + wuv.y * 0.11, wuv.y * uDetailScale.w) / uDetailScale.z, 1.0);
   // The grain and micro layers used to be ISOTROPIC, and nothing on a polar
   // snow surface is. The wind works the surface at every scale, so both are
@@ -819,6 +866,15 @@ void main(){
 
   float grain = dGrn.z * wGrn + 0.5 * (1.0 - wGrn);
   float crystal = clamp(0.35 + 1.1 * dMic.z * wMic + 0.5 * (1.0 - wMic), 0.0, 1.4);
+
+  // Micro cavity occlusion, from the .w channel sn_detail used to discard.
+  // Centred on 0.5 and weighted exactly like dn, so the MEAN of the field is
+  // untouched at every distance and only the variation appears. Compacted
+  // snow has no micro relief left to occlude with, same as dn.
+  float cavD = ((dRip.w - 0.5) * (wRip * 0.34)
+              + (dGrn.w - 0.5) * (wGrn * 0.40)
+              + (dMic.w - 0.5) * (wMic * 0.26)) * (1.0 - 0.75 * comp);
+  float microOpen = saturate(1.0 + S_SKY_CAV * 2.0 * cavD);
 
   // --- light terms ----------------------------------------------------------
   float NdotL = dot(N, L);
@@ -855,14 +911,38 @@ void main(){
   // ... and so does snow with an animal standing on it. This is the term the
   // cast shadow cannot supply at a low sun; see snContactOcc().
   float contact = snContactOcc(vWorld, N);
+
+  // THE SKY IS NOT A UNIFORM DOME, and treating it as one is why snow in
+  // shadow was a flat blue cut-out. saturate(0.52 + 0.48 * N.y) is the
+  // visibility of a uniform hemisphere, and it is nearly constant for any
+  // near-up normal: a facet tilted 15 degrees moves it 1.6%. So every bit of
+  // legible relief was being carried by the sun term, and removing the sun
+  // removed the surface with it. See S_SKY_ANISO.
+  //
+  // The glow direction is the sun's azimuth lifted toward the zenith, which
+  // is where a twilight sky actually puts its brightest radiance -- a broad
+  // band above the sun, not a second disc at it. Normalised by what a FLAT
+  // surface collects from that direction, so the term is exactly 1.0 on
+  // undisturbed ground at any sun elevation: the far field, the horizon
+  // match and the overall exposure cannot move, only the relief appears.
+  vec3 Lsky = normalize(vec3(L.x, max(L.y, 0.0) + S_SKY_GLOW_LIFT, L.z));
+  float skyAniso = 1.0 + S_SKY_ANISO * (saturate(dot(N, Lsky)) - saturate(Lsky.y));
+
   float skyVis = saturate(0.52 + 0.48 * N.y) * hollow * (1.0 - 0.45 * comp * comp)
+               * skyAniso * microOpen
                * (1.0 - uOcclMix.x * contact);
   vec3 ambient = uSkyColor * (uSkyInt * skyVis) * deep;
   // Snow is surrounded by snow: a modest near-white interreflection that keeps
   // hollows from going black without washing the blue out of them. The body
   // blocks less of this than of the sky -- it arrives from all round, not from
   // straight up -- so it takes a weaker share of the contact term.
+  //
+  // It takes the cavity term but NOT the sunward anisotropy: the bounce
+  // arrives from the whole ring of lit snow round the horizon, so it has no
+  // preferred azimuth, but a facet down inside a hollow is just as hidden
+  // from it as from the sky.
   vec3 inter = uBounce * (uBounceInt * (0.45 + 0.55 * saturate(1.0 - N.y)))
+             * mix(1.0, microOpen, 0.6)
              * (1.0 - uOcclMix.y * contact);
   // The aurora is a wide, dim source directly overhead, so on snow it is a
   // broad wash on upward faces with almost no shape to it -- and it only
@@ -943,7 +1023,15 @@ void main(){
   // here is only the aerial-perspective share — the haze in front of distant
   // snow washes the contrast out on top of that.
   float sparkDist = 1.0 / (1.0 + dist * 0.014);
-  float sparkGate = saturate(0.25 + NdotL * 2.5) * shadowMask * horizon
+  // A facet in shade is not dark, it is lit by the sky, and the brightest
+  // part of that sky sits where the sun is -- so the same facets keep firing
+  // and only their peak collapses. Gating on shadowMask alone measured 0.0
+  // glints per 10 000 px inside the body shadow against 79 in the sun beside
+  // it, which is not restraint, it is a dead plane. The sun and the ridge
+  // horizon both keep a floor; comp and distance do not, because a sintered
+  // slab really has no loose facets and a sub-pixel glint really is gone.
+  float sparkLit = mix(S_SPK_SHADE, 1.0, shadowMask * horizon);
+  float sparkGate = saturate(0.25 + NdotL * 2.5) * sparkLit
                   * (1.0 - comp * 0.85) * sparkDist;
   if (sparkGate > 0.004) {
     // Glints come from loose, unsintered facets, and a wind slab has none
