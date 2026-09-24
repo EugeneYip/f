@@ -1508,6 +1508,66 @@ const results = await page.evaluate(async () => {
     if (sunWas.e != null) D.setSun(sunWas.e, sunWas.a);
   }
 
+  // 11. THE QUALITY LADDER, which nothing in this repo has ever measured.
+  //
+  //     REVIEW-6 blocker 9: "`low` is a different, worse animal, and nothing
+  //     measures it." It turned out to be worse than that -- at `hero`, `low`
+  //     reads as a PLUSHER animal than `high`. Same flank box, same commit:
+  //     high put 62.7% of the flank below luminance 160 with sd 45.02, low
+  //     put 25.5% there with sd 21.27. A higher tier was delivering large
+  //     smooth grey patches that the cheaper tier did not have.
+  //
+  //     Measured as LOW-FREQUENCY variance, which is the whole point. Raw sd
+  //     rises legitimately with tier, because more shells and more cards mean
+  //     more hair and more local contrast -- so raw sd would punish the
+  //     better coat. Patches are low-frequency and hair is high-frequency, so
+  //     box-averaging 16x before taking sd keeps the patches and averages the
+  //     hair away.
+  //
+  //     The box tracks the animal rather than sitting at fixed pixels: it is
+  //     centred between the chest and tailTip anchors and scaled by their
+  //     separation, so it survives a framing or anatomy change.
+  {
+    const tierWas = ctx.quality?.tier;
+    out.tierCoat = {};
+    for (const tier of ['low', 'medium', 'high', 'ultra']) {
+      D.setQuality(tier);
+      atTime();
+      renderPose('hero', true, 0);
+      const a = project('chest'), b = project('tailTip');
+      if (!a || !b) { out.tierCoat[tier] = null; continue; }
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      const span = Math.hypot(b.x - a.x, b.y - a.y);
+      const hw = Math.max(24, Math.round(span * 0.30));
+      const hh = Math.max(16, Math.round(span * 0.18));
+      const g = grab();
+      const x0 = Math.max(0, Math.round(cx - hw)), y0 = Math.max(0, Math.round(cy - hh));
+      const w = Math.min(g.w - x0, hw * 2), h = Math.min(g.h - y0, hh * 2);
+      if (w < 64 || h < 32) { out.tierCoat[tier] = null; continue; }
+      const d = c2.getImageData(x0, y0, w, h).data;
+      // Box-average into 16x16 cells: hair averages out, patches do not.
+      const B = 16, cw = Math.floor(w / B), ch = Math.floor(h / B), cells = [];
+      for (let cyi = 0; cyi < ch; cyi++) {
+        for (let cxi = 0; cxi < cw; cxi++) {
+          let sum = 0;
+          for (let yy = 0; yy < B; yy++) {
+            for (let xx = 0; xx < B; xx++) {
+              const i = ((cyi * B + yy) * w + (cxi * B + xx)) * 4;
+              sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+            }
+          }
+          cells.push(sum / (B * B));
+        }
+      }
+      if (cells.length < 12) { out.tierCoat[tier] = null; continue; }
+      const mean = cells.reduce((p2, q) => p2 + q, 0) / cells.length;
+      const sd = Math.sqrt(cells.reduce((p2, q) => p2 + (q - mean) ** 2, 0) / cells.length);
+      out.tierCoat[tier] = { lfSd: +sd.toFixed(2), mean: +mean.toFixed(1), cells: cells.length };
+    }
+    if (tierWas) D.setQuality(tierWas);
+    atTime();
+  }
+
   if (ctx.postfx) ctx.postfx.enabled = true;
   out.initErrors = D.errors();
   return out;
@@ -1555,6 +1615,30 @@ record('eye is warm (raw)', eir && eir.r - eir.b >= 22,
   `it is no longer the assertion`);
 record('eye keeps its chroma through post', er && ep && (ep.r - ep.b) > (er.r - er.b) * 0.7,
   `raw R-B ${er ? (er.r - er.b).toFixed(1) : '?'} -> post R-B ${ep ? (ep.r - ep.b).toFixed(1) : '?'}`);
+
+// The quality ladder: a more expensive tier must not look WORSE.
+//
+// Nothing in this repo measured any tier but `high` until now, which is how
+// `low` came to read as a plusher animal than `high` without anyone noticing.
+// Low-frequency variance over the flank is the patch metric -- hair is
+// high-frequency and averages away under the 16x box, patches do not.
+//
+// The bound is one-sided and generous (1.3x plus 2 levels of slack): a richer
+// coat legitimately carries MORE structure, and the point is not to force the
+// tiers to match but to catch a higher tier developing large smooth blotches
+// a cheaper one does not have.
+const tc = results.tierCoat || {};
+const tcLow = tc.low, tcHigh = tc.high;
+record('a dearer tier does not look worse',
+  !!(tcLow && tcHigh) && tcHigh.lfSd <= tcLow.lfSd * 1.3 + 2,
+  tcLow && tcHigh
+    ? `flank low-frequency sd by tier — low ${tcLow.lfSd}, medium ` +
+      `${tc.medium ? tc.medium.lfSd : '?'}, high ${tcHigh.lfSd}, ultra ` +
+      `${tc.ultra ? tc.ultra.lfSd : '?'} (${tcHigh.cells} cells). high must ` +
+      `stay under low x1.3 + 2 = ${(tcLow.lfSd * 1.3 + 2).toFixed(2)}. This is ` +
+      `PATCHINESS, not detail: the 16x box average removes hair and keeps ` +
+      `blotches, so a richer coat is not penalised for carrying more structure`
+    : 'tier ladder not measured — that is a failure, not a pass');
 
 // Coat: §4b forbids any warm cast.
 const cl = results.coat_lit, sn = results.snow_ref;
@@ -2064,8 +2148,8 @@ record('source tree stable during the run', drifted.length === 0,
       'describe two different builds; judge per check rather than discarding ' +
       'the whole run.'
     : `no file under src/ or tools/ changed during the run ` +
-      `(${Object.keys(srcBefore).length} + ${Object.keys(toolsBefore).length} ` +
-      `files fingerprinted), so the numbers above all describe one build`);
+      `(${srcBefore.size} + ${toolsBefore.size} files fingerprinted), so the ` +
+      `numbers above all describe one build`);
 
 await mkdir(path.resolve(ROOT, path.dirname(OUT)), { recursive: true });
 await writeFile(path.resolve(ROOT, OUT), JSON.stringify({ checks, results }, null, 2));
