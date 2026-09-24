@@ -1016,6 +1016,73 @@ export const FUR_DEFAULTS = {
    * COUNT THE CHECKS in any spec run that touches this. Two of the three
    * arms above deleted checks rather than failing them.
    */
+  /*
+   * SWEPT AGAIN AGAINST ALL FOUR CONTOUR EDGES, AND THE ANSWER IS THAT THIS
+   * KNOB CAN PASS THEM AND MUST NOT BE USED TO.
+   *
+   * The four failing checks are `contour has no bare run at profile:
+   * left/top/bottom` and `matte silhouette is hair at profile: body`. I
+   * located every failing scan (probe: shots/fur4/fur4-contour.mjs, which
+   * replicates spec.mjs's edge scan exactly and records the image coordinate
+   * of each crossing, plus a marked-up coverage matte). They are not spread
+   * along the outline. They are three places:
+   *
+   *   top     the DORSAL TOPLINE, x 810-1100 at y 447-487, in runs of 8-12
+   *           consecutive scans, and the ear tops
+   *   bottom  the THROAT and the belly, x 628-644 and x 1320-1390
+   *   left    the front of the chest at y 676-686 and the brow at y 506-526
+   *
+   * and what they have in common is fringe DEPTH: the 2%-to-90% transition
+   * band is 26 px on the top edge and 40 px on the bottom, against 84 px on
+   * the tail side. Those are the shallow-coat regions, so the outline there
+   * ramps once and monotonically.
+   *
+   * Then the sweep, one page session, same-state control first (two base arms
+   * agree to every digit on all twelve columns), 1920x1200 at `profile`.
+   * `fill` is the mean coverage over each scan's own transition band -- how
+   * FULL the fringe is -- and `cov` is the summed coverage of the whole
+   * matte:
+   *
+   *   arm                            bad% L/R/T/B      fill L/R/T/B          cov
+   *   base                          5.1/2.8/9.6/6.9  .482/.429/.508/.444  348 769
+   *   uCardDuty 0.60                2.0/0.4/3.6/5.7  .446/.390/.494/.401  339 554
+   *   uCardHairLen 0.55             2.9/0.8/4.4/6.3    --      --            --
+   *   uCardFloor 0.016              2.9/2.8/7.8/3.3  .480/.421/.490/.434  367 709
+   *   uCardFloor 0.022              3.2/2.8/6.0/2.3  .470/.419/.474/.429  385 894
+   *   uCardFloor 0.022 + len 1.40   2.0/1.1/3.7/0.9  .463/.406/.455/.421  412 135
+   *   uCardFloor 0.030 + len 1.40   2.4/1.5/4.4/1.5  .451/.406/.438/.402  439 166
+   *   uCardFloorLow 0.45            4.9/4.6/11.7/8.3   --      --            --
+   *   uCardJitter 1.6               9.1/4.0/10.0/6.5 .488/.419/.497/.447  348 579
+   *   uCardClump 0.85               6.9/3.9/11.4/5.8 .484/.434/.507/.442  348 498
+   *
+   * THERE IS NO ARM IN THAT TABLE THAT RAISES fill AND LOWERS bad%. The two
+   * that get three or four edges under the 2% allowance do it in the only two
+   * ways available, and both are the defect the user is complaining about:
+   *
+   *   - uCardDuty 0.60 thins the pile. fill falls on every edge and total
+   *     coverage falls with it: a sparser coat scores better.
+   *   - uCardFloor 0.022 + uCardLength 1.40 inflates it. Coverage rises 18%
+   *     and the band depth 70%, and because cardFloorLow is 1.00 every lock
+   *     gets the SAME extra stand-off, so it renders as a uniform picket
+   *     fence of long straight separated guard hairs with the grey shell mass
+   *     showing between them -- a mop, not a fox. shots/fur4/cf-high/hero.png
+   *     against shots/fur4/base-high/hero.png; I looked at both and reverted.
+   *
+   * This is the same conclusion the cardDuty note below reached from the
+   * other direction ("tv/net is maximised by an outline that alternates hair
+   * and gap and minimised by a monotone ramp -- a dense pile's outline is
+   * closer to monotone than a spray's"), now measured on all four edges with
+   * fill and coverage next to the score. The two arms that pass are the two
+   * that make the coat worse, and the two arms that make the fringe fuller
+   * (jitter, clump) make the score worse.
+   *
+   * So the knob stays at 0.010/1.00 and the four checks stay red. tools/ is
+   * the orchestrator's: what the metric needs is a floor on band FILL beside
+   * the tv/net ceiling, or tv/net gated to scans whose fringe is deeper than
+   * some millimetres, so that a spray cannot buy the pass. The real defect it
+   * is pointing at -- a shallow monotone outline over the dorsal topline and
+   * the throat -- is a COAT DEPTH question in those regions, not a card one.
+   */
   cardFloor: 0.010,
   cardFloorLow: 1.00,
   cardInner: 0.17,
