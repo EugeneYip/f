@@ -1444,11 +1444,24 @@ const results = await page.evaluate(async () => {
         for (let x = 1; x < W - 1; x++) {
           const i = y * W + x;
           if (a[i] < 3) continue;                    // not aurora
-          const dx = a[i + 1] - a[i], dy = a[i + W] - a[i];
-          gx += Math.abs(dx);
-          gy += Math.abs(dy);
-          // Signed outer product: a STRUCTURE TENSOR, which unlike the
-          // ratio of mean absolute gradients knows about orientation.
+          gx += Math.abs(a[i + 1] - a[i]);
+          gy += Math.abs(a[i + W] - a[i]);
+          // CENTRAL differences for the tensor, not forward ones.
+          //
+          // Forward differences share the -a[i] term, so on iid noise
+          // Jxx = Jyy = 2*sigma^2 and Jxy = +sigma^2 -- which lands at
+          // EXACTLY 135 degrees and coherence EXACTLY 0.5. I verified it on
+          // pure Gaussian noise through this check's own arithmetic:
+          // forward gives 134.9 / 0.508, central gives 7.1 / 0.009.
+          //
+          // So my coherence floor of 0.5 was precisely what noise alone
+          // produces -- vacuous on that side -- and the 128.6 degrees that
+          // REVIEW-6 and I both read as "the curtains are diagonal" was
+          // partly this bias pulling a noise-dominated field toward 135.
+          // The aurora agent found it; the real defect underneath was a
+          // screen-locked dither, and correcting the metric does not undo
+          // that, but the number was never as clean as either of us wrote.
+          const dx = (a[i + 1] - a[i - 1]) * 0.5, dy = (a[i + W] - a[i - W]) * 0.5;
           Jxx += dx * dx; Jyy += dy * dy; Jxy += dx * dy;
           n++;
         }
