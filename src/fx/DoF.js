@@ -54,6 +54,7 @@ uniform float uFocus;
 uniform float uCoCScale;     // half-res px of CoC per unit of (z-F)/z
 uniform float uMaxCoC;       // half-res px
 uniform float uHighlightClamp;
+uniform float uHighlightClampGain;
 varying vec2 vUv;
 
 float cocAt(float z) {
@@ -95,13 +96,49 @@ void main() {
          + texture2D(tHDR, vUv + o3).rgb * w3;
   c /= max(w0 + w1 + w2 + w3, 1e-4);
 
-  // Clamp the energy a single defocused point may scatter. This only feeds
-  // the BLURRED layers — in-focus pixels take the sharp path untouched — so
-  // snow sparkle still blooms into stars while a near flake stops turning
-  // into an 80 px glowing disc that reads as lens dirt (bible SS3: no lens dirt).
+  /* Clamp the energy a single defocused point may scatter. This only feeds
+     the BLURRED layers — in-focus pixels take the sharp path untouched — so
+     snow sparkle still blooms into stars while a near flake stops turning
+     into an 80 px glowing disc that reads as lens dirt (bible SS3: no lens
+     dirt).
+
+     SCALED BY THE AREA THE POINT IS SPREAD OVER, because a flat ceiling is
+     the wrong shape. The gather normalises by its tap count, so an isolated
+     source of radiance L at CoC radius r lands at about L/(pi r^2): holding L
+     constant therefore punishes a barely-defocused point by r^2 relative to
+     the near flake this clamp exists for. And the two sides are not
+     symmetric. cocAt saturates at uCoCScale as z grows, and cocScale caps
+     that at maxBackgroundCoC * halfResHeight = 3.0 half-res px, while the
+     NEAR side runs to -uMaxCoC = -13. So the far field was being held to a
+     ceiling calibrated for a point that scatters 19x more widely.
+
+     What that cost, measured at the hero pose with the sun projected from
+     ctx.sunDirection to (1537,214) rather than found as "the brightest pixel
+     up there", which locks onto the fox:
+
+         ceiling   solar disc   ground p99.9   frame max
+            7.0        233.7        243.0        252.0
+           16          244.0        243.0        252.0
+           32          248.7        243.0        252.0
+           64          251.0        243.3        252.0
+          200          252.7        243.7        252.7
+         DoF off       252.7        246.0        252.7
+
+     The brightest object in the scene was coming out 9 levels DARKER than
+     the ground it lights, and the whole of that loss was this line: at 200
+     the disc reaches exactly the value it has with the pass skipped. The
+     scene-linear read agrees — the disc left the chain at 7.094 against the
+     in-focus snow's 9.607, i.e. sitting on the ceiling. Frame 1st percentile
+     did not move at any setting (86.0 throughout) and the mean moved 0.2.
+
+     At r = uMaxCoC the multiplier is exactly 1, so the near flake keeps the
+     ceiling it has today by construction. uHighlightClampGain = 1 restores
+     the old flat clamp and is the A/B control. */
   c = fxSafe(c);
   float m = fxMax3(c);
-  if (m > uHighlightClamp) c *= uHighlightClamp / m;
+  float r = max(abs(coc), 1.0);
+  float lim = uHighlightClamp * min(uHighlightClampGain, (uMaxCoC * uMaxCoC) / (r * r));
+  if (m > lim) c *= lim / m;
   gl_FragColor = vec4(c, coc);
 }
 `;
@@ -292,6 +329,7 @@ export class DoF {
       uNear: { value: 0.05 }, uFar: { value: 900 },
       uFocus: { value: 2.5 }, uCoCScale: { value: 10 }, uMaxCoC: { value: 16 },
       uHighlightClamp: { value: 7 },
+      uHighlightClampGain: { value: 1 },
     });
 
     this.nearMaxH = new FxPass('dofNearMaxH', NEARMAX_FRAG, {
@@ -404,6 +442,7 @@ export class DoF {
     p.uCoCScale.value = cocScale;
     p.uMaxCoC.value = maxCoC;
     p.uHighlightClamp.value = cfg.highlightClamp;
+    p.uHighlightClampGain.value = cfg.highlightClampGain ?? 1;
     this.prepare.render(r, this.rtPrep);
 
     // Dilate the near CoC across the full aperture, in quarter-res steps.

@@ -244,6 +244,15 @@ function defaults() {
       maxBackgroundCoC: 0.005,
       nearGain: 1.0, edgeBoost: 0.14, blendLo: 1.0, blendHi: 3.0,
       highlightClamp: 7.0,
+      /* Largest multiplier the CoC-area scaling may apply to highlightClamp,
+         i.e. the ceiling a BARELY defocused point gets. 1 restores the old
+         flat clamp and is the A/B control. The far field's CoC is capped at
+         maxBackgroundCoC * halfResHeight = 3.0 half-res px against the near
+         field's 13, so (13/3)^2 = 18.8 is what the solar disc actually asks
+         for; 24 leaves a little headroom without reaching the region where
+         the sweep stopped moving. See the derivation in DoF.js PREPARE_FRAG:
+         the flat 7.0 was clamping the sun to BELOW the in-focus snow. */
+      highlightClampGain: 24,
       /* Taps per square pixel of circle-of-confusion area, i.e. how densely
          the gather spiral samples the disc it is actually given. One per pixel
          is full coverage; the per-tier DOF_TAPS remains the ceiling and 6 the
@@ -279,6 +288,12 @@ function defaults() {
       cheapHistoryWhenStill: true,
     },
     debug: 'off',   // off | ao | bloom | rays | coc | hdr | depth
+    /* Multiplier for the `hdr` debug blit, so the scene-linear value of a
+       feature can be read off an 8-bit canvas by sweeping it: a pixel reads
+       255 exactly when radiance >= 1/debugScale. Not in the shipping path --
+       cfg.debug is 'off'. It exists because "is the sun brighter than the
+       snow BEFORE the tonemap" is not answerable from the graded frame. */
+    debugScale: 1,
   };
 }
 
@@ -367,6 +382,8 @@ export class PostFX {
       set exposure(v) { c.exposure = Math.max(0, +v || 0); },
       get debug() { return c.debug; },
       set debug(v) { c.debug = String(v || 'off'); },
+      get debugScale() { return c.debugScale; },
+      set debugScale(v) { c.debugScale = Math.max(1e-6, +v || 1); },
       reset() { self.taa?.reset(); },
       rebuild() { self._build(self.ctx); return self.ok; },
       stats() { return self._stats(); },
@@ -908,7 +925,7 @@ export class PostFX {
       bloom: [this.bloom?.texture, 0, 6],
       rays: [this.rays?.texture, 0, 3],
       coc: [this.dof?.rtPrep.texture, 3, 0.08],
-      hdr: [colour, 0, 1],
+      hdr: [colour, 0, this.cfg.debugScale ?? 1],
       depth: [depthTex, 1, 1],
     };
     const entry = map[mode];
