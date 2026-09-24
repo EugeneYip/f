@@ -56,6 +56,20 @@ function defaults() {
     // goes flat and chalky. Pulling ~1.3 stops down puts snow near the top of
     // the curve with room to gradate, and drops the fox's shade side into the
     // part of the curve that still has contrast.
+    /* HELD AT 1.08 DELIBERATELY, and this is the lever for `frame has
+       contrast`, which fails at sd 32.6 against a floor of 35. Sweeping it on
+       the portrait frame, whole-frame standard deviation:
+
+           x1.00 (1.08)  sd 32.2      x0.50  sd 36.6
+           x0.85 (0.92)  sd 33.4      x0.25  sd 38.7
+           x0.70 (0.76)  sd 34.7
+
+       The check is reachable, at 0.75-0.81 -- and getting there costs the
+       frame 12 levels of mean (185 -> 173) and the subject 11 (196 -> 185).
+       Bible SS3 says exposure ~1.0 and the review calls the snow the strongest
+       system in the build; darkening the whole scene 0.4 stops to clear an sd
+       threshold is buying a gate with the product. Reported, not taken. The
+       highlight knee is NOT what costs that check: it moves sd 32.6 -> 32.5. */
     exposure: 1.08,
     sharpen: 0.35,
     autofocus: false,
@@ -92,7 +106,28 @@ function defaults() {
          0.75 rather than 0.80 because the reported quantity is a MAXIMUM over
          235 blocks and an extremum flaps: the control measured 54.85 / 55.40 /
          54.89 on three runs of identical code. 0.80 sits at 0.7-1.2% against a
-         3% bar; 0.75 sits at zero and costs 0.4 levels of sd to get there. */
+         3% bar; 0.75 sits at zero and costs 0.4 levels of sd to get there.
+
+         WHAT THE SHOULDER COSTS, measured rather than assumed. A shoulder buys
+         the absence of a clip with slope at the top, so the fair question is
+         how much micro-amplitude survives where the clamp used to be. Scored
+         on a FIXED mask -- the 21,247 pixels the control put at/above 252 --
+         as the mean 3x3 high-pass of the max channel:
+
+             knee 1.00 (control)  1.348    44.1% of those px locally flat
+             knee 0.90            1.036    45.9%
+             knee 0.85            1.071    44.5%
+             knee 0.80            1.045    44.2%
+             knee 0.75            1.020    44.8%
+
+         The cost is paid entirely by the FIRST bit of shoulder and then stops:
+         0.75 costs no more amplitude than 0.90, and 0.90 still leaves 41% of
+         the worst block at/above 252. So there is no cheaper knee. Part of the
+         control's 1.348 is not detail at all but the STEP at the edge of its
+         own plateau -- a 255 pixel beside a 248 one is high-frequency energy,
+         and it is the defect. Inside the 7,596 pixels the clamp put at exactly
+         255 in portrait.png, the before frame carries ONE distinct value with
+         standard deviation 0.00; the after frame carries 8, sd 0.63. */
       highlightKnee: 0.75,
       // lookPower > 1 is the contrast lever that does NOT shorten the
       // highlight rolloff: it bends the midtones down while pinning 1.0, so
