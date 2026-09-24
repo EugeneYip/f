@@ -687,7 +687,19 @@ export const FUR_DEFAULTS = {
    * 48 mm-deep depth lottery, not anything in the coat's own shading.
    * 1.0 would need depthFunc LEQUAL; the residual keeps the stack ordered.
    */
-  depthFlat: 0.0,
+  depthFlat: 0.95,
+  /*
+   * The card layer's share of the same lever, and it is SEPARATE because the
+   * two cannot be driven together. Measured at 1.0 with depthFunc LEQUAL on
+   * both meshes (which flattening the cards forces, since they then sit at
+   * exactly the shells' depth): the AO pass comes up from 0.630 to 0.751 and
+   * the flank from 153.65 to 164.08, but LEQUAL means nothing occludes a card
+   * any more and the DOUBLE-SIDED far-side cards draw straight through the
+   * animal -- hard triangular shards over the ear and brow at `portrait`,
+   * shots/fur4/env-high/portrait.png. Left at 0; the knob is here so the next
+   * agent does not have to rediscover why.
+   */
+  depthFlatCard: 0.0,
   fillTop: 1.12,
   fillJitter: 0.30,
   cardTip: 0.45,
@@ -1714,6 +1726,7 @@ export function buildFurUniforms(ctx) {
     uPathKMax: { value: d.pathKMax },
     uShellDeep: { value: d.shellDeep },
     uDepthFlat: { value: d.depthFlat },
+    uDepthFlatCard: { value: d.depthFlatCard },
     uFillTop: { value: d.fillTop },
     uFillJitter: { value: d.fillJitter },
     uCardTip: { value: d.cardTip },

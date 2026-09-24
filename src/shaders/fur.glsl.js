@@ -153,6 +153,7 @@ uniform vec3  uNose;           // nose pad centre, bind space
 uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
 uniform float uDepthFlat;      // how far the shells' WRITTEN depth moves to the coat's outer envelope
+uniform float uDepthFlatCard;  // the same for the cards -- see FUR_DEFAULTS, it cannot follow uDepthFlat
 uniform float uCoatScale;
 uniform float uLay;
 uniform float uDroop;
@@ -1782,10 +1783,10 @@ void main(){
   // 5.44 mm to 4.42 mm and the AO pass still returns 0.69. The cards are
   // the LAST thing the animal draws, so whatever they write is what every
   // screen-space pass reads.
-  if (uDepthFlat > 0.001){
+  if (uDepthFlatCard > 0.001){
     vec4 mvE = mvPosition + vec4(mat3(viewMatrix) * (wn * aboveCoat), 0.0);
     vec4 cE  = projectionMatrix * mvE;
-    float zN = mix(gl_Position.z / gl_Position.w, cE.z / cE.w, uDepthFlat);
+    float zN = mix(gl_Position.z / gl_Position.w, cE.z / cE.w, uDepthFlatCard);
     gl_Position.z = zN * gl_Position.w;
   }
 
