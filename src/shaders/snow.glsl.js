@@ -917,9 +917,22 @@ void main(){
   // units as uSkyColor * uSkyInt (a fraction of the radiance of a white
   // lambertian surface under this rig), so it goes in at weight 1 and no new
   // gain is invented: what was already there is put where the eye reads it.
+  //
+  // This term is SKY LIGHT and it was the one sky term the body did not
+  // block. It matters more than its size suggests: it is largest exactly
+  // where NdotV is smallest, i.e. at the grazing framings -- paws, hero,
+  // silhouette -- which are the framings the critic measured the missing
+  // contact darkening in. Leaving it unoccluded put a floor under the
+  // contact term that no amount of uOcclMix could get below.
+  //
+  // It takes the interreflection's weaker share rather than the sky
+  // ambient's: a grazing reflection is dominated by directions near the
+  // horizon, and a body standing on the snow blocks the zenith far harder
+  // than it blocks the ring around it.
   float fres = 1.0 - NdotV; fres = fres * fres * (fres * fres) * fres;
   col += (uSkyColor * uSkyInt + uAurora)
-       * ((0.035 + 0.55 * fres) * (0.35 + 0.65 * packed));
+       * ((0.035 + 0.55 * fres) * (0.35 + 0.65 * packed))
+       * (1.0 - uOcclMix.y * contact);
 
   // --- sparkle --------------------------------------------------------------
   // Glints are a near-field phenomenon: at the horizon a crystal facet
