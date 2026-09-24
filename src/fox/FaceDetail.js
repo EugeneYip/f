@@ -37,6 +37,20 @@ const NOSE_H = 0.0098;      // full height
 const NOSE_D = 0.0072;      // how far it stands off the muzzle
 const NOSTRIL_DEPTH = 0.0036;
 const PHILTRUM_DEPTH = 0.0016;
+// How much dome a carve must leave standing above the muzzle surface. The
+// nostril slits and the philtrum are subtracted from the dome, and without a
+// floor they subtract straight past it into the skin -- see `buildNose`.
+//
+// AND THE FLOOR IS THE COAT CANOPY, NOT THE SKIN. 0.30 mm cleared the SDF
+// (worst pad vertex went -1.132 -> -0.025 mm) and changed the render by
+// almost nothing, because what comes through a nostril slit is not the skin,
+// it is the fur SHELLS standing off it. Measured off the anatomy agent's own
+// `furLength` attribute, in rings from the nose anchor: 5.15 mm at 0-3 mm,
+// 5.23 at 5-6 mm, 5.30 at 6-8 mm -- and the fur shader's uNoseFade then
+// shaves that to bare inside 4 mm and full by 7 mm, so the canopy over the
+// nostrils (4-5 mm out) is about 1.6 mm. That is the height the slit floor
+// has to clear, and 1.6 mm is 5x what the skin alone asked for.
+const NOSE_CARVE_FLOOR = 0.00165;
 
 const LIP_LEN = 0.052;      // how far back along the jaw the mouth line runs
 // A 2.4 mm tall band with 0.75 mm of recess is not a mouth, it is a scratch,
@@ -141,10 +155,35 @@ function buildNose(w, h, d, n, baseAt) {
       // Dome, fading to nothing at the rim so the pad dies into the muzzle.
       const dome = d * Math.pow(Math.max(0, 1 - r2), 0.60) *
         (1.0 - Math.pow(r2, 6.0));
-      let z = base + dome;
       const [nostril, phil] = noseCarve(ux, uy);
-      z -= NOSTRIL_DEPTH * nostril;
-      z -= PHILTRUM_DEPTH * phil;
+
+      // THE CARVE MAY NOT DIG BELOW THE MUZZLE, and it was doing exactly that.
+      //
+      // The slits were subtracted from the dome as flat depths, so the floor
+      // of a slit sat at base + dome - 3.6 mm. The dome is only 5.8 mm at the
+      // apex and the nostrils are NOT at the apex: at r = 0.7 the dome is
+      // 3.0 mm, so the slit floor landed 0.6 mm INSIDE the skin, and the
+      // philtrum at uv (0, -1) reached 1.13 mm inside it. Measured on the
+      // live rig against the anatomy agent's own SDF, before this change:
+      // 288 of 3249 pad vertices (8.9%) were inside the skin, worst -1.132 mm.
+      //
+      // What that renders as is not a subtle intersection. The fur SHELLS sit
+      // on the skin, so wherever the pad dips under it the innermost shells
+      // come through the slit -- and at `chin` those were the two hard white
+      // teardrops at the outer end of each nostril, the brightest thing on
+      // the face and the "single blown specular" the review reads at
+      // portrait. Confirmed by tinting each surface a unique primary: the
+      // teardrops came back SHELL yellow, not pad red, so they were never a
+      // highlight at all.
+      //
+      // Smooth-min rather than a clamp: a hard max() puts a crease along the
+      // line where the floor starts binding, and a crease across a nostril
+      // reads as a moulding seam. `k` is 0.6 mm of blend.
+      const avail = Math.max(0, dome - NOSE_CARVE_FLOOR);
+      const want = NOSTRIL_DEPTH * nostril + PHILTRUM_DEPTH * phil;
+      const k = 0.0006;
+      const eaten = 0.5 * (want + avail - Math.sqrt((want - avail) ** 2 + k * k));
+      const z = base + dome - Math.max(0, eaten);
       pos.push(ux * w * 0.5, uy * h * 0.5, z);
       uvs.push(ux, uy);
     }
@@ -576,6 +615,10 @@ export class FaceDetail {
       clearcoat: 1.0,
       clearcoatRoughness: 0.045,
       envMapIntensity: 0.45,
+      // The rim is cut into a comb of hair tips in the fragment shader (see
+      // below). alphaTest rather than transparent: the pad stays in the
+      // opaque queue, writes depth, and needs no sorting against the coat.
+      alphaTest: 0.5,
     });
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.u);
@@ -605,6 +648,29 @@ export class FaceDetail {
   // The rim of the pad darkens into the fur rather than ending on an edge.
   fdCol *= mix(1.0, 0.70, smoothstep(0.72, 1.0, fdR));
   diffuseColor.rgb = fdCol;
+
+  // AND THE EDGE ITSELF IS RAGGED, because a rhinarium does not end on a
+  // curve. §4f rule 3 requires the leather to be bare -- that part is right
+  // and is not the defect. The defect is that the boundary is a clean ellipse
+  // with pale coat on one side and black leather on the other, and no real
+  // animal has that: the short hair of the muzzle overlaps the planum, so the
+  // outline is a comb of hair tips a fraction of a millimetre long.
+  //
+  // Cut them out of the pad with alphaTest rather than painting them on. The
+  // surface immediately behind the rim is the fur shell, so every discarded
+  // tooth shows COAT through it, which is what the overlap actually is; a
+  // painted gradient would only blur the same ellipse.
+  //
+  // The direction vector is a unit vector, so sampling noise along it traces
+  // a circle and the teeth are periodic round the rim by construction -- no
+  // seam where the angle wraps. Teeth reach past r = 1 on some columns, which
+  // leaves those keeping the full pad, so the comb has long and short teeth
+  // instead of a scalloped edge of uniform depth.
+  vec2 fdDir = fdR > 1e-4 ? vPadUv / fdR : vec2(1.0, 0.0);
+  float fdTeeth = snoise(vec3(fdDir * 26.0, 1.7)) * 0.5 + 0.5;
+  float fdTeethF = snoise(vec3(fdDir * 61.0, 4.3)) * 0.5 + 0.5;
+  float fdEdge = mix(0.860, 1.010, fdTeeth * 0.64 + fdTeethF * 0.36);
+  diffuseColor.a = 1.0 - smoothstep(fdEdge - 0.022, fdEdge + 0.022, fdR);
 `)
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
   // Wet on the pad, dry and matte inside the nostrils — the contrast between
