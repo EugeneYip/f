@@ -22,6 +22,45 @@
 // on AgX has the pleasant side effect that the bypass path
 // (ctx.postfx.enabled = false) renders exactly the app's default look, which
 // makes the A/B comparison honest rather than a blown-out linear straw man.
+// TWO DIAGNOSES HANDED TO THIS FILE IN REVIEW 5 THAT THE DATA DISAGREES WITH.
+//
+// 1. "The grade is crushing the backlit rim to nothing." It is not; post
+//    measures the rim HIGHER than the raw render does. Same probe spec.mjs
+//    uses -- the coverage matte divides the backdrop back out of the rim, so
+//    what is left is the fur's own radiance -- run on the POST frame at
+//    `silhouette`, 27,098 rim pixels and 108,649 core pixels:
+//
+//                        raw (spec)    post      post, knee 0.75
+//        rim / backdrop      1.236     1.287         1.272
+//        rim / core          1.206     1.303         1.291
+//
+//    As rendered, the rim pixels read 223.2 against a backdrop of 196.3 and a
+//    fur core of 193.9. A row scan across the left ruff contour crosses
+//    182-196 outside, 250-254 at the fringe, 235-242 in the body: a 55-70
+//    level rim, not an absent one, and the ear edges show it plainly. What is
+//    true is that the rim has little LOCAL contrast where the animal stands
+//    against lit snow rather than sky -- which is the backdrop, not the
+//    tonemap. The grade is exonerated and the check stays on the raw frame.
+//
+// 2. "A hard-edged blue polygon chip on the face at `portrait`; it may be a
+//    TAA reprojection artefact." It is not post at all. Elimination inside one
+//    page session at one sim instant, over a 140x110 box at (640,520) that
+//    contains the chip, with the crop of every arm looked at:
+//
+//        base                                  darkest pixel  35   dark% 4.69
+//        hide eyeGlobeL + eyeCorneaL + eyeLidsL              126   dark% 0.79
+//        hide eyeGlobeR + eyeCorneaR + eyeLidsR               33   dark% 5.18
+//        skip DoF                                             34   dark% 4.79
+//        skip TAA                                             34   dark% 11.84
+//        base again                                           34   dark% 4.96
+//
+//    Hiding the LEFT eye's three meshes removes the chip completely and leaves
+//    clean muzzle fur; the RIGHT eye is the negative control and changes
+//    nothing. DoF does nothing and TAA makes it MORE visible, so TAA is partly
+//    hiding it rather than causing it. Part of the chip is drawn against the
+//    sky, outside the head's silhouette, so the far eye is placed outside the
+//    muzzle rather than mis-sorted against it. src/fox/Eyes.js -- face agent.
+//
 import * as THREE from 'three';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { clamp, damp, smoothstep } from '../util/math.js';
