@@ -500,6 +500,30 @@ const LASH_TIP = 0.000013;
 const LASH_MIN_PX = 1.05;          // screen-space width floor
 const LASH_SEGS = 5;
 
+// WHERE THE FOLLICLE IS. "Built from the aperture curves at aS = 0" was only
+// half the statement, and the missing half is radial.
+//
+// aS = 0 is the right ANGLE — it is the free edge of the fissure. But the lid
+// BAND at aS = 0 does not sit on the globe: `buildLids`'s vertex is
+// feDir * (feGlobeR + feProud) with feProud = uR * (0.010 + 0.048) at aS = 0,
+// i.e. 0.058 R proud, while the lash rooted at feGlobeR + 0.012 R. On an
+// 11.56 mm globe that is 0.53 mm of lid thickness the follicle was under, and
+// because the root direction is 23 degrees off the optical axis a smaller
+// radius projects INWARD: measured at macro_eye, the upper margin at u = 0
+// lands at y = 433.1 px and the lash root at y = 441.0 px, so every follicle
+// sat 7.9 px inside the palpebral aperture, on the bare globe. Matted against
+// a no-lash arm, 563 px of cilia ink (22.9 % of it) fell on the exposed globe.
+//
+// Two changes, both taken from the lid's own solve so the two can never
+// disagree again: the root carries the lid's `feProud`, and it sits a fixed
+// arc ANTERIOR of the free edge rather than on it — cilia emerge from the
+// anterior lamella, in front of the mucocutaneous junction, not out of the
+// tarsal edge itself. In millimetres, not in band fractions: `aSpread` is
+// measured per column and runs 3:1 around one socket, so a fixed fraction of
+// the band would put the lash line three times further back under the brow
+// than at the canthus.
+const LASH_ROOT_ARC = 0.00045;     // metres of arc anterior of the free edge
+
 /** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
 const chord = (t) => t / Math.sqrt(1 + t * t);
 
@@ -720,10 +744,12 @@ function buildGlobe(R, Rc, zc, k, segW, segH) {
  *
  * Positions are placeholders exactly as they are for the lid band: the real
  * vertex position is solved in the vertex shader from the same aperture
- * curves, at aS = 0, so a lash roots where the margin actually is at this
- * blink and follows it shut.
+ * curves, so a lash roots where the margin actually is at this blink and
+ * follows it shut. `spreadAt` is the SAME per-column sampler `buildLids`
+ * uses — the follicle has to know how long the band is at its own column to
+ * convert LASH_ROOT_ARC into a position on it.
  */
-function buildLashes(n, segs, seed) {
+function buildLashes(n, segs, seed, spreadAt) {
   const rnd = rng(seed);
   const count = n * (segs + 1) * 2;
   const pos = new Float32Array(count * 3);        // placeholder, shader solves it
@@ -734,6 +760,7 @@ function buildLashes(n, segs, seed) {
   const aLen = new Float32Array(count);
   const aCurl = new Float32Array(count);
   const aSkew = new Float32Array(count);
+  const aSpread = new Float32Array(count);
   const idx = [];
   let v = 0;
   for (let k = 0; k < n; k++) {
@@ -748,12 +775,14 @@ function buildLashes(n, segs, seed) {
     const curl = LASH_CURL * (0.72 + 0.56 * rnd());
     // Fan: lashes near a canthus lean toward it.
     const skew = u * 0.55 + (rnd() - 0.5) * 0.30;
+    const spread = spreadAt(1, u);
     for (let i = 0; i <= segs; i++) {
       const tt = i / segs;
       const w = lerp(LASH_THICK, LASH_TIP, Math.pow(tt, 0.55)) * 0.5;
       for (const sd of [-1, 1]) {
         aU[v] = u; aT[v] = tt; aSide[v] = sd; aWidth[v] = w;
         aLen[v] = len; aCurl[v] = curl; aSkew[v] = skew;
+        aSpread[v] = spread;
         v++;
       }
     }
@@ -771,6 +800,7 @@ function buildLashes(n, segs, seed) {
   g.setAttribute('aLen', new THREE.BufferAttribute(aLen, 1));
   g.setAttribute('aCurl', new THREE.BufferAttribute(aCurl, 1));
   g.setAttribute('aSkew', new THREE.BufferAttribute(aSkew, 1));
+  g.setAttribute('aSpread', new THREE.BufferAttribute(aSpread, 1));
   g.setIndex(idx);
   return g;
 }
@@ -1279,7 +1309,7 @@ export class Eyes {
     // Cilia, in the LID's frame (they root on the margin, which is yawed with
     // the fissure) rather than the globe's.
     const lashes = new THREE.Mesh(
-      buildLashes(segs.LN, LASH_SEGS, side === 'L' ? 20261 : 20262),
+      buildLashes(segs.LN, LASH_SEGS, side === 'L' ? 20261 : 20262, spreadAt),
       this._lashMaterial(u));
     lashes.name = `eyeLashes${side}`;
     lashes.castShadow = false;
@@ -2276,6 +2306,7 @@ void main(){
       uniforms: Object.assign({
         uMinPx: { value: LASH_MIN_PX },
         uViewportH: { value: 800 },
+        uLashRootArc: { value: LASH_ROOT_ARC },
         // DARK, not white. An arctic fox's cilia are pale in the hand, but a
         // pale lash on a pale lid on a white animal is invisible at every
         // framing in `shots/` -- and "no eyelashes" is the review's
@@ -2291,24 +2322,31 @@ void main(){
       depthTest: true,
       side: THREE.DoubleSide,
       vertexShader:
-        'attribute float aU, aT, aSide, aWidth, aLen, aCurl, aSkew;\n' +
+        'attribute float aU, aT, aSide, aWidth, aLen, aCurl, aSkew, aSpread;\n' +
         'varying float vT, vAcross, vCov;\n' +
         'varying vec3 vWN;\n' +
         EYE_UNIFORMS + APERTURE_GLSL + GLOBE_GLSL + /* glsl */ `
 uniform float uMinPx, uViewportH;
+uniform float uLashRootArc;
 
 void main(){
   vT = aT; vAcross = aSide;
 
-  // The margin, solved exactly as the lid solves it at aS = 0 -- same curves,
-  // same blink rotation. A lash that roots on a static copy of the margin
-  // detaches from the lid the instant the eye blinks.
+  // The margin, solved exactly as the lid solves it -- same curves, same
+  // per-column aSpread, same blink rotation, same feProud. A lash that roots
+  // on a static copy of the margin detaches from the lid the instant the eye
+  // blinks; a lash that roots on a DIFFERENT RADIUS from the margin sinks
+  // into the eyeball, which is what this used to do.
   float feYRest = feApUpY(aU);
   vec3 feRest = normalize(vec3(aU * uApW, feYRest, 1.0));
   vec3 feRad = vec3(feRest.xy, 0.0);
   float feRl = length(feRad);
   feRad = feRl > 1e-5 ? feRad / feRl : vec3(0.0, 1.0, 0.0);
-  float feTh = acos(clamp(feRest.z, -1.0, 1.0));
+  // Anterior of the free edge by a fixed ARC, converted to this column's own
+  // band fraction so the follicle line is the same millimetre distance from
+  // the lid edge at the canthus as it is under the brow.
+  float feS = clamp(uLashRootArc / max(aSpread * uR, 1e-6), 0.0, 0.35);
+  float feTh = acos(clamp(feRest.z, -1.0, 1.0)) + aSpread * feS;
   vec3 feDir = vec3(0.0, 0.0, cos(feTh)) + feRad * sin(feTh);
 
   float feRestA = atan(uApUp);
@@ -2318,7 +2356,10 @@ void main(){
   feDir = vec3(feDir.x, feDir.y * cs - feDir.z * sn, feDir.y * sn + feDir.z * cs);
   feRad = vec3(feRad.x, feRad.y * cs - feRad.z * sn, feRad.y * sn + feRad.z * cs);
 
-  vec3 root = feDir * (feGlobeR(feDir) + uR * 0.012);
+  // feProud, character for character as buildLids' begin_vertex writes it.
+  float feProud = uR * (0.010 + 0.048 * exp(-feS * 9.0)
+                        + uLidSwell * 4.0 * feS * (1.0 - feS));
+  vec3 root = feDir * (feGlobeR(feDir) + feProud);
 
   // Out of the margin, then curling away from the globe. The lateral term is
   // the fan: lashes near a canthus lean toward it.
