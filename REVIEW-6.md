@@ -355,3 +355,39 @@ agree with the instrument. I did not credit `frame has contrast`.
 
 VERDICT: REJECT
 Scores: A2/10 B2/10 D2/10 H2/10 C3/10 E3/10 F3/10 G3/10
+
+---
+
+## ORCHESTRATOR ADDENDUM — the grey flank patches scale with shell count
+
+Added after the review, from my own measurement, because it changes who owns
+the defect.
+
+With the fur LOD fix (20791ea) in place, `hero` at `high` shows large smooth
+GREY PATCHES on the flank, shoulder and rump. The shell agent's last words
+before a usage limit killed it were "The patches are already there with my
+term off", so they are **not** its per-strand shadowing.
+
+Same flank box (rows 500-700, cols 800-1150 of the 1920x1200 `hero` frame),
+same commit, two quality tiers:
+
+| tier | meanL | p10 | p90 | frac < 160 | sd |
+|---|---|---|---|---|---|
+| high (18 shells, 967k tris) | 153.3 | 110.5 | 224.2 | **62.7 %** | **45.02** |
+| low (303k tris) | 174.2 | 155.6 | 212.1 | 25.5 % | 21.27 |
+
+At `low` the coat is bright and even and there are no patches at all. At
+`high` nearly two thirds of the flank sits below 160 and the variance
+doubles. The defect therefore scales with the shell count, which points at
+the shell stack itself — a per-shell term that accumulates per SHELL rather
+than per unit of coat depth would behave exactly like this, and would have
+been invisible while `shoot.mjs` was freezing every pose at 14 shells.
+
+Caveat, stated because the comparison is not clean: `low` and `high` differ
+in more than shell count (cards, shadow resolution, AO). This is a pointer,
+not an attribution. The controlled experiment is to hold the tier fixed and
+sweep the shell count alone.
+
+Also worth noting from the same pair: `low` reads as a *plusher* animal than
+`high` — smoother, denser, less bladed — which is the opposite of what the
+tier ladder is supposed to deliver.
