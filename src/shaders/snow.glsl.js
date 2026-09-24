@@ -565,7 +565,37 @@ uniform vec3  uShade;
 // Mean of the detail map's cavity channel, read back off the baked target at
 // init. See the cavD block in main().
 uniform float uDetailAoDC;
+// DISTANCE-DEPENDENT PENUMBRA. See the block above the filter in
+// snShadowMask() for the derivation; SnowMaterial._updatePenumbra() owns the
+// numbers.
+//   x  shadow-map UV filter RADIUS per metre of caster-to-receiver distance.
+//      0 disables the filter entirely and restores the single-tap lookup
+//      exactly, which is the null arm of every A/B below.
+//   y  ceiling on that radius, UV.
+//   z  height of the top of the animal above the snow, metres.
+//   w  spare.
+uniform vec4  uPenumbra;
+uniform vec2  uCasterXZ;   // world x,z the animal stands on
 vec4 gShadowDbg;   // c.xy, m.x, m.y — debug views 7/8
+
+#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+/**
+ * One variance-shadow lookup, Chebyshev-remapped. Split out of snShadowMask()
+ * so the penumbra filter can call it per tap; mOut hands the raw moments
+ * back for the debug views without paying a second fetch.
+ */
+float sn_vsmTap(vec2 uv, float z, out vec2 mOut){
+  // The VSM target packs (mean depth, std deviation) as two halves per RGBA8.
+  vec2 m = unpackRGBATo2Half(texture2D(directionalShadowMap[ 0 ], uv));
+  mOut = m;
+  if (m.x <= uShadowEmpty) return 1.0;
+  if (step(z, m.x) == 1.0) return 1.0;
+  float d = z - m.x;
+  float v = max(m.y * m.y, 2.5e-6);
+  float p = v / (v + d * d);
+  return clamp((p - 0.15) / 0.55, 0.0, 1.0);
+}
+#endif
 
 float snShadowMask(){
   gShadowDbg = vec4(0.0, 0.0, -1.0, -1.0);
@@ -608,10 +638,6 @@ float snShadowMask(){
   vec2 dd = abs(c.xy - 0.5);
   float edge = 1.0 - smoothstep(0.40, 0.495, max(dd.x, dd.y));
   if (edge <= 0.001 || c.z > 1.0 || c.z < 0.0) return 1.0;
-  // The VSM target packs (mean depth, std deviation) as two halves per RGBA8.
-  vec2 m = unpackRGBATo2Half(texture2D(directionalShadowMap[ 0 ], c.xy));
-  gShadowDbg = vec4(c.xy, m.x, c.z);
-  if (m.x <= uShadowEmpty) return 1.0;
   // The clamp is what remains of the peter-panning at a grazing sun. The
   // receiver-plane term is proportional to cot(elevation), so it runs away as
   // the sun drops: at 2 degrees six texels of slack is 0.026 of normalised
@@ -621,13 +647,88 @@ float snShadowMask(){
   // what the VSM blur can leak, not by self-shadowing: 0.005 is 48 mm, about
   // one paw.
   c.z -= min(slack, 0.005);
-  float occ = 1.0;
-  if (step(c.z, m.x) != 1.0) {
-    float dist = c.z - m.x;
-    float var = max(m.y * m.y, 2.5e-6);
-    float p = var / (var + dist * dist);
-    occ = clamp((p - 0.15) / 0.55, 0.0, 1.0);
+
+  vec2 m;
+  float occ = sn_vsmTap(c.xy, c.z, m);
+  gShadowDbg = vec4(c.xy, m.x, c.z);
+
+  // --- THE PENUMBRA HAS TO WIDEN WITH DISTANCE FROM THE CASTER -------------
+  //
+  // The sun is not a point: it subtends 0.533 degrees, so a straight edge
+  // held D metres above a surface throws a penumbra D * tan(0.533) = 9.3 mm
+  // per metre wide. At the default 6.6 degree rig the animal's shadow is
+  // displaced downsun by height / tan(elev) = 8.64 x height, so ONE frame
+  // holds caster distances from 0 at the paw to 4.5 m at the tip of the body
+  // shadow -- 0 mm of penumbra under the foot and 42 mm at the far end.
+  //
+  // What we had instead was sun.shadow.radius = 4.5, a FIXED box blur of the
+  // shadow map, and it does not even deliver a fixed penumbra: three's
+  // Chebyshev remap collapses the blur's coverage ramp into the sliver
+  // between 72% and 90% coverage, so the drawn edge measured 6.3 mm at every
+  // caster distance from 0 to 4 m -- which is this probe's hard-edge floor.
+  // 1.11x of variation where the sun's angular size demands 15x.
+  //
+  // So: PCSS, with the blocker search replaced by geometry.
+  //
+  // A blocker search is N more taps per pixel and the previous lighting agent
+  // could not cost it. It is also not needed HERE, because this receiver is a
+  // near-horizontal snowfield and the caster is one animal standing on it.
+  // For a flat receiver the arithmetic is exact and closed-form: a caster
+  // point h above the ground lands its shadow s = h / tan(e) downsun, and the
+  // distance it travelled along the light ray to get there is h / sin(e) =
+  // s / cos(e). So the caster distance at a shadow point is just its DOWNSUN
+  // DISTANCE from the animal's own ground point, divided by cos(elevation) --
+  // no taps, no depth readback, and exact at every sun elevation including
+  // overhead.
+  //
+  // Two honest error terms, both bounded and both erring crisp:
+  //   * the animal is 0.55 m long, so measuring s from its centroid is worth
+  //     up to +-0.3 m of caster distance, i.e. +-2.8 mm of penumbra;
+  //   * the receiver is sastrugi, not a plane, but its relief is centimetres
+  //     against metres of s.
+  // The uPenumbra.z / sin(e) ceiling is the physical one: nothing on this
+  // animal is higher than the top of its head, so no part of its shadow can
+  // have been cast from further away than that.
+  //
+  // The taps average the OCCLUSION, not the moments. Averaging moments over a
+  // wide kernel is a wider VSM blur, and a wider VSM blur is exactly what
+  // does not work here -- the variance grows with the kernel and Chebyshev
+  // reads growing variance as light leaking. Averaging near-binary taps gives
+  // a coverage ramp, which is what a penumbra is.
+  float rad = 0.0;
+  if (uPenumbra.x > 0.0) {
+    float cosE = length(uSunDir.xz);
+    float sinE = max(uSunDir.y, 1e-3);
+    vec2  dsun = -uSunDir.xz / max(cosE, 1e-4);          // horizontal, downsun
+    float s    = dot(vWorld.xz - uCasterXZ, dsun);
+    float cd   = min(max(s, 0.0) / max(cosE, 0.10), uPenumbra.z / sinE);
+    rad = min(cd * uPenumbra.x, uPenumbra.y);
   }
+#if SN_PEN_TAPS > 0
+  if (rad > uShadowTexel.x) {
+    // Golden-angle spiral: area-uniform radii, and the whole pattern is
+    // rotated per pixel by an interleaved-gradient hash so the ramp reads as
+    // grain that TAA resolves rather than as N discrete steps. Deterministic
+    // in gl_FragCoord, so rule 6 holds.
+    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                                             vec2(0.06711056, 0.00583715))));
+    float a = 6.2831853 * ign;
+    vec2 dir = vec2(cos(a), sin(a));
+    float sum = occ;
+    for (int i = 0; i < SN_PEN_TAPS; i++) {
+      vec2 o = dir * (sqrt((float(i) + 0.5) / float(SN_PEN_TAPS)) * rad);
+      // Receiver-plane depth at the tap, from the Jacobian above. Without it
+      // a tap offset 18 mm downsun compares against the CENTRE's depth, and
+      // at 6.6 degrees 18 mm of depth is 157 mm of ground -- the filter would
+      // smear the shadow along the sun instead of softening its edge.
+      vec2 md;
+      sum += sn_vsmTap(c.xy + o, c.z + clamp(dot(dzduv, o), -0.02, 0.02), md);
+      dir = vec2(dir.x * -0.73736888 - dir.y * 0.67549029,
+                 dir.x *  0.67549029 + dir.y * -0.73736888);
+    }
+    occ = sum / float(SN_PEN_TAPS + 1);
+  }
+#endif
   return mix(1.0, mix(1.0, occ, directionalLightShadows[ 0 ].shadowIntensity), edge);
 #else
   return 1.0;

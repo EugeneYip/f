@@ -207,9 +207,23 @@ export function makePermTable(seed = 20260918) {
   return { data, tex };
 }
 
+/**
+ * tan(0.5334 degrees) -- the sun's mean angular DIAMETER as seen from Earth,
+ * as a width per unit of distance. This is the only number in the penumbra;
+ * everything else is geometry. Not a tuning knob: if a render needs a softer
+ * shadow than this, the source is wrong, not the filter.
+ */
+const SUN_TAN_DIAMETER = 0.0093096;
+
 export class SnowMaterial {
   constructor(footUniforms) {
     this.footUniforms = footUniforms;
+    // A/B handle on the distance-dependent penumbra. 1 is the product; 0
+    // makes uPenumbra.x zero, which skips the filter entirely and restores
+    // the single-tap lookup bit for bit. Set it on ctx.terrain.snow.
+    this.penumbraScale = 1;
+    this._casterOk = false;
+    this._casterX = 0; this._casterZ = 0; this._casterTop = 0;
   }
 
   init(ctx, perm) {
@@ -249,6 +263,15 @@ export class SnowMaterial {
         // between each paw and the start of its shadow -- 84 mm at the
         // default sun, 190 mm at 2 degrees, against a 40 mm paw.
         uShadowBias: { value: new THREE.Vector2(0.0, 1.0) },
+        // --- distance-dependent penumbra (see snShadowMask) ----------------
+        // x: shadow-map UV filter radius per metre of caster-to-receiver
+        //    distance · y: ceiling on that radius, UV · z: the animal's own
+        //    height above the snow, metres · w: spare.
+        // Republished each frame in _updatePenumbra(), which is where the
+        // arithmetic and the A/B null both live. x = 0 restores the old
+        // single-tap lookup exactly.
+        uPenumbra: { value: new THREE.Vector4(0, 0, 0.62, 0) },
+        uCasterXZ: { value: new THREE.Vector2(0, 0) },
         uBounce: { value: new THREE.Color(1, 1, 1) },
         uBounceInt: { value: 0.13 },
         uAlbedo: { value: new THREE.Color(0.90, 0.93, 0.965) },
@@ -318,6 +341,7 @@ export class SnowMaterial {
         SUN_TAPS: this._sunTaps(q),
         SPARKLE_OCT: this._sparkleOct(q),
         SN_OCCL: OCCLUDERS.length,
+        SN_PEN_TAPS: this._penTaps(q),
       },
     });
     this.material.name = 'snow';
@@ -364,6 +388,21 @@ export class SnowMaterial {
   _sunTaps(q) {
     const seg = q.get('terrainSegments');
     return seg >= 384 ? 4 : seg >= 256 ? 3 : 2;
+  }
+
+  /**
+   * Taps in the distance-dependent penumbra filter (snShadowMask).
+   *
+   * Keyed to the SHADOW MAP, because that is what sets how many texels the
+   * filter has to cover: 3072 texels over a 3.1 m frustum is 1.0 mm a texel,
+   * and the widest penumbra the default rig asks for is 50 mm. These taps are
+   * only paid inside the light frustum's ~3 x 9.6 m footprint on the snow --
+   * every other fragment leaves on the `edge` test one line earlier, which is
+   * what makes a nine-tap filter affordable at all.
+   */
+  _penTaps(q) {
+    const s = q.get('shadowMapSize');
+    return s >= 4096 ? 12 : s >= 2048 ? 8 : 5;
   }
 
   /**
@@ -461,6 +500,7 @@ export class SnowMaterial {
     if (sm && sm.x > 0) u.uShadowTexel.value.set(1 / sm.x, 1 / sm.y);
     this._updateAirlight(ctx);
     this._updateOccluders(ctx);
+    this._updatePenumbra(ctx);
     const w = ctx.wind;
     const wl = Math.hypot(w.x, w.z) || 1;
     this.field.uWindXZ.value.set(w.x / wl, w.z / wl);
@@ -506,7 +546,8 @@ export class SnowMaterial {
       arr[i].set(_wp.x, _wp.y, _wp.z, OCCLUDERS[i][1]);
       cx += _wp.x; cy += _wp.y; cz += _wp.z; ok++;
     }
-    if (!ok) { u.uOcclBound.value.set(0, 0, 0, 0); return; }
+    if (!ok) { u.uOcclBound.value.set(0, 0, 0, 0); this._casterOk = false; return; }
+    this._casterOk = true;
     cx /= ok; cy /= ok; cz /= ok;
     // Cull radius. The per-sphere term has fallen to ~1% of its peak at ten
     // radii, so 1.25 m past the centroid covers the 0.125 m torso spheres and
@@ -519,11 +560,60 @@ export class SnowMaterial {
       reach = Math.max(reach, Math.hypot(s.x - cx, s.y - cy, s.z - cz) + s.w * 10.0);
     }
     u.uOcclBound.value.set(cx, cy, cz, reach);
+    // Reuse the same sweep for the penumbra's caster reference: the centroid
+    // is where the animal stands, and the highest sphere's top is how far
+    // above the snow anything of it gets.
+    let top = 0;
+    for (let i = 0; i < OCCLUDERS.length; i++) {
+      const s = arr[i];
+      if (s.w > 0) top = Math.max(top, s.y + s.w);
+    }
+    this._casterX = cx; this._casterZ = cz; this._casterTop = top;
+  }
+
+  /**
+   * THE FILTER WIDTH OF THE CAST SHADOW, PER METRE OF CASTER DISTANCE.
+   *
+   * The sun subtends 0.5334 degrees, so a straight edge D metres above a
+   * surface throws a penumbra D * tan(0.5334) = 9.31 mm per metre wide. The
+   * shader filters the shadow map over a DISK whose radius is half of that,
+   * expressed in shadow-map UV -- so the conversion is one number:
+   *
+   *     radius(UV) per metre = tan(0.5334 deg) / (2 * frustum width)
+   *
+   * and it has to be recomputed whenever the shadow camera moves, because
+   * Environment._placeLights() re-derives the frustum's depth from the sun's
+   * elevation on every sun change.
+   *
+   * The ceiling is a cost limit, not a physical one: SN_PEN_TAPS samples
+   * spread over a disk start to band once the disk is much wider than the
+   * penumbra the default rig asks for (50 mm at 6.6 degrees), and a sun at 2
+   * degrees would ask for 165 mm. 30 mm of radius = 60 mm of penumbra covers
+   * the whole review set and clamps the pathological low-sun case.
+   */
+  _updatePenumbra(ctx) {
+    const cam = ctx.environment?.sun?.shadow?.camera;
+    const p = this.uniforms.uPenumbra.value;
+    // No rig yet, or no shadow camera: report the filter OFF rather than
+    // guessing where the caster is. A wrong caster origin does not soften the
+    // wrong amount, it softens the wrong PLACE.
+    if (!cam || !(cam.right > cam.left) || !this._casterOk) { p.x = 0; return; }
+    const width = cam.right - cam.left;              // metres across the frustum
+    p.x = this.penumbraScale * SUN_TAN_DIAMETER / (2 * width);
+    p.y = 0.030 / width;
+    const gy = ctx.terrain?.heightAt ? ctx.terrain.heightAt(this._casterX, this._casterZ) : 0;
+    p.z = Math.max(0.05, this._casterTop - gy);
+    this.uniforms.uCasterXZ.value.set(this._casterX, this._casterZ);
   }
 
   onQuality(ctx) {
     const taps = this._sunTaps(ctx.quality);
     const oct = this._sparkleOct(ctx.quality);
+    const pen = this._penTaps(ctx.quality);
+    if (this.material.defines.SN_PEN_TAPS !== pen) {
+      this.material.defines.SN_PEN_TAPS = pen;
+      this.material.needsUpdate = true;
+    }
     if (this.material.defines.SUN_TAPS !== taps || this.material.defines.SPARKLE_OCT !== oct) {
       this.material.defines.SUN_TAPS = taps;
       this.material.defines.SPARKLE_OCT = oct;
