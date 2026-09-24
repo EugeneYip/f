@@ -78,6 +78,7 @@ const record = (name, ok, detail, severity = 'error') =>
   checks.push({ name, ok: !!ok, detail, severity });
 
 const srcBefore = await fingerprint(path.join(ROOT, 'src'));
+const toolsBefore = await fingerprint(path.join(ROOT, 'tools'));
 
 const server = await createServer({
   root: ROOT, logLevel: 'error',
@@ -1396,15 +1397,30 @@ const results = await page.evaluate(async () => {
       return { a, W, H };
     };
     const structure = ({ a, W, H }) => {
-      let gx = 0, gy = 0, n = 0;
+      let gx = 0, gy = 0, n = 0, Jxx = 0, Jyy = 0, Jxy = 0;
       for (let y = 1; y < H - 1; y++) {
         for (let x = 1; x < W - 1; x++) {
           const i = y * W + x;
           if (a[i] < 3) continue;                    // not aurora
-          gx += Math.abs(a[i + 1] - a[i]);
-          gy += Math.abs(a[i + W] - a[i]);
+          const dx = a[i + 1] - a[i], dy = a[i + W] - a[i];
+          gx += Math.abs(dx);
+          gy += Math.abs(dy);
+          // Signed outer product: a STRUCTURE TENSOR, which unlike the
+          // ratio of mean absolute gradients knows about orientation.
+          Jxx += dx * dx; Jyy += dy * dy; Jxy += dx * dy;
           n++;
         }
+      }
+      // Dominant structure orientation in degrees, 90 = vertical, and
+      // coherence in [0,1], 0 = isotropic. The eigenvector of largest
+      // eigenvalue points ACROSS the structure, so the structure itself runs
+      // 90 degrees off it.
+      let orientDeg = null, coherence = null;
+      if (n > 0) {
+        const xx = Jxx / n, yy = Jyy / n, xy = Jxy / n;
+        const gradDeg = 0.5 * Math.atan2(2 * xy, xx - yy) * 180 / Math.PI;
+        orientDeg = ((gradDeg + 90) % 180 + 180) % 180;
+        coherence = Math.hypot(xx - yy, 2 * xy) / Math.max(xx + yy, 1e-9);
       }
       // Amplitude over the WHOLE SKY, not inside the mask.
       //
@@ -1418,6 +1434,8 @@ const results = await page.evaluate(async () => {
       for (let i = 0; i < W * H; i++) { if (a[i] > peak) peak = a[i]; vals.push(a[i]); }
       vals.sort((p, q) => p - q);
       return n ? { gx: gx / n, gy: gy / n, ratio: (gx / n) / Math.max(gy / n, 1e-4),
+                   orientDeg: orientDeg == null ? null : +orientDeg.toFixed(1),
+                   coherence: coherence == null ? null : +coherence.toFixed(3),
                    px: n, frac: n / (W * H), peak: +peak.toFixed(1),
                    p99: vals.length ? +vals[Math.floor(vals.length * 0.99)].toFixed(1) : 0 }
                  : { px: 0, frac: 0, peak: +peak.toFixed(1), p99: 0 };
@@ -1700,11 +1718,30 @@ if (!au || !au.px || !aun) {
     `Measured sky-wide rather than inside the green mask, because a ` +
     `percentile of the pixels selected for being green cannot fail -- that ` +
     `version read 35.5 on a sky where 0.004% of pixels exceed +3`);
-  record('aurora has vertical filament structure', au.ratio >= 0.85,
-    `horizontal/vertical gradient energy of GREEN EXCESS, inside the aurora ` +
-    `itself, ${au.ratio.toFixed(3)} (gx ${au.gx.toFixed(2)}, gy ` +
-    `${au.gy.toFixed(2)}; < 0.85 means horizontal banding). Mask ${au.px} px ` +
-    `against ${aun.px} px with the aurora hidden`);
+  // This asserted gx/gy >= 0.85 and reported 1.266, which the REVIEW-6 critic
+  // correctly called a lying check: a field at 1.27:1 is essentially
+  // ISOTROPIC, and a ratio floor below 1 can only fail on extreme HORIZONTAL
+  // banding. It said nothing at all about whether anything was vertical. It
+  // certified the word in its own name.
+  //
+  // Replaced with the structure tensor of the same field, which is what
+  // actually knows about orientation. The critic measured Jxx 1.156, Jyy
+  // 0.994, Jxy 0.355 over n = 86915 -- a dominant structure orientation of
+  // 128.6 degrees, i.e. 51 off vertical, and a coherence of only 0.34. The
+  // curtains render as a diagonal string of soft blobs.
+  //
+  // Both bounds are needed and neither alone is enough: an isotropic field
+  // has a meaningless orientation that will sometimes land near vertical by
+  // chance, and a strongly coherent field can be coherently diagonal.
+  const orientOff = au.orientDeg == null ? null : Math.abs(au.orientDeg - 90);
+  record('aurora has vertical filament structure',
+    orientOff != null && orientOff <= 25 && au.coherence >= 0.5,
+    `structure tensor of GREEN EXCESS inside the aurora: dominant ` +
+    `orientation ${au.orientDeg} deg (90 = vertical, want within 25), ` +
+    `coherence ${au.coherence} (0 = isotropic, want >= 0.5). Old gx/gy ` +
+    `ratio ${au.ratio.toFixed(3)} for reference -- that number could not ` +
+    `fail on isotropy, which is why it is no longer the assertion. Mask ` +
+    `${au.px} px against ${aun.px} px with the aurora hidden`);
 }
 
 // Per-region silhouette. The whole-animal median let a good torso mask a bald
@@ -1952,16 +1989,32 @@ record('[reported, not asserted] whole-frame silhouette ramp', true,
        `max ${sr.max}) — width only; see silhouette hardness for ramp vs cliff`
      : 'could not locate the animal against the sky');
 
+// ALWAYS recorded, pass or fail.
+//
+// This used to live inside `if (drifted.length)`, so on a clean run there
+// was no entry at all -- the report came back with 41 checks and a
+// contaminated one returned 42. That is exactly the failure AGENTS.md names,
+// "never let a check disappear when it cannot measure", in the one check
+// that exists to protect every other number in the file. I had also told
+// three separate agents to "check it on every run", which was impossible:
+// on a good run there was nothing to check. Found by the REVIEW-6 critic.
+//
+// It also fingerprinted `src/` only, so an agent editing tools/audit.mjs
+// during a run was invisible, and spec.mjs could be edited under itself.
 const srcAfter = await fingerprint(path.join(ROOT, 'src'));
-const drifted = driftedFiles(srcBefore, srcAfter);
-if (drifted.length) {
-  record('source tree stable during the run', false,
-    `${drifted.length} file(s) changed while measuring: ${drifted.slice(0, 8).join(', ')}` +
-    (drifted.length > 8 ? `, +${drifted.length - 8} more` : '') +
-    '. Another agent is editing. Numbers above that depend on these files ' +
-    'describe two different builds; judge per check rather than discarding ' +
-    'the whole run.');
-}
+const toolsAfter = await fingerprint(path.join(ROOT, 'tools'));
+const drifted = driftedFiles(srcBefore, srcAfter)
+  .concat(driftedFiles(toolsBefore, toolsAfter));
+record('source tree stable during the run', drifted.length === 0,
+  drifted.length
+    ? `${drifted.length} file(s) changed while measuring: ${drifted.slice(0, 8).join(', ')}` +
+      (drifted.length > 8 ? `, +${drifted.length - 8} more` : '') +
+      '. Another agent is editing. Numbers above that depend on these files ' +
+      'describe two different builds; judge per check rather than discarding ' +
+      'the whole run.'
+    : `no file under src/ or tools/ changed during the run ` +
+      `(${Object.keys(srcBefore).length} + ${Object.keys(toolsBefore).length} ` +
+      `files fingerprinted), so the numbers above all describe one build`);
 
 await mkdir(path.resolve(ROOT, path.dirname(OUT)), { recursive: true });
 await writeFile(path.resolve(ROOT, OUT), JSON.stringify({ checks, results }, null, 2));
