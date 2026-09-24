@@ -1651,18 +1651,34 @@ record('eye keeps its chroma through post', er && ep && (ep.r - ep.b) > (er.r - 
 // coat legitimately carries MORE structure, and the point is not to force the
 // tiers to match but to catch a higher tier developing large smooth blotches
 // a cheaper one does not have.
+// The all-zero case has to FAIL, not pass.
+//
+// A degraded run reported `low 0, medium 0, high 0, ultra 0` and this check
+// passed, because 0 <= 0 * 1.3 + 2 is true. That is a vacuous pass of
+// exactly the kind I have spent this session removing from other people's
+// checks, written into a brand new one of my own within the hour. A flank
+// that measures zero low-frequency variance is not a perfectly even coat,
+// it is a black frame or a probe that missed the animal.
+//
+// The mean guard is the real discriminator: lit coat against snow sits in
+// the 150-220 band, and anything outside it means the box is not on the
+// animal.
 const tc = results.tierCoat || {};
 const tcLow = tc.low, tcHigh = tc.high;
+const tcLive = (t) => !!t && t.lfSd > 0.5 && t.mean > 60 && t.mean < 250;
 record('a dearer tier does not look worse',
-  !!(tcLow && tcHigh) && tcHigh.lfSd <= tcLow.lfSd * 1.3 + 2,
-  tcLow && tcHigh
-    ? `flank low-frequency sd by tier — low ${tcLow.lfSd}, medium ` +
+  tcLive(tcLow) && tcLive(tcHigh) && tcHigh.lfSd <= tcLow.lfSd * 1.3 + 2,
+  !tcLive(tcLow) || !tcLive(tcHigh)
+    ? `NOT MEASURED — low ${tcLow ? `sd ${tcLow.lfSd} mean ${tcLow.mean}` : 'null'}, ` +
+      `high ${tcHigh ? `sd ${tcHigh.lfSd} mean ${tcHigh.mean}` : 'null'}. A flank ` +
+      `at zero variance is a black frame or a probe off the animal, not an ` +
+      `even coat. Failing rather than passing vacuously`
+    : `flank low-frequency sd by tier — low ${tcLow.lfSd}, medium ` +
       `${tc.medium ? tc.medium.lfSd : '?'}, high ${tcHigh.lfSd}, ultra ` +
       `${tc.ultra ? tc.ultra.lfSd : '?'} (${tcHigh.cells} cells). high must ` +
       `stay under low x1.3 + 2 = ${(tcLow.lfSd * 1.3 + 2).toFixed(2)}. This is ` +
       `PATCHINESS, not detail: the 16x box average removes hair and keeps ` +
-      `blotches, so a richer coat is not penalised for carrying more structure`
-    : 'tier ladder not measured — that is a failure, not a pass');
+      `blotches, so a richer coat is not penalised for carrying more structure`);
 
 // Coat: §4b forbids any warm cast.
 const cl = results.coat_lit, sn = results.snow_ref;
@@ -2165,11 +2181,21 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
     // possible. It measures a foreground-minus-background mask, which peaks
     // at 261/765 on a white animal against snow; `matteOf` recovers coverage
     // exactly and needs no such proxy. Reported, not asserted.
+    // Guarded because this block is no longer inside the hardness probe's
+    // `else`, which used to guarantee `sub` and `ctl` were non-null. That
+    // nesting was deleting the seven checks below it whenever the probe
+    // failed, so removing it was right -- but it left these two references
+    // unguarded, and spec died with "Cannot read properties of undefined".
+    // Removing a guard you did not know you were relying on is its own trap.
     record('[superseded, reported] frontal mask silhouette: body', true,
-      `outline path length over net crossing, 10th percentile ${sub.p10} ` +
-      `(median ${sub.median}) over ${sub.n} rows — want >= 1.15. 1.0 is a ` +
-      `single monotonic crossing, i.e. bare mesh; the fur-off control on the ` +
-      `same frame reads p10 ${ctl.p10} / median ${ctl.median}`);
+      sub && ctl
+        ? `outline path length over net crossing, 10th percentile ${sub.p10} ` +
+          `(median ${sub.median}) over ${sub.n} rows — want >= 1.15. 1.0 is a ` +
+          `single monotonic crossing, i.e. bare mesh; the fur-off control on ` +
+          `the same frame reads p10 ${ctl.p10} / median ${ctl.median}`
+        : `not measured this run (coat ${sub ? 'ok' : 'null'}, fur-off ` +
+          `control ${ctl ? 'ok' : 'null'}) — superseded by the matte bands ` +
+          `above, so reported rather than failed`);
     if (eh.head) {
       record('[reported, not asserted] head outline structure', true,
         `head ratio median ${eh.head.median} (p10 ${eh.head.p10}) over ` +
