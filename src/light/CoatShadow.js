@@ -66,16 +66,27 @@ const FRINGE_TIP = 1.42;
  * relief is on it -- which means whatever radius the SOLID layer sits at is
  * where the smooth part of the shadow's outline lands. Putting the solid
  * layer at the shell tip therefore guarantees a smooth outline no matter
- * what the fringe does outside it.
+ * what the fringe does outside it. Pulling it in puts the outline inside
+ * the stochastic band, which is the whole mechanism.
  *
- * 0.82 is where the coat is actually opaque. The shells run 18 deep at high
- * and their alpha accumulates, so the outer fifth of the stack is mostly
- * air and guard hair; the drawn animal's own coverage matte falls off over
- * roughly that band. Below it the undercoat is solid. So the outer 0.60 L
- * -- from 0.82 to the 1.42 L tips -- is carried by the stochastic layer,
- * and that is the band the shadow's outline now falls in.
+ * MEASURED, not chosen. Pulled in too far it stops being a feature and
+ * becomes a thinner shadow, so the value is the smallest one at which the
+ * shadow's pixel AREA does not fall against the solid-hull arm at EITHER
+ * sun angle. Swept with setHull(), area relative to the solid hull:
+ *
+ *            plan 6.6    hero 6.6    plan 45     hero 45
+ *   0.78        --          --        -5.4 %      -4.0 %
+ *   0.84      +4.0 %      +0.8 %      -2.4 %      -0.9 %
+ *   0.90      +6.7 %      +3.8 %      +1.1 %      +2.2 %
+ *   0.96      +9.5 %      +6.6 %      +4.2 %      +5.3 %
+ *
+ * 0.90 is the first row that is positive everywhere. It is also close to
+ * where the coat really does go opaque: the shells run 18 deep at high and
+ * their alpha accumulates, so the outer tenth of the stack is guard hair
+ * and air. The outer 0.52 L -- 0.90 to the 1.42 L tips -- is carried by the
+ * stochastic layer, and that is the band the shadow's outline falls in.
  */
-const CORE_FRAC = 0.82;
+const CORE_FRAC = 0.90;
 
 /**
  * WHY THESE LATTICES ARE COARSE, MEASURED RATHER THAN CHOSEN.
@@ -325,7 +336,7 @@ const FRINGE_VERT = /* glsl */ `
   vec3 lid;
   vec2 lw = worley3(position * ${(1 / FRINGE_CELL).toFixed(4)}, lid);
   float ldome = 1.0 - smoothstep(${TUFT_LO.toFixed(3)}, ${TUFT_HI.toFixed(3)}, lw.x);
-  float ldraw = (0.35 + 0.65 * hash13(lid + 4.31)) * ldome;
+  float ldraw = (0.30 + 0.70 * hash13(lid + 4.31)) * (0.40 + 0.60 * ldome);
   vFrng = vec4(position, ldraw);
   transformed += normalize(normal) * (L * ${(FRINGE_TIP - CORE_FRAC).toFixed(3)} * uFringe * ldraw);
 }
@@ -356,7 +367,7 @@ const FRINGE_FRAG = /* glsl */ `
   vec3 pid;
   vec2 pw = worley3(q * ${(1 / PORE_CELL).toFixed(4)} + ${PORE_OFFSET.toFixed(2)}, pid);
   float strand = 1.0 - smoothstep(0.18, 0.72, pw.x);
-  float cut = mix(0.04, 0.58, clamp(vFrng.w, 0.0, 1.0));
+  float cut = mix(0.02, 0.45, clamp(vFrng.w, 0.0, 1.0));
   if (uFringe > 0.001 && strand < cut) discard;
 }
 `;
@@ -483,7 +494,7 @@ export class CoatShadow {
         .replace('#include <alphatest_fragment>',
           `#include <alphatest_fragment>\n${FRINGE_FRAG}`);
     };
-    fmat.customProgramCacheKey = () => 'foxCoatFringeDepth.v4';
+    fmat.customProgramCacheKey = () => 'foxCoatFringeDepth.v5';
 
     const nullMat = new THREE.ShaderMaterial({
       vertexShader: 'void main(){ gl_Position = vec4(0.0, 0.0, 2.0, 1.0); }',
@@ -598,6 +609,19 @@ export class CoatShadow {
     // A/B against it would credit the fringe with width it did not add.
     if (this.uHullFrac) this.uHullFrac.value = f > 0.001 ? CORE_FRAC : 1.0;
     return f;
+  }
+
+  /**
+   * CORE_FRAC, for calibration only. The shipped value is measured, not
+   * chosen: it is the smallest core radius at which the shadow's pixel AREA
+   * does not fall against the solid-hull arm, at both 6.6 and 45 degrees.
+   * Smaller puts more of the outline in the stochastic band (more hair) and
+   * eventually shrinks the shadow, which is a regression dressed as a
+   * feature.
+   */
+  setHull(v) {
+    if (this.uHullFrac) this.uHullFrac.value = v;
+    return v;
   }
 
   /** Remove or restore the fringe DRAW. This is the honest cost control. */
