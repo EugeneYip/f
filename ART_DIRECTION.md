@@ -447,6 +447,45 @@ continuous run of it longer than ~2 % of the contour is a smooth curve with a
 hard edge rather than a broken, hairy one, it fails. The silhouette of a
 winter arctic fox is hair, everywhere, without exception.
 
+### Correction to the test: the 2 % allowance must exclude what rule 3 excludes
+
+Rule 3 above names three places where bare skin is correct — the rhinarium,
+the eyes and the paw pads. "Without exception" in the sentence above reads as
+if it overrides that. It does not, and taken literally it makes the test
+unpassable, because **the rhinarium alone spends more than the whole 2 %
+allowance** on two of the four contour directions.
+
+Measured on the exact coverage matte at `profile`, 1920×1200, 1.47 px/mm,
+with every failing scan's image coordinate recorded and its distance to the
+projected `nose` anchor computed in millimetres of fox. Two identical runs:
+
+| edge | scans below the hair floor | within 15 mm of the rhinarium | remainder |
+|---|---|---|---|
+| left | 21 of 264 (8.0 %) | 10 / 9 | 4.3 % / 4.7 % |
+| right | 7 of 283 (2.5 %) | 0 | 2.5 % |
+| top | 49 of 545 (9.0 %) | 1 / 2 | 8.8 % / 9.2 % |
+| bottom | 32 of 532 (6.0 %) | 13 / 13 | 3.7 % / 4.1 % |
+
+So the rhinarium is 3.8 % of every scan on the left edge and 2.4 % on the
+bottom edge, each on its own over the 2 % allowance, and it is 43–48 % of the
+left edge's failures. It is also what pins the `body` band's left 10th
+percentile at exactly 1.000: ten of its nineteen failing left scans are
+within 15 mm of the nose anchor and the nearest is 4.7 mm from it.
+
+Nothing in the coat can change that. Region 0's `cardWeight` is 0.00 by
+design, so there are no hair cards on the rhinarium to break its outline, and
+opening `uNoseFade` so the coat grows over the pad moved the left edge by
+0.9 % — the pad is bare because rule 3 says it should be.
+
+**The rule, therefore:** the 2 % allowance is 2 % of the contour *outside*
+the three exempt features. An instrument enforcing it must drop scans whose
+crossing lies inside the rhinarium, the palpebral fissures or a paw pad
+before taking the percentage, and must say how many it dropped — a silent
+drop is the eraser AGENTS.md warns about, and here the dropped set is exactly
+the worst scans. `tools/spec.mjs`'s `contour has no bare run at profile:
+left` and `: bottom`, and `matte silhouette is hair at profile: body`, cannot
+pass until it does.
+
 ## 4g. "Short" has now been misread twice. The muzzle is too SHORT.
 
 §4b said "short muzzle"; it was implemented as BLUNT and produced a bear, and
