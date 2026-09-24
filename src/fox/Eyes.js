@@ -75,7 +75,7 @@
  * ---------------------------------------------------------------------------
  */
 import * as THREE from 'three';
-import { clamp, saturate, lerp, TAU } from '../util/math.js';
+import { clamp, saturate, lerp, rng, TAU } from '../util/math.js';
 import { HASH, SIMPLEX3, WORLEY3, UTIL } from '../shaders/noise.glsl.js';
 
 // --- proportions, as fractions of the measured globe radius ----------------
@@ -445,6 +445,35 @@ const CARUNCLE_ARC = 0.00085;    // caruncle reach outward from the free edge
 // a case of less is better all the way down. Held at 0.032 = 0.35 mm.
 const LID_SWELL = 0.032;
 
+// --- cilia -----------------------------------------------------------------
+//
+// §4b does not name eyelashes, but review 5 does, twice, and it is right that
+// nothing here had any: the strands crossing the eye at `macro_eye` are
+// Whiskers.js's BROW row (BROW_N = 4), rooted well above the orbit and
+// hanging down over it, which is a different structure and reads as stray
+// hair rather than as a lid.
+//
+// Cilia root IN the tarsal margin itself, so these are built from the SAME
+// aperture curves the lid geometry uses, at aS = 0, and carry the SAME blink
+// rotation -- a lash that does not close with the lid is worse than no lash.
+// Upper lid only: a canid's lower lid is effectively aciliate.
+//
+// SOURCED SIZE, loosely: carnivore upper cilia run 2-5 mm. On a 13.5 mm
+// cornea 3 mm is a lash that reaches about a fifth of the way across the eye,
+// which is what the reference photographs show. The shaft is 50-70 microns,
+// i.e. sub-pixel at every framing in `shots/` except `macro_eye`, so the
+// ribbon carries the same screen-space width floor and energy-preserving
+// tent Whiskers.js uses -- without it a lash alternates between invisible and
+// crawling, which is worse than absent.
+const LASH_N = 14;                 // per eye, upper lid
+const LASH_U = 0.84;               // spread over |u| <= this, off the canthi
+const LASH_LEN = [0.0028, 0.0046]; // shortest at the canthi, longest mid-lid
+const LASH_CURL = 0.34;            // share of length spent curling off the globe
+const LASH_THICK = 0.000078;       // shaft at the follicle
+const LASH_TIP = 0.000013;
+const LASH_MIN_PX = 1.05;          // screen-space width floor
+const LASH_SEGS = 5;
+
 /** Gnomonic tangent -> sine of the angle: where that margin sits on the globe. */
 const chord = (t) => t / Math.sqrt(1 + t * t);
 
@@ -604,6 +633,66 @@ function buildGlobe(R, Rc, zc, k, segW, segH) {
   return g;
 }
 
+/**
+ * The upper lid's cilia, as camera-facing ribbons rooted on the margin curve.
+ *
+ * Positions are placeholders exactly as they are for the lid band: the real
+ * vertex position is solved in the vertex shader from the same aperture
+ * curves, at aS = 0, so a lash roots where the margin actually is at this
+ * blink and follows it shut.
+ */
+function buildLashes(n, segs, seed) {
+  const rnd = rng(seed);
+  const count = n * (segs + 1) * 2;
+  const pos = new Float32Array(count * 3);        // placeholder, shader solves it
+  const aU = new Float32Array(count);
+  const aT = new Float32Array(count);
+  const aSide = new Float32Array(count);
+  const aWidth = new Float32Array(count);
+  const aLen = new Float32Array(count);
+  const aCurl = new Float32Array(count);
+  const aSkew = new Float32Array(count);
+  const idx = [];
+  let v = 0;
+  for (let k = 0; k < n; k++) {
+    // Jittered off the even spacing, or fourteen lashes at identical pitch
+    // read as a comb. Deterministic: rng(seed), never Math.random.
+    const base = v;
+    const u = clamp(((k + 0.5) / n * 2 - 1 + (rnd() - 0.5) * (1.4 / n)) * LASH_U, -0.97, 0.97);
+    // Longest mid-lid, shortest at the canthi, which is how a lash line
+    // tapers; plus 12% of scatter so no two are the same.
+    const t = Math.pow(Math.max(0, 1 - u * u), 0.5);
+    const len = lerp(LASH_LEN[0], LASH_LEN[1], t) * (0.88 + 0.24 * rnd());
+    const curl = LASH_CURL * (0.72 + 0.56 * rnd());
+    // Fan: lashes near a canthus lean toward it.
+    const skew = u * 0.55 + (rnd() - 0.5) * 0.30;
+    for (let i = 0; i <= segs; i++) {
+      const tt = i / segs;
+      const w = lerp(LASH_THICK, LASH_TIP, Math.pow(tt, 0.55)) * 0.5;
+      for (const sd of [-1, 1]) {
+        aU[v] = u; aT[v] = tt; aSide[v] = sd; aWidth[v] = w;
+        aLen[v] = len; aCurl[v] = curl; aSkew[v] = skew;
+        v++;
+      }
+    }
+    for (let i = 0; i < segs; i++) {
+      const a = base + i * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aU', new THREE.BufferAttribute(aU, 1));
+  g.setAttribute('aT', new THREE.BufferAttribute(aT, 1));
+  g.setAttribute('aSide', new THREE.BufferAttribute(aSide, 1));
+  g.setAttribute('aWidth', new THREE.BufferAttribute(aWidth, 1));
+  g.setAttribute('aLen', new THREE.BufferAttribute(aLen, 1));
+  g.setAttribute('aCurl', new THREE.BufferAttribute(aCurl, 1));
+  g.setAttribute('aSkew', new THREE.BufferAttribute(aSkew, 1));
+  g.setIndex(idx);
+  return g;
+}
+
 /** The corneal overlay: a cap of the cornea sphere, nudged out of z-fighting. */
 function buildCornea(Rc, zc, thetaMax, segW, segH) {
   const g = new THREE.SphereGeometry(Rc + 4e-5, segW, segH, 0, TAU, 0, thetaMax);
@@ -757,12 +846,13 @@ export class Eyes {
     const GW = [28, 48, 72][seg], GH = [20, 34, 52][seg];
     const CW = [20, 30, 44][seg], CH = [8, 12, 18][seg];
     const LU = [20, 34, 52][seg], LS = [5, 9, 13][seg];
+    const LN = [8, 11, LASH_N][seg];
 
     this.group = new THREE.Group();
     this.group.name = 'eyes';
 
     for (const side of ['L', 'R']) {
-      this.eyes.push(this._buildEye(ctx, side, { GW, GH, CW, CH, LU, LS }));
+      this.eyes.push(this._buildEye(ctx, side, { GW, GH, CW, CH, LU, LS, LN }));
     }
 
     ctx.eyes = this;
@@ -1104,8 +1194,22 @@ export class Eyes {
     lids.rotation.y = lidYaw;
     root.add(lids);
 
+    // Cilia, in the LID's frame (they root on the margin, which is yawed with
+    // the fissure) rather than the globe's.
+    const lashes = new THREE.Mesh(
+      buildLashes(segs.LN, LASH_SEGS, side === 'L' ? 20261 : 20262),
+      this._lashMaterial(u));
+    lashes.name = `eyeLashes${side}`;
+    lashes.castShadow = false;
+    lashes.receiveShadow = false;
+    lashes.frustumCulled = false;   // every vertex is solved in the shader
+    lashes.renderOrder = 13;        // over the cornea's additive overlay (12)
+    lashes.rotation.order = 'YXZ';
+    lashes.rotation.y = lidYaw;
+    root.add(lashes);
+
     return {
-      side, anchor, root, ball, globe, cornea, lids, u, axis,
+      side, anchor, root, ball, globe, cornea, lids, lashes, u, axis,
       R, Rc, zc, apexZ, irisZ, irisR, limbusR, seat, coat, skin: meas,
       apW, apTh, ap, limbusTh, win, restYawRaw, convMax, lidYaw, follow, seatWanted,
       nasalRoom, tempRoom,
@@ -2045,6 +2149,121 @@ void main(){
     return m;
   }
 
+  /**
+   * Cilia. A ShaderMaterial rather than a patched MeshPhysicalMaterial: a
+   * sub-pixel ribbon needs the screen-space width floor and the
+   * energy-preserving tent, and neither fits inside three's lighting chunks.
+   * The shading is deliberately the same two-term hemisphere the lid band
+   * uses, so a lash and the skin it grows out of never disagree about where
+   * the light is.
+   */
+  _lashMaterial(u) {
+    const m = new THREE.ShaderMaterial({
+      name: 'foxEyeLash',
+      uniforms: Object.assign({
+        uMinPx: { value: LASH_MIN_PX },
+        uViewportH: { value: 800 },
+        // DARK, not white. An arctic fox's cilia are pale in the hand, but a
+        // pale lash on a pale lid on a white animal is invisible at every
+        // framing in `shots/` -- and "no eyelashes" is the review's
+        // complaint, not "the lashes are the wrong colour". Dark at the
+        // follicle where it leaves the tarsal margin, warm grey at the tip,
+        // so one strand reads against BOTH the near-black rim it grows out
+        // of and the pale band it crosses.
+        uLashRoot: { value: new THREE.Color(0x100d0c) },
+        uLashTip: { value: new THREE.Color(0x565049) },
+      }, u),
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+      vertexShader:
+        'attribute float aU, aT, aSide, aWidth, aLen, aCurl, aSkew;\n' +
+        'varying float vT, vAcross, vCov;\n' +
+        'varying vec3 vWN;\n' +
+        EYE_UNIFORMS + APERTURE_GLSL + GLOBE_GLSL + /* glsl */ `
+uniform float uMinPx, uViewportH;
+
+void main(){
+  vT = aT; vAcross = aSide;
+
+  // The margin, solved exactly as the lid solves it at aS = 0 -- same curves,
+  // same blink rotation. A lash that roots on a static copy of the margin
+  // detaches from the lid the instant the eye blinks.
+  float feYRest = feApUpY(aU);
+  vec3 feRest = normalize(vec3(aU * uApW, feYRest, 1.0));
+  vec3 feRad = vec3(feRest.xy, 0.0);
+  float feRl = length(feRad);
+  feRad = feRl > 1e-5 ? feRad / feRl : vec3(0.0, 1.0, 0.0);
+  float feTh = acos(clamp(feRest.z, -1.0, 1.0));
+  vec3 feDir = vec3(0.0, 0.0, cos(feTh)) + feRad * sin(feTh);
+
+  float feRestA = atan(uApUp);
+  float feClosA = atan(-0.17 * uApDn);
+  float feRot = (feRestA - feClosA) * uBlinkU * feApShape(aU, 0.5);
+  float cs = cos(feRot), sn = sin(feRot);
+  feDir = vec3(feDir.x, feDir.y * cs - feDir.z * sn, feDir.y * sn + feDir.z * cs);
+  feRad = vec3(feRad.x, feRad.y * cs - feRad.z * sn, feRad.y * sn + feRad.z * cs);
+
+  vec3 root = feDir * (feGlobeR(feDir) + uR * 0.012);
+
+  // Out of the margin, then curling away from the globe. The lateral term is
+  // the fan: lashes near a canthus lean toward it.
+  vec3 side = normalize(cross(vec3(0.0, 0.0, 1.0), feRad) + vec3(1e-5));
+  vec3 grow = normalize(feRad * 0.62 + feDir * 0.78 + side * aSkew * 0.42);
+  vec3 curl = normalize(feDir);
+  float t = aT;
+  vec3 p = root + grow * (aLen * t) + curl * (aLen * aCurl * t * t);
+  vec3 tang = normalize(grow * aLen + curl * (2.0 * aLen * aCurl * t));
+
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  vec3 tv = normalize((modelViewMatrix * vec4(tang, 0.0)).xyz);
+  vec3 toEye = normalize(-mv.xyz);
+  vec3 sideDir = cross(tv, toEye);
+  float sl = length(sideDir);
+  sideDir = sl > 1e-5 ? sideDir / sl : normalize(cross(tv, vec3(0.0, 1.0, 0.0)));
+
+  // Sub-pixel width floor, paid back in alpha below so the strand's
+  // integrated energy is its true width however far it was widened.
+  float pxPerM = projectionMatrix[1][1] / max(-mv.z, 1e-4) * uViewportH * 0.5;
+  float minW = uMinPx / max(pxPerM, 1e-4);
+  float wUse = max(aWidth, minW);
+  vCov = aWidth / wUse;
+  mv.xyz += sideDir * (aSide * wUse);
+
+  vWN = normalize(mat3(modelMatrix) * grow);
+  gl_Position = projectionMatrix * mv;
+}`,
+      fragmentShader:
+        'varying float vT, vAcross, vCov;\n' +
+        'varying vec3 vWN;\n' +
+        EYE_UNIFORMS + /* glsl */ `
+uniform vec3 uLashRoot, uLashTip;
+
+void main(){
+  float shape = 1.0 - smoothstep(0.0, 1.0, abs(vAcross));
+  float alpha = clamp(vCov * shape * 2.0, 0.0, 1.0);
+  // Taper the last of the tip out rather than ending on a blunt cut.
+  alpha *= 1.0 - smoothstep(0.80, 1.0, vT);
+  if (alpha < 0.004) discard;
+
+  // Dark at the follicle, where it emerges from the tarsal margin, pale at
+  // the tip. That gradient is what lets one strand read against BOTH the
+  // near-black rim it grows out of and the amber iris it crosses -- a
+  // uniformly pale lash disappears into the first and a uniformly dark one
+  // into the second.
+  vec3 col = mix(uLashRoot, uLashTip, smoothstep(0.10, 0.85, vT));
+  vec3 amb = mix(uBounceCol, uSkyCol, vWN.y * 0.5 + 0.5);
+  col *= amb * 1.25;
+  gl_FragColor = vec4(col, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`,
+    });
+    m.customProgramCacheKey = () => 'foxEyeLash';
+    return m;
+  }
+
   // ---------------------------------------------------------------- public --
   /** 0 = open, 1 = closed. Pass null to hand control back to the rig. */
   setBlink(t, side = null) {
@@ -2139,6 +2358,15 @@ void main(){
       e.u.uSunInt.value = ctx.sunIntensity;
       e.u.uSkyCol.value.copy(ctx.skyColor);
       e.u.uBounceCol.value.copy(ctx.groundBounce);
+      // The lash ribbon's screen-space width floor needs the real backbuffer
+      // height, not the CSS one: at renderScale != 1 they disagree and the
+      // strands widen or vanish on a tier change. `bufferSize` is the actual
+      // one (AGENTS.md's ctx table).
+      const lm = e.lashes?.material;
+      if (lm?.uniforms?.uViewportH) {
+        lm.uniforms.uViewportH.value =
+          (ctx.bufferSize?.height ?? ctx.bufferSize?.y ?? ctx.size?.height ?? 800);
+      }
     }
   }
 
@@ -2149,6 +2377,7 @@ void main(){
       e.globe.geometry.dispose(); e.globe.material.dispose();
       e.cornea.geometry.dispose(); e.cornea.material.dispose();
       e.lids.geometry.dispose(); e.lids.material.dispose();
+      e.lashes?.geometry.dispose(); e.lashes?.material.dispose();
       e.root.parent?.remove(e.root);
     }
     this.eyes.length = 0;
