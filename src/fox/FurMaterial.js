@@ -838,6 +838,48 @@ export const FUR_DEFAULTS = {
   coatSigmaSky: 1.5,
   coatSigmaCard: 0.55,
   coatSigmaFloor: 0.10,
+
+  /*
+   * PER-LOCK shadowing gain -- see furLockShadow() in fur.glsl.js.
+   *
+   * Dimensionless: how many metres of extra coat a metre of lateral offset
+   * from the hair's own lock axis is worth, resolved along the light. A lock
+   * is 7.4 mm across (clumpFreq 136), so the offset runs about +/-3.7 mm and
+   * at 4.0 the two sides of a tuft differ by ~30 mm of effective coat --
+   * with coatSigma 30 that is 0.9 of optical depth across a tuft, or about a
+   * 2:1 light-to-shade ratio on each lock.
+   *
+   * This is the term that is actually ABOUT plush. The depth term above can
+   * only shade the coat by how deep you are in it, and the camera sees one
+   * depth; what makes dense pile look like dense pile is that its outer
+   * surface is a field of little cones with a lit side and a shaded side.
+   *
+   * It is also FREE in the one currency the depth term is expensive in. The
+   * lateral offset is as often towards the sun as away from it, so the term
+   * is zero-mean over a lock and the coat's mean luminance -- which
+   * ART_DIRECTION 4b pins against the snow -- does not move. Measured, one
+   * page session, arms over a single shared coverage matte:
+   *
+   *              portrait                       nape
+   *            coat/snow  residual sd     coat/snow  residual sd
+   *   0 (off)    1.0167      5.69           0.6842      8.04
+   *   2.0        1.0178      6.18           0.6898      9.43
+   *   4.0        1.0184      7.00           0.6967     12.34
+   *   8.0        1.0172      8.41           0.7026     16.85
+   *
+   * The ratio moves by 0.002 at portrait across the whole range while the
+   * structure nearly doubles, and at nape it moves the ratio the RIGHT way.
+   * 8.0 was refused on the render, not the number: the nape starts reading
+   * as quilted fabric rather than fur.
+   *
+   * NOTE the term is inert at coatSigma 0 -- it displaces the argument of an
+   * exponential that is then identically 1. Measured: coatLock 4.0 with
+   * coatSigma 0 is bit-identical to the coat with both off (residual sd
+   * 0.017 against a repeatability floor of 0.035). That is by construction,
+   * not a bug, but it means an A/B that zeroes sigma also silently zeroes
+   * this.
+   */
+  coatLock: 4.0,
   // How much of the undercoat felt's opacity the strand layer modulates.
   // See furHair(): the felt is the one layer with no hair in it, and wherever
   // max(a, under) picks it the coat renders as a flat plate the width of a
@@ -1693,6 +1735,7 @@ export function buildFurUniforms(ctx) {
     uCoatSigmaSky: { value: d.coatSigmaSky },
     uCoatSigmaCard: { value: d.coatSigmaCard },
     uCoatSigmaFloor: { value: d.coatSigmaFloor },
+    uCoatLock: { value: d.coatLock },
     uAniso: { value: 1 },
     uStrandRound: { value: d.strandRound },
     uStrandAniso: { value: d.strandAniso },

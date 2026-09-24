@@ -218,6 +218,8 @@ uniform float uCoatSigmaMin;   // floor on cos(N,L) -- caps the grazing path
 uniform float uCoatSigmaSky;   // mean secant for the sky's own path
 uniform float uCoatSigmaCard;  // card share of it (guard hair is sparser)
 uniform float uCoatSigmaFloor; // multiple-scattering floor on the transmittance
+uniform float uCoatLock;       // metres of coat a metre of lateral lock offset
+                               // is worth, along the light. See furLockShadow.
 
 // --- stochastic / TAA ------------------------------------------------------
 uniform float uStochastic;     // 0 = smooth alpha · 1 = IGN dithered cut-out
@@ -250,6 +252,7 @@ varying vec4 vP0;     // x t · y baseTint · z bakedOcclusion · w density
 varying vec4 vP1;     // x clumpScale · y freqScale · z tipWhite · w coatLen
 varying vec3 vAxis;   // BIND-space hair axis — the lattice is stretched along it
 varying vec2 vShellMod;  // x: shell hair-length scale · y: transmission boost
+varying vec3 vSunB;   // uSunDir carried into BIND space — see furLockShadow()
 `;
 
 /* ------------------------------------------------------------ vertex helpers */
@@ -510,7 +513,7 @@ export const FUR_FIELD = /* glsl */ `
  */
 vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
              float freqScale, float shellFill, float pathK, float detail, vec3 axis,
-             float hairLenScale, out vec3 site)
+             float hairLenScale, out vec3 site, out vec3 lockSite)
 {
   // Large-scale variation: real fur is not uniformly dense.
   float coatVar = snoise(p * uCoatVarFreq) * octaveFade(px, uCoatVarFreq);
@@ -523,6 +526,7 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   vec3  csiteC;
   vec2  cd = vec2(cell8(p * fc + coatVar * 0.35, csiteC), 0.0);
   vec3  csite = csiteC / fc;
+  lockSite = csite;             // for furLockShadow(); free, it is already here
   float cRand = hash13(csiteC * 1.913);
 
   // Hairs converge on their clump tip as they rise. This is what turns an even
@@ -753,6 +757,51 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
 `;
 
 /* ----------------------------------------------------------------- shading */
+
+export const FUR_LOCK = /* glsl */ `
+/**
+ * PER-LOCK SHADOWING: the half of a tuft facing away from the sun is behind
+ * the tuft.
+ *
+ * furSelfShadow() above is a function of DEPTH, and depth alone cannot make
+ * a coat look plush, because the layer the camera actually sees is at one
+ * depth. What separates dense pile from an alpha wash at that one depth is
+ * that the coat's outer surface is not smooth: it is a field of locks, each
+ * a cone about 7.4 mm across, and each one is lit on the side facing the sun
+ * and shaded on the side away from it. That per-tuft light-and-shade is the
+ * whole visual signature of plush, and it is what a shell stack throws away.
+ *
+ * So: displace the optical depth by the hair's lateral offset from its own
+ * lock's axis, resolved along the light.
+ *
+ *     above += gain * dot(p - lockSite, sunDir)     [bind space, lateral only]
+ *
+ * Three properties make this worth its ~10 ALU:
+ *
+ *  - It is ZERO MEAN over a lock. The dot product is as often positive as
+ *    negative around the axis, so the coat gains contrast at tuft scale and
+ *    loses no brightness. That matters here specifically: the depth term is
+ *    already spending the coat's headroom against ART_DIRECTION 4b's
+ *    coat-brighter-than-snow ratio, and this one spends none of it.
+ *  - It is DIRECTIONAL. The pattern moves when the sun moves, which no
+ *    amount of added noise does, and which is the only honest way to tell
+ *    shadowing from texture.
+ *  - The lattice is the one already driving the clumping, in bind space, so
+ *    the shading is locked to the same tufts the alpha cuts and cannot swim
+ *    against them under deformation.
+ *
+ * The lateral projection is not cosmetic: the raw offset to a lock site
+ * carries a normal component of up to half a cell, and letting that into the
+ * term would double-count the depth that furSelfShadow() already measures.
+ * Only the component in the hair's own tangent plane is new information.
+ */
+float furLockShadow(vec3 p, vec3 lockSite, vec3 axis, vec3 sunB){
+  vec3 d = p - lockSite;
+  vec3 a = normalize(axis);
+  d -= a * dot(d, a);
+  return dot(d, normalize(sunB));
+}
+`;
 
 export const FUR_SHADE = /* glsl */ `
 /** Kajiya-Kay lobe about a tangent shifted along the surface normal. */
@@ -1041,6 +1090,17 @@ void main(){
   vAxis = hdir;
   vShellMod = vec2(uRegionC[ri].z > 0.0 ? uRegionC[ri].z : 1.0,
                    uRegionC[ri].w > 0.0 ? uRegionC[ri].w : 1.0);
+  // The sun, carried back into BIND space, for furLockShadow().
+  //
+  // A vector is transformed by the INVERSE of the matrix that moves points,
+  // and for a rotation the inverse is the transpose -- which is what
+  // v * M spells in GLSL. Skinning matrices are blends of rigid transforms
+  // and are rigid to within the blend's small scale error, so this is exact
+  // to the same tolerance the skinned NORMALS in this shader already assume
+  // (they use sk3 directly, not its inverse transpose). Doing it per vertex
+  // costs one mat3 multiply where a fragment-side inverse would cost ~30
+  // ALU per fragment per shell.
+  vSunB = uSunDir * (m3 * sk3);
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = normalize(wh * max(L, 1e-4) + 2.0 * t * W);
@@ -1066,6 +1126,7 @@ precision highp float;
 ${FUR_UNIFORMS}
 ${FUR_VARYINGS}
 ${isShell ? FUR_NOISE + FUR_FIELD : HASH + UTIL}
+${FUR_LOCK}
 ${FUR_SHADE}
 #ifdef USE_COLOR
   varying vec3 vColor;
@@ -1151,6 +1212,11 @@ ${isShell ? /* glsl */ `
   bool deep = tJ < shellFill * uShellDeep;
 
   vec3 site = vRoot;
+  // Seeded to vRoot so the 'deep' cheap path, which never calls furHair,
+  // produces a zero lateral offset and therefore no lock term rather than
+  // reading an undefined vec3. Those shells are solid felt under the whole
+  // coat; there is nothing for a tuft highlight to sit on.
+  vec3 lockSite = vRoot;
   // The cheap path still has to honour the COVERAGE mask. furHair applies
   // vP0.w (region density x the eye/nose coverage mask) as its last step, and
   // this branch skipped it entirely -- so the innermost shells drew at alpha
@@ -1160,7 +1226,7 @@ ${isShell ? /* glsl */ `
   // at macro_eye as a cuff of opaque undercoat lapping over the iris.
   vec4 hair = vec4(clamp(vP0.w * uDensity, 0.0, 1.0), 0.45, hash13(vRoot * 131.7), 1.0);
   if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail,
-                              normalize(vAxis), vShellMod.x, site);
+                              normalize(vAxis), vShellMod.x, site, lockSite);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -1202,7 +1268,9 @@ ${isShell ? /* glsl */ `
   // hairs shadowing each other rather than as a smooth vignette through the
   // stack. It was previously only modulating an AO that the floor had
   // flattened, so it cost ALU and showed nothing.
-  vec2 sh = furSelfShadow(vP1.w * (1.0 - tJ), dot(normalize(vNrm), uSunDir));
+  float above = vP1.w * (1.0 - tJ)
+              + uCoatLock * furLockShadow(vRoot, lockSite, vAxis, vSunB);
+  vec2 sh = furSelfShadow(above, dot(normalize(vNrm), uSunDir));
 ` : /* glsl */ `
   // Base layer: skin under the coat — dark, occluded, faintly cool.
   ao = max(ao * mix(uAOInner, 1.0, 0.58), uAOFloor);
@@ -1267,6 +1335,7 @@ ${FUR_UNIFORMS}
 ${FUR_VARYINGS}
 ${HASH}
 ${SKIN_FN}
+${FUR_LOCK}
 
 uniform float uCardWidth;
 uniform float uCardLength;
@@ -1458,7 +1527,6 @@ void main(){
   // at the local coat depth. A tip that has cleared the shells gets 0 and is fully lit,
   // which is the whole shape of a guard hair: dark where it leaves the
   // undercoat, bright where it stands out of it.
-  float aboveCoat = max(0.0, coat - L * vn * rise);
   // The shading tangent is the derivative of that curve, not the chord, or
   // the Kajiya-Kay lobe travels along a hair the geometry is not drawing.
   float dn = mix(1.0, 0.70 * pow(max(v, 0.08), -0.30), uCardCurve);
@@ -1485,6 +1553,15 @@ void main(){
   float slMax = ${(CARD_SHAPE.clumpCell * 0.6).toFixed(5)};
   if (sl > slMax) toSite *= slMax / sl;
   offB += toSite * (uCardClump * v * v);
+
+  // Per-vertex, and at this vertex's own point along the card rather than at
+  // the root: uCardClump leans a tip toward its lock site, so the lateral
+  // offset shrinks along the hair and the tuft highlight tapers with it.
+  // aClump.xyz IS the bind-space lock site the cards were snapped to, so the
+  // cards and the shells are shaded by the SAME lattice and cannot disagree
+  // about where a tuft is.
+  float aboveCoat = max(0.0, coat - L * vn * rise
+        + uCoatLock * furLockShadow(position + offB, aClump.xyz, hdir, uSunDir * (m3 * sk3)));
 
   // sk / sk3 / m3 / rootO / rootW / wn are already computed above, for the
   // interior-vs-outline split; they are the same quantities.
@@ -1578,6 +1655,7 @@ void main(){
   // is roughly what they are now. (.x is the shell hair-length scale on the
   // shell path and has always been a hardcoded 1.0 here.)
   vShellMod = vec2(coat, uRegionC[ri].w > 0.0 ? uRegionC[ri].w : 1.0);
+  vSunB = uSunDir * (m3 * sk3);   // see the shell path
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
@@ -1630,6 +1708,7 @@ ${FUR_UNIFORMS}
 ${FUR_VARYINGS}
 ${HASH}
 ${UTIL}
+${FUR_LOCK}
 ${FUR_SHADE}
 
 uniform float uCardInner;
