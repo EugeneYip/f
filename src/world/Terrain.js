@@ -395,17 +395,44 @@ export class Terrain {
   }
 
   /**
-   * Fallback contact compression.
+   * Contact compression, from the penetration the TERRAIN measures.
    *
-   * Footprints are supposed to arrive through ctx.terrain.press() from whoever
-   * drives the gait. Until that happens the animal stands on an undisturbed
-   * sheet with no depression and no contact darkening, which reads as floating
-   * even when the paws are geometrically touching to a third of a millimetre.
-   * So: while nothing external has pressed, stamp where the paws actually are.
-   * The moment a real press() arrives this stops for good.
+   * This used to be a fallback -- "while nothing external has pressed, stamp
+   * where the paws actually are; the moment a real press() arrives this stops
+   * for good". It does not stop any more, and the reason is measured.
+   *
+   * Every external caller passes a depth it decided without asking where the
+   * snow is, and all of them are far too shallow to see:
+   *
+   *   settle 2.5 s, `idle`:  4 stamps under the paws at depth 0.104
+   *                          = 9.9 mm, from Fox._pressFootprints' flat 0.10.
+   *   settle 2.5 s, `walk`:  25 fresh stamps at depth 0.050 = 4.75 mm, from
+   *                          Locomotion's maxDepth * (0.34 + 0.66 * load).
+   *
+   * 4.75 mm is a fifth of the +-25 mm of sastrugi the print is stamped into,
+   * so a walking animal leaves nothing -- which is exactly REVIEW-5's "no
+   * gait leaves a track", and it is true. For contrast, the nine seeded trail
+   * stamps ahead of the animal carry depth 0.50-0.84 (47-80 mm) and measure
+   * -26.5 to +20.9 levels against the snow beside them in the delivered
+   * `terrain` png, post and all. So the mechanism, the profile, the rim and
+   * the compaction channel are all fine at a real depth and invisible at
+   * these. The defect is the number, and the number is the one thing the
+   * terrain is in a position to know.
+   *
+   * Running both is safe by construction, not by luck: Footprints.press
+   * merges any stamp within MERGE_DIST of an existing one and takes
+   * max(new, decayed old) for its depth, so the terrain can only ever DEEPEN
+   * a print a gait already placed, never add one beside it. `_powder` is
+   * edge-triggered on pressCount, which a merge does not bump, so a
+   * re-pressed slot still throws no extra puff.
+   *
+   * And it cannot run away, which is the obvious worry given that heightAt()
+   * feeds the IK that places the paw that this measures. At equilibrium the
+   * paw rests on the floor of its own hole: pen is pinned at the 30 mm
+   * tolerance, depth is pinned at 0.31, and the depression stays 29 mm below
+   * the CLEAN field because that is what the stamp profile is relative to.
    */
   _contactPrints(ctx) {
-    if (this.foot.externalCount > 0) return;
     const anchors = ctx.fox?.anchors;
     if (!anchors) return;
     for (let i = 0; i < PAWS.length; i++) {
@@ -413,11 +440,6 @@ export class Terrain {
       if (!a || !a.matrixWorld) continue;
       a.updateWorldMatrix(true, false);
       _v.setFromMatrixPosition(a.matrixWorld);
-      // Deliberately shallow. The compaction channel is written at full
-      // strength regardless of depth, so the paw gets its darker, glossier,
-      // unsparkling contact patch while the surface only drops a few
-      // millimetres — pressing deeper would just open a visible gap under a
-      // paw the rig is holding at a fixed height.
       // Press whenever the paw is ON the snow, not only when the rig has
       // driven it THROUGH the snow. A paw resting a centimetre proud left no
       // mark at all, which is most of why review 3 read "no snow interaction
