@@ -1268,8 +1268,17 @@ ${isShell ? /* glsl */ `
   // hairs shadowing each other rather than as a smooth vignette through the
   // stack. It was previously only modulating an AO that the floor had
   // flattened, so it cost ALU and showed nothing.
-  float above = vP1.w * (1.0 - tJ)
-              + uCoatLock * furLockShadow(vRoot, lockSite, vAxis, vSunB);
+  // MULTIPLICATIVE, not additive: the lock makes the coat locally DEEPER or
+  // SHALLOWER, so the tuft shading fades out with the coat above it and a
+  // fully exposed tip is exposed whichever side of its lock it sits on.
+  // Additive was tried first and is worse for two reasons that turned out to
+  // be the same reason: it survives at the outer layer, which is the layer
+  // the camera sees, so the flank read as hard corrugation rather than soft
+  // locks; and where it drove the depth negative the max(above, 0) clamp made
+  // it asymmetric, so a zero-mean term still cost mean luminance.
+  float lockMod = clamp(uCoatLock * furLockShadow(vRoot, lockSite, vAxis, vSunB)
+                        / max(vP1.w, 1e-4), -0.9, 0.9);
+  float above = vP1.w * (1.0 - tJ) * (1.0 + lockMod);
   vec2 sh = furSelfShadow(above, dot(normalize(vNrm), uSunDir));
 ` : /* glsl */ `
   // Base layer: skin under the coat — dark, occluded, faintly cool.
@@ -1560,8 +1569,10 @@ void main(){
   // aClump.xyz IS the bind-space lock site the cards were snapped to, so the
   // cards and the shells are shaded by the SAME lattice and cannot disagree
   // about where a tuft is.
-  float aboveCoat = max(0.0, coat - L * vn * rise
-        + uCoatLock * furLockShadow(position + offB, aClump.xyz, hdir, uSunDir * (m3 * sk3)));
+  float lockMod = clamp(uCoatLock
+        * furLockShadow(position + offB, aClump.xyz, hdir, uSunDir * (m3 * sk3))
+        / max(coat, 1e-4), -0.9, 0.9);
+  float aboveCoat = max(0.0, coat - L * vn * rise) * (1.0 + lockMod);
 
   // sk / sk3 / m3 / rootO / rootW / wn are already computed above, for the
   // interior-vs-outline split; they are the same quantities.

@@ -790,9 +790,9 @@ export const FUR_DEFAULTS = {
    * `coatSigma` is an extinction coefficient in 1/metres of hair, so the
    * optical depth of a region is sigma x its own coat depth:
    *
-   *     rhinarium  1.6 mm -> 0.05     muzzle 14.6 mm -> 0.44
-   *     cheek     33.2 mm -> 1.00     skull  38.3 mm -> 1.15
-   *     flank     47.4 mm -> 1.42     tailMid 67.1 mm -> 2.01
+   *     rhinarium  1.6 mm -> 0.02     muzzle 14.6 mm -> 0.20
+   *     cheek     33.2 mm -> 0.46     skull  38.3 mm -> 0.54
+   *     flank     47.4 mm -> 0.66     tailMid 67.1 mm -> 0.94
    *
    * (depths from CoatShadow.js's per-region probe of the same field). That
    * ordering is the point of using metres rather than the normalised shell
@@ -822,9 +822,29 @@ export const FUR_DEFAULTS = {
    * this cap is load-bearing rather than a corner case: without it the
    * terminator band goes to exp(-inf).
    *
-   * coatSigmaCard 0.55 -- a guard hair pushes THROUGH the pile rather than
-   * lying in it, and a card is a billboard several hairs wide, so at full
-   * sigma the card roots read as hard black sticks against the undercoat.
+   * WHY 14 AND NOT 30. Sigma is the only knob here that spends the coat's
+   * brightness, and the coat has almost none to spend: ART_DIRECTION 3's two
+   * fur/snow swatch pairs sit at 1.03 and 1.44, and the build measures 1.034
+   * at profile and 1.035 at portrait BEFORE any of this -- 0.7% of headroom.
+   * 30 took profile to 0.86 and rendered a grey fox; the flank stopped
+   * reading as white fur, which is a straight 4b violation and a worse
+   * defect than the one this fixes. Sigma 14 costs 3% at portrait and 9% at
+   * profile and the animal still reads white.
+   *
+   * The efficient move is NOT more sigma. Tuft contrast scales with
+   * sigma x coatLock while the darkening scales with sigma x coat depth, so
+   * the same structure is available at a third of the brightness cost by
+   * trading one against the other -- measured, sigma 30/lock 4 and sigma
+   * 12/lock 10 give the same tuft contrast and cost 0.19 and 0.09 of the
+   * profile ratio respectively. Push coatLock before you push this.
+   *
+   * coatSigmaCard 1.0 -- a card is shadowed by exactly the medium the shells
+   * are, so parity is the defensible value and the 0.55 I started with was a
+   * hedge against card roots reading as black sticks that turned out not to
+   * be needed at this sigma. It is also almost free either way: sweeping it
+   * 0.55 -> 3.5 moves the portrait coat mean by 0.34 of a level and the
+   * silhouette coat/snow ratio by 0.002, which is the 97%-shells / 3%-cards
+   * split showing up again.
    *
    * coatSigmaFloor 0.10 remaps the transmittance onto [0.10, 1] instead of
    * [0, 1]. Physically it is the multiple-scattering term a single-extinction
@@ -833,53 +853,57 @@ export const FUR_DEFAULTS = {
    * chromatic, never crushed to 0") true where the stochastic dither lets a
    * gap open to the skin.
    */
-  coatSigma: 30.0,
+  coatSigma: 14.0,
   coatSigmaMin: 0.25,
   coatSigmaSky: 1.5,
-  coatSigmaCard: 0.55,
+  coatSigmaCard: 1.0,
   coatSigmaFloor: 0.10,
 
   /*
    * PER-LOCK shadowing gain -- see furLockShadow() in fur.glsl.js.
    *
-   * Dimensionless: how many metres of extra coat a metre of lateral offset
-   * from the hair's own lock axis is worth, resolved along the light. A lock
-   * is 7.4 mm across (clumpFreq 136), so the offset runs about +/-3.7 mm and
-   * at 4.0 the two sides of a tuft differ by ~30 mm of effective coat --
-   * with coatSigma 30 that is 0.9 of optical depth across a tuft, or about a
-   * 2:1 light-to-shade ratio on each lock.
+   * It scales the LOCAL COAT DEPTH by the hair's lateral offset from its own
+   * lock's axis, resolved along the light:
+   *
+   *     above = coatDepth * (1 - t) * (1 + clamp(coatLock * offset/coatDepth))
+   *
+   * so it is dimensionless: metres of extra coat per metre of lateral
+   * offset, expressed as a fraction of the local depth. A lock is 7.4 mm
+   * across (clumpFreq 136), so the offset runs about +/-3.7 mm and at 12.0
+   * the flank's two tuft faces differ by +/-0.94 of its own depth, clamped
+   * to +/-0.9 in the shader.
    *
    * This is the term that is actually ABOUT plush. The depth term above can
-   * only shade the coat by how deep you are in it, and the camera sees one
-   * depth; what makes dense pile look like dense pile is that its outer
-   * surface is a field of little cones with a lit side and a shaded side.
+   * only shade a hair by how deep it is, and the camera sees ONE depth; what
+   * makes dense pile look like dense pile is that its outer surface is a
+   * field of little cones, each with a lit side and a shaded side.
    *
-   * It is also FREE in the one currency the depth term is expensive in. The
-   * lateral offset is as often towards the sun as away from it, so the term
-   * is zero-mean over a lock and the coat's mean luminance -- which
-   * ART_DIRECTION 4b pins against the snow -- does not move. Measured, one
-   * page session, arms over a single shared coverage matte:
+   * It is also nearly free in the currency sigma is expensive in, because
+   * the lateral offset is as often towards the sun as away from it, so the
+   * term is close to zero-mean over a lock. On the ADDITIVE form it was
+   * exactly free -- coatLock 0 -> 8 moved the portrait coat/snow ratio by
+   * 0.002 while the gain-corrected structure rose 48%.
    *
-   *              portrait                       nape
-   *            coat/snow  residual sd     coat/snow  residual sd
-   *   0 (off)    1.0167      5.69           0.6842      8.04
-   *   2.0        1.0178      6.18           0.6898      9.43
-   *   4.0        1.0184      7.00           0.6967     12.34
-   *   8.0        1.0172      8.41           0.7026     16.85
+   * MULTIPLICATIVE RATHER THAN ADDITIVE, and that was decided on the render
+   * against the metric, not with it. Additive scores better per unit of
+   * brightness spent (profile residual 10.3 for 0.092 of ratio, against 7.5
+   * for the same 0.092) and looks worse: it keeps full strength at the coat's
+   * OUTER layer, which is the layer the camera sees, so the flank resolved
+   * into hard parallel corrugation -- carved ridges, not locks. Crops at
+   * shots/shell-selfshadow/crop vs /cropmul. The metric cannot tell
+   * corrugation from texture, because corrugation IS contrast energy; that
+   * is exactly the case AGENTS.md's "put the assertion in image space" is
+   * about, and the picture wins. Multiplying by depth instead makes the tuft
+   * shading fade out as the hair emerges, which is also the physics: a fully
+   * exposed tip is exposed whichever side of its lock it is on.
    *
-   * The ratio moves by 0.002 at portrait across the whole range while the
-   * structure nearly doubles, and at nape it moves the ratio the RIGHT way.
-   * 8.0 was refused on the render, not the number: the nape starts reading
-   * as quilted fabric rather than fur.
-   *
-   * NOTE the term is inert at coatSigma 0 -- it displaces the argument of an
-   * exponential that is then identically 1. Measured: coatLock 4.0 with
-   * coatSigma 0 is bit-identical to the coat with both off (residual sd
-   * 0.017 against a repeatability floor of 0.035). That is by construction,
-   * not a bug, but it means an A/B that zeroes sigma also silently zeroes
-   * this.
+   * NOTE the term is inert at coatSigma 0 -- it scales the argument of an
+   * exponential that is then identically 1. Measured on the additive form:
+   * coatLock 4.0 with coatSigma 0 is bit-identical to both off (residual sd
+   * 0.017 against a repeatability floor of 0.035). By construction, not a
+   * bug, but it means an A/B that zeroes sigma silently zeroes this too.
    */
-  coatLock: 4.0,
+  coatLock: 12.0,
   // How much of the undercoat felt's opacity the strand layer modulates.
   // See furHair(): the felt is the one layer with no hair in it, and wherever
   // max(a, under) picks it the coat renders as a flat plate the width of a
