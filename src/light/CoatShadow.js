@@ -223,14 +223,15 @@ const PORE_OFFSET = 3.77;                             // decorrelate the lattice
  * of peak-to-peak relief moved the boundary 0.3 px. What breaks a silhouette
  * is HOLES, so the caster is now TWO depth layers:
  *
- *   - the CORE, this material, solid, at CORE_FRAC = 0.82 of the coat --
- *     where the undercoat is actually opaque;
+ *   - the CORE, this material, solid, at CORE_FRAC = 0.90 of the coat --
+ *     the deepest it can sit without the shadow losing AREA at any sun
+ *     angle; see the sweep at CORE_FRAC;
  *   - the FRINGE, a second SkinnedMesh over the same geometry and skeleton
  *     drawn only into the shadow map, reaching the 1.42 L guard-hair tips
  *     and alpha-tested into separate tufts.
  *
  * A hole in the fringe falls back to the core's depth rather than to no
- * caster at all, so the outer 0.60 L of the silhouette is stochastic and the
+ * caster at all, so the outer 0.52 L of the silhouette is stochastic and the
  * body never leaks light. See the FRINGE block below for why the lattices
  * are coarse and why the pores are aligned with the light ray.
  *
