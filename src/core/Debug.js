@@ -180,21 +180,34 @@ function resolvePose(pose, ctx) {
     }
   }
 
-  // On a narrow viewport, DOLLY BACK rather than widen the lens.
+  // On a narrow viewport, dolly back for the HALF of the aspect fit that the
+  // lens did not absorb. Not the whole of it -- that was a double correction.
   //
-  // The interactive rig holds horizontal field constant by widening the
-  // vertical fov, which is right for exploration -- but at 390x844 that means
-  // a 103 degree vertical, roughly a 13 mm ultra-wide, and authored poses are
-  // compositions with a deliberate lens character. Pulling back instead keeps
-  // the authored fov (and therefore the perspective compression) while
-  // covering the same horizontal extent of subject.
-  const aspect = ctx.camera.aspect || (16 / 10);
+  // This block used to pull back by the full REF_ASPECT/aspect (3.46x at
+  // 390x844) on the argument that a dolly preserves the authored lens where
+  // widening the fov does not. The argument is sound; the bug is that
+  // `setPose` below ALSO calls applyAdaptiveFov, unconditionally, so both
+  // corrections landed on every anchored pose and multiplied. `portrait`
+  // measured a head at **12.9% of frame height at 390x844 against 95.3% at
+  // 1920x1200** -- 3.46x from the dolly times 3.46x from the fov. A head
+  // portrait in which the head is an eighth of the frame.
+  //
+  // applyAdaptiveFov now takes the geometric mean of the letterbox and crop
+  // fits, so it absorbs sqrt(REF_ASPECT/aspect) of the ratio and leaves
+  // exactly sqrt(REF_ASPECT/aspect) over. Taking that remainder as a dolly
+  // holds the subject's WIDTH fraction at its authored 16:10 value, which is
+  // what an anchored pose is really asking for: `portrait` is "the head fills
+  // the frame", and on a frame 2.16x taller than it is wide the head can only
+  // fill the width. Without this the same head projects to 138% of frame
+  // width and loses both ears.
+  //
+  // Absolute poses get no dolly: their vantage point is authored against the
+  // horizon and the sun, and moving the camera along the view axis would
+  // change the composition rather than fit it.
+  const aspect = ctx.camera.aspect || REF_ASPECT;
   let dist = pose.dist;
   if (pose.fov && aspect < REF_ASPECT) {
-    const halfV = (pose.fov * Math.PI / 180) / 2;
-    const hRef = Math.atan(Math.tan(halfV) * REF_ASPECT);
-    const hNow = Math.atan(Math.tan(halfV) * aspect);
-    dist = pose.dist * (Math.tan(hRef) / Math.max(Math.tan(hNow), 1e-4));
+    dist = pose.dist * Math.sqrt(REF_ASPECT / Math.max(aspect, 0.2));
   }
 
   const pos = t.clone().addScaledVector(dir, dist);

@@ -53,27 +53,63 @@ function patchShadowClear(renderer) {
 }
 
 /**
- * three's PerspectiveCamera.fov is VERTICAL. Setting only `aspect` from w/h
- * therefore keeps the vertical field fixed and lets the horizontal field
- * collapse as the viewport narrows: at 390x844 a 40 degree vertical fov gives
- * about 19.5 degrees horizontally, against about 60 degrees on a desktop
- * 16:10. The subject gets cropped out of frame on a phone.
+ * Fit an authored 16:10 composition to an arbitrary viewport aspect.
  *
- * Below a reference aspect we therefore hold the HORIZONTAL field constant and
- * widen the vertical one, which is what every camera app does when you rotate
- * the device. Above it, the authored vertical fov is used unchanged.
+ * three's PerspectiveCamera.fov is VERTICAL, so there are exactly two naive
+ * answers below the reference aspect, and BOTH have shipped here and both are
+ * wrong:
+ *
+ *   - Hold the VERTICAL field (change nothing). The horizontal field collapses
+ *     with the viewport: at 390x844 a 40 degree vertical leaves ~19.5 degrees
+ *     horizontally against ~60 on a 16:10 desktop. The subject keeps its
+ *     height fraction and grows to ~138% of the frame WIDTH -- cropped out
+ *     sideways. This is the bug the previous note describes.
+ *   - Hold the HORIZONTAL field (what replaced it). The vertical field then
+ *     grows by the full aspect ratio -- 40 degrees becomes 103 at 390x844, a
+ *     ~16 mm ultra-wide -- and the subject shrinks by that same factor. The
+ *     `hero` fox measured **13.9% of frame height at 390x844 against 48.3% at
+ *     1920x1200**, a speck in an empty sky. REVIEW-5 blocker 13.
+ *
+ * Those two are "letterbox" and "crop", and the fit that works is the
+ * GEOMETRIC MEAN of them:
+ *
+ *     tan(vFov/2) = tan(baseFov/2) * sqrt(REF_ASPECT / aspect)
+ *
+ * Three equivalent readings of the same formula, which is why it is the one
+ * to pick:
+ *
+ *  1. It holds tan(hFov/2) * tan(vFov/2) constant -- the camera covers a
+ *     constant AREA of the subject plane, so the subject keeps a constant
+ *     fraction of the frame's area at every aspect. Area is the one scalar
+ *     that answers "does this still read as the subject".
+ *  2. It holds the DIAGONAL field, and therefore the 35 mm-equivalent focal
+ *     length, constant to within 9% from 0.46 (portrait phone) to 2.16
+ *     (landscape phone). ART_DIRECTION section 9 quotes lens choice in 35 mm
+ *     equivalents, so this is the only one of the three fits that preserves
+ *     the authored lens: `hero`'s 33 mm stays a 29 mm here, against 16 mm for
+ *     hold-horizontal and 54 mm for hold-vertical.
+ *  3. Subject height and width fractions move by sqrt(aspect ratio) each,
+ *     instead of one of them taking the whole error.
+ *
+ * Above the reference aspect the authored vertical fov is used unchanged, so
+ * 1280x800 and 1920x1200 -- which are exactly REF_ASPECT, and are where
+ * audit.mjs and spec.mjs measure -- are bit-identical to before.
  */
 export const REF_ASPECT = 16 / 10;
+
+/** Widest vertical field we will ever produce, however extreme the viewport. */
+export const MAX_VFOV = 100;
 
 export function applyAdaptiveFov(camera, baseFov, aspect) {
   const baseRad = baseFov * Math.PI / 180;
   if (aspect < REF_ASPECT) {
-    const hFov = 2 * Math.atan(Math.tan(baseRad / 2) * REF_ASPECT);
-    camera.fov = 2 * Math.atan(Math.tan(hFov / 2) / Math.max(aspect, 0.2)) * 180 / Math.PI;
+    const a = Math.max(aspect, 0.2);
+    const t = Math.tan(baseRad / 2) * Math.sqrt(REF_ASPECT / a);
+    camera.fov = 2 * Math.atan(t) * 180 / Math.PI;
   } else {
     camera.fov = baseFov;
   }
-  camera.fov = Math.min(camera.fov, 140);
+  camera.fov = Math.min(camera.fov, MAX_VFOV);
   camera.updateProjectionMatrix();
   return camera.fov;
 }

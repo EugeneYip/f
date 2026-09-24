@@ -151,9 +151,12 @@ export class CameraRig {
    * the HORIZONTAL field collapse as the viewport narrows: at 390×844 an
    * authored 40° vertical fov leaves ~19.5° horizontally against ~60° on a
    * 16:10 desktop, and the animal falls out of frame sideways. `App.js`
-   * exports `applyAdaptiveFov()` to hold the horizontal field constant below a
-   * 16:10 reference; this rig used to overwrite its result every frame with a
-   * raw `cam.fov = …`, so the fix never survived a single update.
+   * exports `applyAdaptiveFov()` to fit an authored 16:10 composition to any
+   * aspect — read the note on it; it holds the frame AREA (and so the 35 mm
+   * equivalent) rather than either single axis, because holding the horizontal
+   * axis alone took the `hero` fox down to 13.9% of frame height on a phone.
+   * This rig used to overwrite its result every frame with a raw
+   * `cam.fov = …`, so the fix never survived a single update.
    *
    * We also publish `ctx.baseFov`. `App._applyRenderSize()` reads it on every
    * resize and falls back to `camera.fov` when it is absent — and `camera.fov`
