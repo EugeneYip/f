@@ -270,6 +270,26 @@ horizon check by cutting art-bible snow sparkle 71%. If you believe a threshold
 is wrong, report it with the measurement and leave it failing — the
 orchestrator owns `tools/**` and will change it.
 
+## GLSL reserved words that look like ordinary variable names
+
+`coherent` is a reserved word in GLSL -- a memory qualifier -- and naming a
+float after it fails the shader with `'coherent' : Illegal use of reserved
+word`, four times over, while `node --check` passes happily because the JS
+template literal is perfectly valid. It cost the AO agent a build.
+
+The ones most likely to bite here, because they read as ordinary nouns:
+
+    coherent  volatile  restrict  readonly  writeonly
+    sample    patch     subroutine          shared
+    buffer    input     output    filter    resource
+    active    common    partition superp    namespace
+
+`node --check` CANNOT catch these -- it only sees a string. The build error
+appears at runtime as a `THREE.WebGLProgram: Shader Error ... VALIDATE_STATUS
+false` in the page console, which `tools/spec.mjs`'s `no console errors`
+check will catch, and `tools/gate.mjs`'s render-health group will too. If you
+edit a shader, run one render and grep for `Shader Error` before you move on.
+
 ## TAA accumulates ACROSS A/B arms unless something resets it
 
 `src/fx/TAA.js` resolves with `uAlpha = 1/(n+1)` and lets `n` run to 250
