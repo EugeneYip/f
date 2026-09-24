@@ -56,15 +56,49 @@ function touchdowns(series, key, thresh) {
   return out;
 }
 
-/** Cyclic sequence of first touchdowns, e.g. ['pawRL','pawFL','pawRR','pawFR']. */
+/**
+ * Cyclic footfall sequence, ordered by STEADY-STATE PHASE.
+ *
+ * This used to order the paws by each one's FIRST touchdown, which is not a
+ * property of the gait at all -- it is a property of where in the cycle the
+ * simulation happened to start. A paw that is already planted at t = 0 does
+ * not cross the threshold downward until its NEXT step, a full cycle later,
+ * while a paw caught mid-swing lands almost immediately. So the reported
+ * order was set by the initial pose, and it duly flipped between runs on
+ * builds whose gait nobody had touched: `pawFR -> pawFL -> pawRR -> pawRL`
+ * on one run and `pawFL -> pawRL -> pawRR -> pawFR` on the next. An agent
+ * called it a coin flip, and it was.
+ *
+ * Ordering by phase instead: estimate the cycle period from the touchdown
+ * intervals, take each paw's LAST touchdown (all four land within one cycle
+ * of each other, so the modulo barely wraps and period error cannot
+ * accumulate), and sort those. Returns the gaps too, because two footfalls
+ * closer together than the sampling interval are not a resolvable order and
+ * the check should say so rather than pick one.
+ */
 function footfallOrder(series, keys, thresh) {
-  const first = [];
+  const last = [], gaps = [];
   for (const k of keys) {
     const td = touchdowns(series, k, thresh);
-    if (td.length) first.push([k, td[0]]);
+    if (td.length < 2) return { order: [], reason: `${k} gave ${td.length} touchdown(s); need 2 to find a period` };
+    for (let i = 1; i < td.length; i++) gaps.push(td[i] - td[i - 1]);
+    last.push([k, td[td.length - 1]]);
   }
-  first.sort((a, b) => a[1] - b[1]);
-  return first.map((f) => f[0]);
+  if (!gaps.length) return { order: [], reason: 'no touchdown intervals' };
+  gaps.sort((a, b) => a - b);
+  const T = gaps[gaps.length >> 1];
+  if (!(T > 1e-4)) return { order: [], reason: `degenerate cycle period ${T}` };
+  const t0 = Math.min(...last.map((l) => l[1]));
+  const ph = last.map(([k, t]) => [k, (((t - t0) % T) + T) % T / T]);
+  ph.sort((a, b) => a[1] - b[1]);
+  // Smallest cyclic gap between adjacent footfalls, as a fraction of a cycle.
+  let minGap = 1;
+  for (let i = 0; i < ph.length; i++) {
+    const d = (ph[(i + 1) % ph.length][1] - ph[i][1] + 1) % 1;
+    if (d < minGap) minGap = d;
+  }
+  return { order: ph.map((p) => p[0]), T, minGap,
+           phases: ph.map(([k, f]) => `${k} ${(f * 100).toFixed(1)}%`).join(', ') };
 }
 
 /** Does `got` match `want` under cyclic rotation? */
@@ -290,11 +324,20 @@ const main = async () => {
 
       // Footfall order — §8 of the art bible, and previously unchecked.
       if (FOOTFALL[state]) {
-        const got = footfallOrder(out, pawKeys, 0.022);
+        const ff = footfallOrder(out, pawKeys, 0.022);
+        // A pair of footfalls closer than 5% of a cycle is not a resolvable
+        // order at this sampling rate. Say so instead of grading the toss.
+        const tooClose = ff.minGap != null && ff.minGap < 0.05;
         record(`[${state}] canid footfall order`,
-          cyclicMatch(got, FOOTFALL[state]),
-          `got ${got.join(' -> ') || '(no touchdowns detected)'}; ` +
-          `want ${FOOTFALL[state].join(' -> ')} (cyclic)`);
+          cyclicMatch(ff.order, FOOTFALL[state]) && !tooClose,
+          `got ${ff.order.join(' -> ') || `(unmeasurable: ${ff.reason})`}; ` +
+          `want ${FOOTFALL[state].join(' -> ')} (cyclic). Ordered by ` +
+          `STEADY-STATE PHASE${ff.T ? ` over a ${(ff.T * 1000).toFixed(0)} ms cycle` : ''}` +
+          `${ff.phases ? `: ${ff.phases}` : ''}` +
+          `${tooClose ? `. UNRESOLVABLE: closest pair is ${(ff.minGap * 100).toFixed(1)}% ` +
+            'of a cycle apart, under the 5% floor' : ''}` +
+          `. The previous version ordered by each paw's FIRST touchdown, which ` +
+          `is a property of where the sim started, not of the gait`);
       }
       if (state === 'trot') {
         // Diagonal pairs should land together.
