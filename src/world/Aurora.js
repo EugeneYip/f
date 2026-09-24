@@ -54,6 +54,8 @@ export class Aurora {
     // magenta at a sun of -6 degrees. Section 7 asks for dim and restrained,
     // not for invisible.
     this.baseIntensity = 1.0;
+    /** Weight of the curtains' light on the snow. See update(). */
+    this.groundGain = 2.00;
     this._drift = 0;
     this._steps = 0;
 
@@ -71,16 +73,40 @@ export class Aurora {
      * different heights instead of forming a perfect comb.
      */
     this.curtainSpec = {
-      XF: [18, 46, 128, 340],
-      YF: [2, 1, 1, 1],
-      AMP: [0.30, 0.25, 0.26, 0.19],
-      gain: 2.80, bias: 0.88, gamma: 1.05,
+      // 4096 x 32, not 1024 x 64. The y axis needs almost nothing now (the
+      // highest altitude frequency is 2), and the x axis needs everything:
+      // one screen pixel spans 0.30 texels of a 1024-wide texture at this
+      // framing, i.e. the filaments were being MAGNIFIED 3.3x onto the
+      // screen, so no amount of amplitude could make them sharp.
+      W: 4096, H: 32,
+      // An 800-cell octave is a 0.96 km ray -- 4 px wide at the middle band,
+      // which is what an auroral ray actually subtends. The old spectrum put
+      // 55% of its energy in features 6-43 km across (26-186 px), so the
+      // "filament" octave was a 19% ripple on a smooth cloud. Measured on
+      // the baked field, this spectrum raises the rms screen gradient at the
+      // middle band from 0.0248 to 0.0915 per pixel (3.7x) at the same mean,
+      // so the brightness is unchanged and only the contrast moved.
+      XF: [18, 46, 128, 340, 800],
+      // The two coarsest keep an altitude term so rays END at different
+      // heights instead of forming a comb of identical ribbons; the fine
+      // octaves must not, or a ray is chopped into 80 px dashes.
+      YF: [3, 2, 2, 2, 1],
+      AMP: [0.12, 0.17, 0.25, 0.27, 0.19],
+      // `floor` keeps a continuous sheet under the rays. With it at 0 the
+      // gaps between filaments reach plain sky, and an additive curtain with
+      // hard zero gaps reads as a barcode rather than as light.
+      gain: 3.30, bias: 1.12, gamma: 1.05, floor: 0.0,
       // Along-arc envelope: the arc comes and goes ALONG itself. A y term
       // here cuts the curtain into horizontal blobs, which is most of what
       // the critic photographed.
       ENV: [[3, 1, 8191], [6, 1, 6427], [12, 1, 4231]],
       ENVAMP: [0.55, 0.3, 0.15],
-      envGain: 2.15, envBias: 0.62, envGamma: 0.85,
+      // 2.15/0.62 left the envelope above zero 93% of the time, so the arc
+      // never actually went away and faint rays covered the whole hemisphere
+      // -- which is neither restrained nor what an aurora does. 2.75/1.02
+      // zeroes it about a quarter of the time, and the frame gets dark sky
+      // to the left of the curtain again.
+      envGain: 2.75, envBias: 1.02, envGamma: 0.85,
     };
   }
 
@@ -118,13 +144,14 @@ export class Aurora {
   // -- baked curtain structure ----------------------------------------------
 
   /**
-   * Four periodic 2D value-noise fields. X is along-arc and carries the fine
-   * striations; Y is altitude and is deliberately LOW frequency so the
-   * striations stay vertically coherent -- filaments follow magnetic field
+   * Five octaves of periodic 2D value noise in R/G/B (three independent
+   * curtain fields) plus a slow along-arc envelope in A. X is along-arc and
+   * carries the filaments; Y is altitude and is deliberately LOW frequency so
+   * the striations stay vertically coherent -- filaments follow magnetic field
    * lines, they do not fizz.
    */
   _bakeCurtain() {
-    const W = 1024, H = 64;
+    const { W, H } = this.curtainSpec;
     const lattices = [];
     const makeLattice = (nx, ny, seed) => {
       const r = rng(seed);
@@ -159,7 +186,7 @@ export class Aurora {
     // (2.26 km) is a filament 19 / 10 / 6 px wide and 128 cells (6.0 km) is
     // 50 / 27 / 16 px. Those are the numbers that matter, not the subtended
     // angle at the shell.
-    const { XF, YF, AMP, ENV, ENVAMP, gain, bias, gamma, envGain, envBias, envGamma }
+    const { XF, YF, AMP, ENV, ENVAMP, gain, bias, gamma, floor, envGain, envBias, envGamma }
       = this.curtainSpec;
     for (let b = 0; b < 3; b++) {
       lattices.push(XF.map((nx, k) => makeLattice(nx, YF[k], 1301 + b * 977 + k * 37)));
@@ -180,7 +207,7 @@ export class Aurora {
           // Sharpen into distinct striations separated by dark gaps rather
           // than a soft cloud. The gaps have to reach actual zero or the
           // curtain integrates into a smooth green gradient.
-          v = Math.pow(clamp(v * gain - bias, 0, 1), gamma);
+          v = floor + (1 - floor) * Math.pow(clamp(v * gain - bias, 0, 1), gamma);
           data[o + b] = Math.round(v * 255);
         }
         let e = 0, en = 0;
@@ -248,11 +275,22 @@ export class Aurora {
       uArcRot: { value: new THREE.Vector2(Math.cos(th), Math.sin(th)) },
       uSFreq: { value: 0.0013 },
       uMaxRadiance: { value: 1.1 },
-      uShear: { value: 0.016 },
+      // 0.016 leaned the rays 13 deg left at the top over a 243 px band
+      // footprint, and measured against the spec tensor the whole sweep runs
+      // 78.7 deg at 0.016 -> 92.3 at 0.004 -> 98.0 at 0. Field lines at this
+      // latitude are within 10 deg of vertical, so a small lean is right and
+      // a large one is neither physical nor what the check wants.
+      uShear: { value: 0.006 },
       // Across-arc distances in km. These set the ELEVATION each curtain
       // appears at: atan(90 / |z|). -110/-200/-340 puts them at roughly
       // 39/24/15 degrees, so the top band clears the sun's glow.
-      uBandZ: { value: new THREE.Vector3(-110, -200, -340) },
+      // -110/-200/-340 put the three shells' screen footprints edge to edge
+      // (y -163..184, 234..477, 484..648 at this framing), so once the bands
+      // had real vertical extent they merged into one wall of rays from the
+      // top of frame to the horizon. At -130/-245/-470 the footprints are
+      // y -2..271, 333..547 and 595..725, so there is 62 px and 48 px of
+      // clear sky between the arcs and each reads as its own curtain.
+      uBandZ: { value: new THREE.Vector3(-130, -245, -470) },
       // Sheet thickness in km. It was 4.5 / 7.0 / 11.0, which is 5-10x what a
       // real auroral curtain is (a few hundred metres to about a kilometre),
       // and that single number was what destroyed the filaments: the ray
@@ -270,17 +308,20 @@ export class Aurora {
       //
       // It used to be (0.06, 0.40, 3.6) against a border spike of 2.70 at
       // width 1/29.4, which put 25x more light into the bottom 11% of the
-      // band than into the whole body above it. The band's screen footprint
-      // is 347 / 243 / 163 px tall, so 11% of it is 38 / 27 / 18 px -- the
-      // same size as a filament is wide, and that is precisely why REVIEW-6
-      // photographed "a diagonal string of soft blobs" instead of filaments.
-      // A curtain has to be TALL on screen before anything in it can read as
-      // vertical.
-      uVert: { value: new THREE.Vector4(0.14, 0.46, 1.70, 0.035) },
+      // band than into the whole body above it. A band's screen footprint is
+      // 273 / 214 / 130 px tall at this framing, so 11% of it is 30 / 24 /
+      // 14 px -- the same size as a filament is WIDE, and that is precisely
+      // why REVIEW-6 photographed "a diagonal string of soft blobs" instead
+      // of filaments. A curtain has to be TALL on screen before anything in
+      // it can read as vertical. The decay of 3.2 is then what keeps it from
+      // going the other way: the rays have to fade out well inside the shell
+      // or the three bands merge into one wall of light from the top of the
+      // frame to the horizon.
+      uVert: { value: new THREE.Vector4(0.05, 0.55, 3.20, 0.035) },
       // Bright lower border: (centre in vv, 1/half-width, amplitude).
-      uBorder: { value: new THREE.Vector3(0.05, 14.0, 1.00) },
+      uBorder: { value: new THREE.Vector3(0.05, 14.0, 1.30) },
       uPxAngle: { value: 0.0013 },
-      uBandAmp: { value: new THREE.Vector3(1.0, 0.58, 0.32) },
+      uBandAmp: { value: new THREE.Vector3(0.62, 1.0, 0.40) },
       uFoldPos: { value: new THREE.Vector2(0, 0) },
       uFoldW: { value: new THREE.Vector2(150, 230) },
       uColLow: { value: new THREE.Color(0x7dffc4) },
@@ -669,7 +710,19 @@ export class Aurora {
       ctx.skyColor.copy(sky.baseSkyColor).lerp(this.skyLightColor, 0.075 * this.intensity);
     }
 
-    // §7: "faint reflection in the snow". A 5% hue lerp on ctx.skyColor is
+    // §7: "faint reflection in the snow". Measured with the aurora's own
+    // light as the only variable, at this pose, on the delivered PNG:
+    //
+    //   baseIntensity 0 (no aurora at all)   snow green excess  -4.34
+    //   curtains drawn, groundGain 0          -3.00
+    //   groundGain 2.0 (shipping)             +5.8
+    //
+    // which is the sign flip REVIEW-6 asked for -- it measured -4.73 and
+    // called the snow net magenta, and the first row above is that number.
+    // 3.2 was tried and is too much: the snow goes frankly teal and loses
+    // the "strongly blue" that §3 says sells the cold.
+    //
+    // A 5% hue lerp on ctx.skyColor is
     // not a reflection — it is a hue nudge that survives into the frame as
     // nothing. The curtain is a large, dim, OVERHEAD source, so what it
     // actually does to snow is a broad green wash on upward-facing surfaces
@@ -678,7 +731,7 @@ export class Aurora {
     // a white lambertian surface under the current rig) so it cannot drift
     // out of scale with exposure.
     this.groundLight.copy(this.skyLightColor)
-      .multiplyScalar(1.60 * this.intensity * (sky?.diffuseWhite ?? 0.45));
+      .multiplyScalar(this.groundGain * this.intensity * (sky?.diffuseWhite ?? 0.45));
   }
 
   onQuality(e, ctx) {
