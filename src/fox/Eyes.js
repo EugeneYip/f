@@ -379,6 +379,44 @@ const RIM_FUR_1 = 0.00190;       // ...and owns the surface from here out
 // to be a rim against.
 const LID_SCATTER = 0.60;
 
+// SOCKET OCCLUSION ON THE LID BAND — the missing term behind "a pale grey-blue
+// ring surrounding the iris, like a visible sclera".
+//
+// LID_SCATTER was swept to coat PARITY (band p50 within 2% of the coat 4-20 px
+// outside it) and the band still reads as a pale ring, which looks like a
+// contradiction until you ask what the reference is. Parity with the coat is
+// the wrong target: the band lies in the bottom of the orbital recess, under
+// a brow and behind a lid fold, and a cavity does not receive the full sky.
+// The coat 4-20 px outside the socket is ON the rim and does. So a band at
+// parity is a band 25-35% too bright for where it sits, and because it is
+// also the only smooth surface in the frame it reads as wet sclera.
+//
+// This is a cavity term, not a fudge: it is largest at the free edge (deepest
+// in the recess, closest to the lid fold that overhangs it) and decays to
+// nothing by the outer boundary, where the band is continuous with the face
+// and should match it exactly. LID_AO_LAMBDA is in metres of arc so it does
+// not rescale when the socket or the coat does.
+const LID_AO = 0.38;             // peak occlusion at the free edge
+const LID_AO_LAMBDA = 0.0019;    // e-folding distance outward, metres of arc
+
+// The upper lid's crease. A canid's upper lid folds back on itself a couple
+// of millimetres above the margin, and the groove is the only thing that
+// tells a viewer the lid has THICKNESS rather than being a decal printed on
+// the globe. Authored in metres of arc for the same reason the rim ramp is.
+const LID_CREASE = 0.30;         // how deep the groove shades
+const LID_CREASE_AT = 0.0027;    // where its centre sits, metres of arc
+const LID_CREASE_W = 0.0012;     // and its half-width
+
+// The canthi. A lid margin is NOT one width: it is a line along the free edge
+// that broadens into a blunt triangle where the two lids meet, and at the
+// MEDIAL canthus it broadens further around the lacrimal caruncle. A margin of
+// constant width is the specific thing the review means by "a uniform-width
+// dark annulus that does not thicken at the corners".
+const CANTH_FROM = 0.60;         // |u| at which the corner starts broadening
+const CANTH_WIDEN = 2.30;        // margin width multiplier at the lateral canthus
+const CANTH_WIDEN_NASAL = 3.60;  // ...and at the medial one, which is blunter
+const CARUNCLE_ARC = 0.00085;    // caruncle reach outward from the free edge
+
 // How far the middle of the lid band stands proud of the globe, as a fraction
 // of the globe radius. THIS IS HALF OF THE PALE RING OUTSIDE THE DARK ONE.
 //
@@ -441,6 +479,8 @@ uniform float uSpread;
 uniform float uLidYaw, uLidPitch;
 uniform float uLidScatter;
 uniform float uLidSwell;
+uniform float uNasalSign, uLidAO, uLidCrease, uCanthus;
+uniform vec3 uCaruncle;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
 uniform vec3 uCamL, uSunL, uUpL, uSunCol, uSkyCol, uBounceCol;
@@ -1023,6 +1063,13 @@ export class Eyes {
     root.add(ball);
 
     const u = this._makeUniforms(ctx, R, Rc, zc, k, irisZ, irisR, limbusR, apW, ap);
+    // Which sign of the lid's own u is the NOSE. `restYawRaw` is the
+    // convergence — the rotation that turns the globe toward the midline — so
+    // its sign is nasal by construction, and it is already opposite between
+    // the sides because eye-local +X is. Derived rather than switched on
+    // `side`, because every per-side constant in this file has eventually
+    // turned out to be one of them backwards.
+    u.uNasalSign.value = restYawRaw >= 0 ? 1 : -1;
 
     const globe = new THREE.Mesh(
       buildGlobe(R, Rc, zc, k, segs.GW, segs.GH),
@@ -1436,6 +1483,19 @@ export class Eyes {
       // dielectric keeps. See the note at the lid's lights_fragment_end.
       uLidScatter: { value: LID_SCATTER },
       uLidSwell: { value: LID_SWELL },
+      // WHICH SIGN OF vU IS THE NOSE. Eye-local +X flips meaning between the
+      // sides, so a canthus authored on a fixed sign is the medial canthus on
+      // one eye and the lateral one on the other -- which is how the previous
+      // asymmetry bugs in this file all started. Set by the caller from the
+      // same `restYawRaw` sign that decides the fissure's nasal follow.
+      uNasalSign: { value: 1 },
+      uLidAO: { value: LID_AO },
+      uLidCrease: { value: LID_CREASE },
+      uCanthus: { value: 1 },
+      // Lacrimal caruncle. Not pink -- on a wild canid it is a dark, slightly
+      // warm brown-grey, and a pink one is the single loudest way to make a
+      // realistic eye look like a toy.
+      uCaruncle: { value: new THREE.Color(0x4a3730) },
 
       uApW: { value: apW }, uApUp: { value: ap.up },
       uApDn: { value: ap.dn }, uApTilt: { value: ap.tilt },
@@ -1838,9 +1898,52 @@ void main(){
   // Widths now live in one place at the top of the file, because the ramp and
   // the scatter mask below have to agree: any arc the scatter does not reach
   // renders as part of the black, whatever colour it was authored.
-  float feMargin = 1.0 - smoothstep(${RIM_MARGIN_0.toFixed(5)}, ${RIM_MARGIN_1.toFixed(5)}, vArc);
-  float feRing   = 1.0 - smoothstep(${RIM_MARGIN_1.toFixed(5)}, ${RIM_RING_1.toFixed(5)}, vArc);
-  float feFurry  = smoothstep(${RIM_FUR_0.toFixed(5)}, ${RIM_FUR_1.toFixed(5)}, vArc);
+  //
+  // THE MARGIN IS NOT ONE WIDTH. It is a line along the free edge that
+  // broadens into a blunt triangle at each canthus, and further at the medial
+  // one around the caruncle. A constant width is exactly the "uniform-width
+  // dark annulus that does not thicken at the corners" the review names, and
+  // it is also why the eye has no readable inner corner: with no landmark at
+  // either end, an almond of black is a decal.
+  //
+  // uNasalSign carries which way the nose is, because eye-local +X flips
+  // meaning between the sides.
+  float feCanth = smoothstep(${CANTH_FROM.toFixed(3)}, 1.0, abs(vU)) * uCanthus;
+  float feNasal = feCanth * smoothstep(-0.12, 0.12, vU * uNasalSign);
+  float feWiden = 1.0 + (${(CANTH_WIDEN - 1).toFixed(2)}) * feCanth
+                      + (${(CANTH_WIDEN_NASAL - CANTH_WIDEN).toFixed(2)}) * feNasal;
+
+  float feMargin = 1.0 - smoothstep(${RIM_MARGIN_0.toFixed(5)} * feWiden,
+                                    ${RIM_MARGIN_1.toFixed(5)} * feWiden, vArc);
+  float feRing   = 1.0 - smoothstep(${RIM_MARGIN_1.toFixed(5)} * feWiden,
+                                    ${RIM_RING_1.toFixed(5)} * feWiden, vArc);
+  float feFurry  = smoothstep(${RIM_FUR_0.toFixed(5)} * feWiden,
+                              ${RIM_FUR_1.toFixed(5)} * feWiden, vArc);
+
+  // THE UPPER LID'S CREASE. The fold that gives the lid thickness. Upper lid
+  // only -- a canid's lower lid has no crease -- and pushed outward at the
+  // canthi, where the fold runs up onto the orbital rim.
+  float feCreaseAmt = (vLid > 0.0 ? 1.0 : 0.0) * uLidCrease *
+    exp(-pow((vArc - ${LID_CREASE_AT.toFixed(5)} * feWiden) /
+             ${LID_CREASE_W.toFixed(5)}, 2.0)) * (1.0 - 0.55 * feCanth);
+
+  // SOCKET OCCLUSION. See LID_AO at the top of the file: the band sits in the
+  // bottom of the orbital recess and a band at parity with the coat ON the
+  // rim is a band 25-35 percent too bright for where it is. Largest at the
+  // free edge, gone by the outer boundary where the band is continuous with
+  // the face.
+  //
+  // AND IT MUST REACH EXACTLY ZERO AT THE BAND'S OUTER EDGE. An exponential
+  // alone still carries 12 percent of its depth at vArc = 5 mm, and because
+  // the band ENDS there against untouched face, that residue renders as a
+  // hard-edged darker wedge following the band's outline -- a visible seam
+  // round the socket, which is the failure the LID_SPREAD_MIN floor was
+  // originally added to avoid, arrived at from the shading side. vS is the
+  // band fraction and vS = 1 IS the outer boundary on every column whatever
+  // the measured spread, so windowing on vS is continuous by construction
+  // where windowing on arc cannot be.
+  float feAO = 1.0 - (uLidAO * exp(-vArc / ${LID_AO_LAMBDA.toFixed(5)})
+                      + 0.34 * feCreaseAmt) * (1.0 - smoothstep(0.50, 1.0, vS));
 
   // Short, fine hairs over the lid fold so it does not read as a plastic cap.
   //
@@ -1851,10 +1954,17 @@ void main(){
   // and the paw pads, not a 3.5 mm hairless ring around the fissure. Two
   // octaves, stretched along the band (hairs run outward across it, not
   // along it) and fine across it.
-  float feHair = snoise(vec3(vU * 46.0, vS * 7.0, 3.1)) * 0.5 + 0.5;
-  float feHairF = snoise(vec3(vU * 137.0, vS * 16.0, 8.7)) * 0.5 + 0.5;
+  //
+  // ACROSS-BAND COORDINATE IN MILLIMETRES, NOT IN vS. aSpread varies about
+  // 3:1 around one socket, so hair keyed on vS is three times coarser under
+  // the brow than at the canthus -- the same scale bug the rim ramp had, in
+  // the texture instead of in the colour. vArc is metres of arc, so 1.0/0.0012
+  // is one hair period per 1.2 mm everywhere.
+  float feAcross = vArc * 833.0;
+  float feHair = snoise(vec3(vU * 46.0, feAcross * 0.9, 3.1)) * 0.5 + 0.5;
+  float feHairF = snoise(vec3(vU * 137.0, feAcross * 2.1, 8.7)) * 0.5 + 0.5;
   float feHairM = feHair * 0.62 + feHairF * 0.38;
-  vec3 feFur = uLidFur * mix(0.74, 1.10, feHairM);
+  vec3 feFur = uLidFur * mix(0.70, 1.13, feHairM);
 
   // The periocular ring is the margin colour lifted toward skin, NOT skin
   // darkened — keeping it on the same hue is what stops the ring reading as
@@ -1865,13 +1975,29 @@ void main(){
   // Keep the extreme margin genuinely dark — this is the line that makes the
   // eye read from across the frame.
   feCol = mix(feCol, uMarginCol, feMargin * 0.96);
+  // The lacrimal caruncle: the small fleshy body in the medial canthus. It is
+  // the landmark that tells a viewer which end of the eye is the nose end,
+  // and without it the fissure is symmetric and reads as an almond decal.
+  float feCar = feNasal * (1.0 - smoothstep(0.0, ${CARUNCLE_ARC.toFixed(5)} * feWiden, vArc))
+                        * smoothstep(0.72, 0.94, abs(vU));
+  feCol = mix(feCol, uCaruncle, feCar * 0.85);
   diffuseColor.rgb = feCol;
 `)
           .replace('#include <roughnessmap_fragment>', /* glsl */ `
   // Wet meniscus: the tear strip where lid meets globe is the glossiest thing
   // on the face. It dries out quickly into ordinary skin and then into fur.
-  float feWet = 1.0 - smoothstep(0.00012, 0.00075, vArc);
+  //
+  // AND IT IS WIDER ON THE LOWER LID. The tear film pools in the inferior
+  // fornix and at the medial canthus (the lacrimal lake); on the upper margin
+  // it is a hairline. Equal strips top and bottom is part of why the rim reads
+  // as a drawn annulus rather than a wet edge: nothing about it is asymmetric,
+  // and a real eye's wet is all in the bottom third and the inner corner.
+  float feWetW = 0.00075 * (vLid > 0.0 ? 0.70 : 1.55) * (1.0 + 1.10 * feNasal);
+  float feWet = 1.0 - smoothstep(0.00012, feWetW, vArc);
   float roughnessFactor = mix(mix(0.62, 0.86, smoothstep(0.0025, 0.0060, vArc)), 0.09, feWet);
+  // The crease dulls: a groove packed with short hair scatters more than the
+  // stretched skin either side of it.
+  roughnessFactor = min(1.0, roughnessFactor + 0.10 * feCreaseAmt);
 `)
           .replace('#include <lights_fragment_end>', /* glsl */ `
 #include <lights_fragment_end>
@@ -1906,6 +2032,13 @@ void main(){
   // collar; scattering that varies hair-to-hair is what short fur looks like.
   reflectedLight.indirectDiffuse +=
     feAmb * diffuseColor.rgb * (uLidScatter * feFurry * mix(0.70, 1.26, feHairM));
+  // ...and then the whole band is occluded by the recess it sits in. Applied
+  // to the TOTAL indirect rather than only to the scatter term, because the
+  // cavity shadows the dielectric bounce and the env reflection just as much;
+  // occluding only the fur term would leave the margin and the caruncle lit
+  // by a sky they cannot see.
+  reflectedLight.indirectDiffuse *= max(feAO, 0.12);
+  reflectedLight.indirectSpecular *= max(feAO, 0.12);
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeLid';
