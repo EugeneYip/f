@@ -94,6 +94,25 @@ function patchShadowClear(renderer) {
  * Above the reference aspect the authored vertical fov is used unchanged, so
  * 1280x800 and 1920x1200 -- which are exactly REF_ASPECT, and are where
  * audit.mjs and spec.mjs measure -- are bit-identical to before.
+ *
+ * Measured with an isolated coverage matte (tools/matte.mjs's two-clear-colour
+ * trick), subject height / width as a fraction of the frame, and the frame
+ * position of the geometric horizon. Keep these if you change the rule:
+ *
+ *   `hero`      390x844   844x390   768x1024  1024x1024  1920x1200
+ *   height %      25.9      48.2      33.1       37.7       48.4
+ *   width  %      71.0      28.3      56.0       48.4       38.4
+ *   area   %      18.4      13.7      18.5       18.3       18.6
+ *   horizon %     42        35        40         38         35
+ *
+ * The area row is the invariant, and it is flat except at 844x390, where the
+ * frame is WIDER than the reference and the authored fov is left alone.
+ *
+ * What this rule costs, so the next person does not rediscover it: two poses
+ * that are already 61-64% of frame WIDTH at 16:10 -- `profile` and `paws` --
+ * lose their extremities at 0.46. No fit avoids that. Raising the exponent
+ * from 0.5 to ~0.65 keeps them whole and takes `hero` from 25.9% of frame
+ * height back down to 21.5%, which is the wrong trade for the money shot.
  */
 export const REF_ASPECT = 16 / 10;
 
