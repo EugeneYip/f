@@ -271,6 +271,37 @@ const results = await page.evaluate(async () => {
     out[`eye_${post ? 'post' : 'raw'}`] = best
       ? { ...sample(p.x + best.dx, p.y + best.dy, 12), foundAt: [best.dx, best.dy] }
       : sample(p.x, p.y, 12);
+
+    // ...and the MEAN over the iris, which is what the check actually
+    // asserts on. The search above is MAX-SEEKING: it hunts a +/-90 px grid
+    // for the warmest 5 px patch and samples there, so it reports the
+    // warmest thing near the eye whatever the eye is doing. It cannot fail
+    // toward grey -- an iris at (58,47,52) would still find its warmest
+    // corner and pass. The face agent measured the honest figure two ways
+    // and got 40.5 from this probe's own algorithm against 29.7 for a
+    // geometry-located annulus mean.
+    //
+    // Locating stays max-seeking, because finding the iris is exactly what
+    // a max is good for; only the MEASUREMENT becomes a mean. The luminance
+    // gate is the same one the search uses, and it gates on brightness, not
+    // on chroma, so it cannot bias the answer warm.
+    if (best) {
+      const cx = Math.round(p.x + best.dx), cy = Math.round(p.y + best.dy), R = 24;
+      const box = c2.getImageData(Math.max(0, cx - R), Math.max(0, cy - R), R * 2, R * 2).data;
+      let R2 = 0, G2 = 0, B2 = 0, n2 = 0;
+      for (let yy = 0; yy < R * 2; yy++) {
+        for (let xx = 0; xx < R * 2; xx++) {
+          const dx2 = xx - R, dy2 = yy - R;
+          if (dx2 * dx2 + dy2 * dy2 > R * R) continue;      // disc, not box
+          const i = (yy * R * 2 + xx) * 4;
+          const r = box[i], g = box[i + 1], b = box[i + 2];
+          if (r < 25 || r > 200) continue;                   // pupil / blown skin
+          R2 += r; G2 += g; B2 += b; n2++;
+        }
+      }
+      out[`eyeIris_${post ? 'post' : 'raw'}`] =
+        n2 > 200 ? { r: R2 / n2, g: G2 / n2, b: B2 / n2, n: n2 } : null;
+    }
   }
 
   // 3. COAT NEUTRALITY — §4b: no warm cast, ever. The salmon cast survived
@@ -1501,7 +1532,27 @@ record('nose survives post', np && np.r < 90 && np.b >= np.r - 6,
 
 // Eye: present, and warm relative to the cold surround.
 const er = results.eye_raw, ep = results.eye_post;
-record('eye is warm (raw)', er && er.r - er.b > 6, `${hex(er)} — R-B must exceed 6`);
+// Asserted on the iris MEAN, not on the max-seeking probe.
+//
+// The old bar was R-B > 6 against a max-seeking sample that reported 40.5:
+// 13x of slack on a number that could not fall. §3's iris is +79, but the
+// face agent showed that comparing the render to it is a category error --
+// +79 is an ALBEDO channel difference, and the authored iris already
+// exceeds it (uIrisMid 0xd39a44 is R-B 143). The render lands far lower
+// because the only light on the eye is a cold sky, the sun being behind
+// the animal at every specified framing.
+//
+// So the bar is calibrated, not sourced, and says so: the face agent's
+// geometry-located annulus mean read 29.7 raw, and 22 leaves 26% of
+// headroom under it. A grey iris at (58,47,52) fails this and passed the
+// old one.
+const eir = results.eyeIris_raw;
+record('eye is warm (raw)', eir && eir.r - eir.b >= 22,
+  `iris MEAN R-B ${eir ? (eir.r - eir.b).toFixed(1) : '?'} over ${eir ? eir.n : 0} px ` +
+  `against a calibrated floor of 22. The max-seeking probe beside it reads ` +
+  `${er ? (er.r - er.b).toFixed(1) : '?'} — that number hunts the warmest ` +
+  `patch within 90 px and therefore cannot fail toward grey, which is why ` +
+  `it is no longer the assertion`);
 record('eye keeps its chroma through post', er && ep && (ep.r - ep.b) > (er.r - er.b) * 0.7,
   `raw R-B ${er ? (er.r - er.b).toFixed(1) : '?'} -> post R-B ${ep ? (ep.r - ep.b).toFixed(1) : '?'}`);
 
