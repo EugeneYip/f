@@ -510,6 +510,61 @@ const smoothstep01 = (a, b, x) => {
 
 const F0_TEAR = 0.028;      // tear film, n = 1.336
 
+// THE TEAR FILM'S ROUGHNESS IS WHAT DRAWS THE HARD LINE ACROSS THE PUPIL.
+//
+// Review 6 measures a navy pupil with a hard horizontal terminator: above it
+// (8.5, 14.1, 22.8), below (7.1, 8.2, 11.7), completing in ~5 px on a 130 px
+// pupil. Attributed here, in one page session at one sim instant with TAA
+// reset per arm, and it is none of the things it looks like:
+//
+//   arm                          pupil upper / lower, B-R
+//   base                          +16.7 / +5.1      the step
+//   uPupilCol -> pure red         upper (78.5, 9.6, 21.7), lower (74.4, 0.5,
+//                                 0.6) -- both halves ARE the pupil, and the
+//                                 difference is an ADDITIVE (4, 9, 21), not
+//                                 a multiplicative shadow
+//   uCaustic = 0                  identical
+//   cornea overlay hidden         identical
+//   AO / bloom / DoF / rays / TAA identical, each skipped individually
+//   ball rolled 0.7 rad           iris fibres rotate, THE LINE DOES NOT --
+//                                 so it is not in the globe's object space
+//   scene.environment = null      LINE GONE, pupil uniformly black
+//
+// So it is the 256 px PMREM's sky/ground horizon, reflected in the clearcoat
+// at a roughness sharp enough to resolve it. The comment at
+// `material.clearcoatRoughness` already predicted exactly this and set 0.075
+// to avoid it; 0.075 was not enough.
+//
+// A TRAP WORTH THE LINE: `material.envMapIntensity` is a NO-OP on this
+// material. 0.85 -> 0 and 0.85 -> 6.0 both produced byte-identical pixels,
+// with and without `needsUpdate`. The globe has no envMap of its own
+// (`scene.environment` supplies it), and on that path the scene's own
+// intensity is what scales the reflection. An A/B arm built on
+// envMapIntensity here measures nothing at all -- which is the failure mode
+// AGENTS.md warns about, and it cost me two runs.
+// SWEPT, one page session, one sim instant, TAA reset per arm. The split is
+// present or absent, and the metric that separates them is how many pupil
+// rows fall above the largest row-to-row jump in B-R: with the split the jump
+// lands at the terminator and 6369 px sit above it; without, the jump lands
+// on the pupil's own top edge and 19-48 px do.
+//
+//   uCoatRough   0.075   0.12   0.17   0.24   0.34
+//   px above      6369     48     19     48     48
+//   pupil rgb   see note  11/18/28  13/21/32  14/23/34  13/22/33
+//
+// 0.075 is the old value and it reproduces the defect exactly, which is the
+// positive control. 0.12 already clears it; above that the pupil only gets
+// brighter, and §4b wants it black. 0.13 for a little margin.
+const COAT_ROUGH = 0.13;    // corneal tear film; 0.075 resolved the horizon
+const SKY_LOBE = 0.15;      // cornea overlay's broad sky reflection
+// GGX peaks at 1/(pi*a^2), so a lobe widened from 0.052 to 0.15 loses 8.3x of
+// its peak at constant gain -- which is why the first attempt at a "shaped"
+// reflection measured identical to switching it off (985 px over 150 with it
+// on, 983 with uSkyGain = 0). Gain has to scale with a^2 to keep any of the
+// energy. 0.26 restores about 40% of the old point's peak, spread over a
+// shape instead of a dot.
+const SKY_GAIN = 0.26;      // ...and its strength
+
 /**
  * EVERY uniform this file injects, declared in ONE place.
  *
@@ -535,6 +590,7 @@ uniform float uLidYaw, uLidPitch;
 uniform float uLidScatter;
 uniform float uLidSwell;
 uniform float uNasalSign, uLidAO, uLidCrease, uCanthus;
+uniform float uCoatRough, uSkyLobe, uSkyGain;
 uniform vec3 uCaruncle;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
@@ -1569,6 +1625,13 @@ export class Eyes {
       uPupilR: { value: 0.36 }, uEta: { value: 1.0 / 1.376 },
       uFibreN: { value: 118.0 }, uCollarette: { value: 0.41 },
       uCaustic: { value: 1.0 }, uWetness: { value: 1.0 },
+      // Corneal tear-film roughness, and the cornea overlay's sky lobe. Both
+      // are uniforms so they can be SWEPT in one page session at one sim
+      // instant instead of by re-rendering the file -- the last three
+      // constants in here that were tuned by re-rendering all cost a round.
+      uCoatRough: { value: COAT_ROUGH },
+      uSkyLobe: { value: SKY_LOBE },
+      uSkyGain: { value: SKY_GAIN },
 
       // §4b: "amber / golden-brown, noticeably warm". These were authored a
       // stop and a half darker than that and the eye graded out to a brown
@@ -1580,7 +1643,11 @@ export class Eyes {
       uIrisMid: { value: new THREE.Color(0xd39a44) },
       uIrisOuter: { value: new THREE.Color(0x9c6f2e) },
       uLimbal: { value: new THREE.Color(0x1a1206) },
-      uPupilCol: { value: new THREE.Color(0x05040a) },
+      // NEUTRAL, not navy. 0x05040a is B-R +5 before a single photon lands on
+      // it, and §4b says the pupil is black. What blue survives should be the
+      // sky reflected in the tear film, which is a real thing a wet eye does
+      // -- not the albedo pre-loading it.
+      uPupilCol: { value: new THREE.Color(0x050507) },
       // A fox's exposed sclera is pigmented, but "pigmented" is not "black".
       // The one primary description of a wild canid's (Cerdocyon thous,
       // PLOS ONE 2019) reports "minimal exposure of the SLIGHTLY pigmented
@@ -1777,7 +1844,7 @@ export class Eyes {
   // Roughing the tear film slightly turns that into the soft vertical
   // gradient a photograph actually shows, and widens the catchlight enough to
   // survive the bloom downsample.
-  material.clearcoatRoughness = mix(0.30, 0.075, eyOnCornea);
+  material.clearcoatRoughness = mix(0.30, uCoatRough, eyOnCornea);
 `)
           .replace('#include <lights_fragment_end>', /* glsl */ `
 #include <lights_fragment_end>
@@ -1870,13 +1937,33 @@ void main(){
   // places. uUpL is world up carried into this eye's frame every frame, so
   // both eyes catch the same sky from the same place and the highlight stays
   // put when the head turns.
+  //
+  // AND IT IS A SHAPE, NOT A DOT. At 0.052 this lobe was a 7x7 px disc --
+  // 2.1% of a 337 px iris at macro_eye, the only specular on the eye, and
+  // review 6 is right that it does not read as wet. A real wet cornea at
+  // this magnification carries a SHAPED reflection of the sky: bright and
+  // soft-edged, wider than tall because the sky's bright band above a polar
+  // horizon is, with a small hot core inside it.
+  //
+  // So: one broad lobe for the shape, anisotropic (the half-vector's
+  // component along world up is squeezed, which widens the reflection
+  // horizontally), plus a tight core for the discrete bloomable point the
+  // note above is about. Both ride uSkyLobe so the pair can be swept
+  // together; uSkyGain is their common strength.
   vec3 skyDir = normalize(normalize(uUpL) * 0.86 + V * 0.36);
   vec3 Hs = normalize(V + skyDir);
+  vec3 upL = normalize(uUpL);
+  // Squeeze the half-vector along up: the lobe gets wide and low.
+  vec3 Hw = normalize(Hs - upL * dot(Hs, upL) * 0.55);
+  float ndhw = feSat(dot(N, Hw));
   float ndhs = feSat(dot(N, Hs));
-  float as2 = 0.052 * 0.052;
-  float dns = ndhs * ndhs * (as2 - 1.0) + 1.0;
   vec3 skyLit = mix(uBounceCol, uSkyCol, 0.7);
-  spec += skyLit * (as2 / (3.14159265 * dns * dns)) * F * 0.055;
+  float aw2 = uSkyLobe * uSkyLobe;
+  float dnw = ndhw * ndhw * (aw2 - 1.0) + 1.0;
+  spec += skyLit * (aw2 / (3.14159265 * dnw * dnw)) * F * uSkyGain;
+  float ac2 = (uSkyLobe * 0.30) * (uSkyLobe * 0.30);
+  float dnc = ndhs * ndhs * (ac2 - 1.0) + 1.0;
+  spec += skyLit * (ac2 / (3.14159265 * dnc * dnc)) * F * uSkyGain * 0.45;
 
   // A second, wider lobe keeps the highlight alive after the bloom downsample
   // and stops it disappearing entirely at portrait framing.
