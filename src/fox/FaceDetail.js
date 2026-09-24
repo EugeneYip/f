@@ -613,7 +613,34 @@ export class FaceDetail {
       // with the key behind the animal, the sky and the snow bounce are what
       // actually make a nose look wet.
       clearcoat: 1.0,
-      clearcoatRoughness: 0.045,
+      // AND IT CANNOT BE A MIRROR, because Environment.js runs THREE
+      // directional lights and a wet dome under three lights has three
+      // highlights. Two of those lights (the snow bounce and the cool rim)
+      // are fills standing in for a hemisphere of skylight, so giving each of
+      // them its own mirror lobe on a 13 mm pad is double-counting a
+      // reflection that should be one smooth gradient.
+      //
+      // What it renders as, at `chin`, measured on the pad mask (the pad is
+      // the largest sub-60-luminance blob; holes are interior pixels that are
+      // not part of it): three discrete pale-blue dots of 200-300 px each at
+      // luminance 87-103 against a pad body of 8.8 -- the same "string of
+      // white pebbles" the normal-perturbation note below is about, arriving
+      // from the other layer. They survive `scene.environment = null`
+      // unchanged, so they are DIRECT specular, not the env; and three's
+      // `clearcoat_normal_fragment_begin` uses nonPerturbedNormal, so the
+      // Worley bump is not carrying them either. Only the roughness is.
+      //
+      //   clearcoatRoughness   0.045   0.080   0.120   0.170   0.240
+      //   worst dot luminance  102.6    96.9    89.7    82.6    76.5
+      //   p99.9 on the pad     113.4   106.4    98.5    90.5    83.5
+      //   dots over 25 px          5       5       4       3       3
+      //
+      // 0.170: the dots stop reading as pebbles and the broad wet arcs along
+      // the nostril rims and the dorsum are untouched, so §3's "wet
+      // specular, never matte" still holds. Do not toggle `clearcoat` itself
+      // at runtime to test this -- it flips USE_CLEARCOAT and the patched
+      // program fails to compile, which an A/B reads as a missing pad.
+      clearcoatRoughness: 0.170,
       envMapIntensity: 0.45,
       // The rim is cut into a comb of hair tips in the fragment shader (see
       // below). alphaTest rather than transparent: the pad stays in the

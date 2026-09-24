@@ -580,86 +580,55 @@ const F0_TEAR = 0.028;      // tear film, n = 1.336
 // positive control. 0.12 already clears it; above that the pupil only gets
 // brighter, and §4b wants it black. 0.13 for a little margin.
 const COAT_ROUGH = 0.050;   // corneal tear film. See COAT_IBL below.
-const SKY_LOBE = 0.15;      // cornea overlay's broad sky reflection
-// GGX peaks at 1/(pi*a^2), so a lobe widened from 0.052 to 0.15 loses 8.3x of
-// its peak at constant gain -- which is why the first attempt at a "shaped"
-// reflection measured identical to switching it off (985 px over 150 with it
-// on, 983 with uSkyGain = 0). Gain has to scale with a^2 to keep any of the
-// energy. 0.26 restores about 40% of the old point's peak, spread over a
-// shape instead of a dot.
-const SKY_GAIN = 0.26;      // ...and its strength
-
-// THE HARD LINE IS NOT A ROUGHNESS PROBLEM, AND 0.13 BOUGHT 6 % OF IT.
+// THE CATCHLIGHT IS AN IMAGE OF A LIGHT SOURCE, so it is authored as one: a
+// patch with an angular size, an aspect and an edge, not as a BRDF lobe. See
+// the note in _corneaMaterial. uSkyLobe is its angular half-width in RADIANS
+// OF REFLECTED RAY (the surface normal moves half as far, so a half-width w
+// paints a highlight about w * Rc wide on the cornea); uSkyGain is its
+// strength. Both stay uniforms so the pair can be swept in one page session
+// at one sim instant rather than by re-rendering the file.
 //
-// Everything above is correctly ATTRIBUTED -- the line is the scene PMREM
-// reflected in the tear film -- but the sweep that chose 0.13 was read with a
-// metric that takes the largest row-to-row jump ANYWHERE in the pupil, and
-// that statistic abandons the terminator the moment another edge (the pupil's
-// own rim) overtakes it. That is what "6369 px -> 48 px" was: the max jumping
-// to a different feature, not the terminator moving.
-//
-// Re-measured with a metric that evaluates the step AT ITS OWN ROW -- mean
-// B-R over rows y+1..y+4 minus rows y-4..y-1, inside a fixed pupil disc,
-// eroded 6 px off the edge, with the catchlight excluded because a 250-level
-// specular dominates any row statistic that contains it. macro_eye, one page
-// session, one sim instant, TAA reset per arm, two identical arms bit
-// identical:
-//
-//   arm                                   step at the terminator   pupil B-R
-//   uCoatRough 0.075  (the old value)              2.743             13.97
-//   uCoatRough 0.13   (what shipped)               2.571             13.75
-//   uCoatRough 0.30                                1.548             14.02
-//   scene.environment = null                       0.804              6.76
-//
-// THE CAUSE, stated properly. `Sky._regenerateEnv` PMREMs a sky DOME, and
-// `sampleSky` is an atmosphere model, so BELOW the horizon the environment
-// holds nothing at all. A tear film therefore reflects a bright sky in its
-// upper half and a void in its lower, and the boundary between them is a step
-// with no width. Roughness can only blur that step; it cannot supply the
-// missing radiance, which is why every value trades the line against a bluer
-// pupil.
-//
-// WHAT WAS TRIED AND REJECTED, because it cost most of a session and the next
-// agent should not pay for it twice. Giving the two globes their own
-// environment -- a 96x48 equirect built in code from ctx.skyColor /
-// groundBounce / sunColor, sky above, snow below, crossfaded across the
-// horizon, PMREM'd at init -- DOES kill the line (step 2.50 -> 0.20-0.37 at
-// every gain from 0.06 to 0.34). It also cannot be calibrated: the pupil is
-// the centre of a convex mirror facing the camera, so what it reflects is the
-// horizon, and the ground that removes the step is the same radiance that
-// lights the pupil. At the gain that matched the scene's iris luminance
-// (45.5) the pupil reached luminance 45 -- as bright as the iris. Dimming the
-// ground brought the step straight back (0.47 -> 1.43 as the gain rose),
-// because a dim ground under a bright sky IS the step. The two are one
-// variable and no amount of tuning separates them.
-//
-// WHAT WORKS is to stop asking a 256 px PMREM to be a mirror at all. On the
-// CORNEA, and only there, the globe's specular IBL is switched off and the
-// wet reflection is carried by the analytic lobes the corneal overlay already
-// owns plus the clearcoat's DIRECT response to Environment.js's four lights.
-// The sclera keeps its env sheen. Measured on the same arms:
-//
-//   arm                    step@terminator   pupil rgb        iris R-B / lum
-//   base (scene PMREM)          2.501    (10.7, 17.9, 27.8)     27.96 / 45.51
-//   uCoatIBL 0.50               2.504     (8.2, 14.1, 22.2)     31.41 / 44.09
-//   uCoatIBL 0.10, rough 0.05   1.526     (6.4, 11.1, 17.3)     34.01 / 42.93
-//   uCoatIBL 0, rough 0.05      0.898     (6.0, 10.5, 16.2)     34.53 / 42.65
-//
-// 0.898 is the floor: `scene.environment = null` measures 0.804 on the same
-// metric, so there is no line left to remove. The iris keeps 94 % of its
-// luminance and gets WARMER (R-B 28.0 -> 34.5), because what went away was a
-// blue specular veil lying over an amber iris. And because the roughness only
-// ever existed to smear the horizon, the tear film can go back to being
-// smooth -- which is what puts the catchlight's peak at 251 with 6 px over
-// 235, against 211 and none before.
-//
-// A TRAP WORTH THE LINE, and my predecessor measured it correctly:
-// `material.envMapIntensity` is a NO-OP while a material relies on
-// `scene.environment`. three's `refreshUniformsStandard` only copies it when
-// `material.envMap` is truthy, and `WebGLRenderer.setProgram` then overwrites
-// the uniform with `scene.environmentIntensity` for exactly the
-// `material.envMap === null` case (three.module.js:14503 and :17605). An A/B
-// arm built on it measures nothing at all.
+// SIZED AGAINST THE REVIEW'S OWN NUMBER. Review 6 measures the old dot at
+// 7x7 px, "2.1 % of the 337 px iris width", and asks for a shaped
+// reflection. On the exposed-globe matte the palpebral fissure is 469 px at
+// macro_eye and the cornea 358 px across for 13.5 mm, so 0.24 rad of
+// reflected ray is 0.12 rad of surface, i.e. 1.08 mm, i.e. about 57 px --
+// 12 % of the fissure and 16 % of the cornea. That is a highlight a viewer
+// reads as a reflection of something rather than as a speck of dust.
+const SKY_LOBE = 0.21;      // catchlight half-width, radians of reflected ray
+const CL_ASPECT = 0.62;     // its height as a fraction of its width
+const CL_SOFT = 0.10;       // where the falloff starts, as a fraction of 1
+const CL_FALLOFF = 1.60;    // and its curve; 1 is linear-in-smoothstep
+const CL_CORE = 0.34;       // the hot core's extent
+const CL_CORE_GAIN = 2.30;  // and how much brighter the core is
+const CL_CORE_WHITE = 0.55; // how far the core is pushed to white
+const CL_GND_W = 0.72;      // the snow reflection, relative to the sky's
+const CL_GND_GAIN = 0.34;   // ...and its strength
+// A PATCH IS NORMALISED TO 1 AND A GGX LOBE IS NOT. D peaks at 1/(pi a^2),
+// so the lobe this replaces had a peak of 157 at a = 0.045, and the first
+// patch at the inherited gain 0.55 was 14x too dim to measure -- six arms
+// including gain 0 came back identical, which is the null result that means
+// nothing. Swept by DIFFERENCE against an overlay-off arm (the v1 tool
+// thresholded absolute luminance at 140 and the overlay's entire
+// contribution sat under it): peak added luminance 104.8 / 130.2 / 150.4 at
+// gain 9 / 18 / 36, and the highlight measures 52x30 px = 11.1 % of the
+// 469 px fissure against review 6's "7x7 px, 2.1 % of the iris width".
+const SKY_GAIN = 18.0;      // the catchlight's strength
+// WHERE IT LANDS, swept at macro_eye. The highlight appears where the
+// reflected view ray meets the patch, so aiming at V puts it dead centre on
+// the cornea and aiming at world up puts it at the top of the limbus. At the
+// inherited 2.39 it sat high on the IRIS, clear of the pupil, which reads as
+// a blister on the eye. 2.39 / 1.20 / 0.70 / 0.45 / 0.25 walk it from above
+// the pupil, to its upper edge, to beside it, to below it.
+const CL_AIM = 0.72;        // world-up weight in the patch's aim, V weight 1
+const CL_SIDE = -0.45;      // lateral slide of the patch, same units
+// Seated so the patch SWALLOWS the hard point the clearcoat throws from
+// Environment.js's key: swept (aim, side) = (0.90, -0.30) / (0.72, -0.30) /
+// (0.72, -0.45) / (0.56, -0.45), which walks the ellipse from clear above
+// the pupil, to its upper-right shoulder, to straddling the upper pupil with
+// the point inside it, to entirely within the pupil. Straddling is the one
+// that still reads as sitting IN FRONT of the iris rather than painted on
+// it, which is the whole reason the overlay is a separate mesh.
 const COAT_IBL = 0.0;       // globe specular IBL, ON THE CORNEA ONLY
 
 /**
@@ -687,7 +656,7 @@ uniform float uLidYaw, uLidPitch;
 uniform float uLidScatter;
 uniform float uLidSwell;
 uniform float uNasalSign, uLidAO, uLidCrease, uCanthus;
-uniform float uCoatRough, uSkyLobe, uSkyGain, uCoatIBL;
+uniform float uCoatRough, uSkyLobe, uSkyGain, uCoatIBL, uClAim, uClSide;
 uniform vec3 uCaruncle;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
@@ -1736,6 +1705,8 @@ export class Eyes {
       uSkyLobe: { value: SKY_LOBE },
       uSkyGain: { value: SKY_GAIN },
       uCoatIBL: { value: COAT_IBL },
+      uClAim: { value: CL_AIM },
+      uClSide: { value: CL_SIDE },
 
       // §4b: "amber / golden-brown, noticeably warm". These were authored a
       // stop and a half darker than that and the eye graded out to a brown
@@ -2030,13 +2001,7 @@ void main(){
   float D = a2 / (3.14159265 * dn * dn);
   vec3 spec = uSunCol * uSunInt * D * F * ndl * 0.02;
 
-  // A narrow sky catchlight. The globe's clearcoat lobe already does the
-  // physically-correct env reflection, so this is deliberately small: it only
-  // guarantees a discrete, bloomable point of light. §1 puts the key BEHIND
-  // the animal, so on most frames the sun lobe above contributes nothing and
-  // this — the twilight sky and the snow bounce off a wet cornea — is the
-  // entire catchlight. Aimed up and slightly camera-ward, where the brightest
-  // part of a polar twilight sky actually is.
+  // THE SKY CATCHLIGHT, AND IT IS AN IMAGE OF A LIGHT SOURCE, NOT A LOBE.
   //
   // UP HAS TO BE WORLD UP. This was eye-local +Y, and eye-local +Y is not up:
   // the socket frame is rolled and it is MIRRORED between the two sides, so
@@ -2048,32 +2013,92 @@ void main(){
   // both eyes catch the same sky from the same place and the highlight stays
   // put when the head turns.
   //
-  // AND IT IS A SHAPE, NOT A DOT. At 0.052 this lobe was a 7x7 px disc --
-  // 2.1% of a 337 px iris at macro_eye, the only specular on the eye, and
-  // review 6 is right that it does not read as wet. A real wet cornea at
-  // this magnification carries a SHAPED reflection of the sky: bright and
-  // soft-edged, wider than tall because the sky's bright band above a polar
-  // horizon is, with a small hot core inside it.
+  // WHY A PATCH AND NOT GGX. Review 6 asked for "a shaped sky reflection"
+  // instead of one square dot. Two GGX attempts failed at that, for the same
+  // structural reason both times: GGX is a peak with a 1/x^4 tail, so
+  // widening it flattens the peak (D peaks at 1/(pi a^2), so 0.052 -> 0.15
+  // loses 8.3x) and the result is a haze over the whole cornea with no edge
+  // anywhere. Measured on the exposed-globe matte, the widened version still
+  // produced a 6x6 px blob -- 1.3% of the 469 px fissure -- with a 66x114 px
+  // wash around it.
   //
-  // So: one broad lobe for the shape, anisotropic (the half-vector's
-  // component along world up is squeezed, which widens the reflection
-  // horizontally), plus a tight core for the discrete bloomable point the
-  // note above is about. Both ride uSkyLobe so the pair can be swept
-  // together; uSkyGain is their common strength.
-  vec3 skyDir = normalize(normalize(uUpL) * 0.86 + V * 0.36);
-  vec3 Hs = normalize(V + skyDir);
+  // A catchlight is not a BRDF lobe. It is the mirror IMAGE of a light
+  // source, so it has the source's shape and the source's edge. Model it as
+  // one: reflect the view ray, measure its angular offset from the patch
+  // centre in the patch's own frame, and fill an ellipse with a soft rim.
+  // That gives a flat-topped, soft-edged, correctly-proportioned highlight
+  // that a GGX lobe cannot produce at any roughness.
   vec3 upL = normalize(uUpL);
-  // Squeeze the half-vector along up: the lobe gets wide and low.
-  vec3 Hw = normalize(Hs - upL * dot(Hs, upL) * 0.55);
-  float ndhw = feSat(dot(N, Hw));
-  float ndhs = feSat(dot(N, Hs));
+  vec3 Rv = reflect(-V, N);
+  // WHERE THE HIGHLIGHT LANDS. skyDir is the direction of the reflected
+  // patch; the highlight appears where the reflected view ray points at it,
+  // so aiming skyDir at V puts it dead centre on the cornea and aiming it at
+  // world up puts it at the top of the limbus. uClAim is the up weight
+  // against a V weight of 1. At the inherited 2.39 the reflection sat high
+  // on the IRIS, clear of the pupil, which reads as a blister on the eye
+  // rather than as something the eye is reflecting.
+  // uClSide slides it along the horizontal axis perpendicular to the view,
+  // which is what lets the patch swallow the hard point the clearcoat throws
+  // from Environment.js's key. Two highlights of different character on one
+  // cornea read as two lights; one highlight with a hot core reads as a wet
+  // eye.
+  vec3 clSide = cross(upL, V);
+  clSide = length(clSide) > 1e-4 ? normalize(clSide) : vec3(1.0, 0.0, 0.0);
+  vec3 skyDir = normalize(upL * uClAim + V + clSide * uClSide);
+  // Patch frame. cross(up, skyDir) degenerates when the two are parallel;
+  // skyDir carries 0.36 of V by construction so it never is, but the
+  // fallback costs nothing and a NaN here is a white eye.
+  vec3 pRt = cross(upL, skyDir);
+  pRt = length(pRt) > 1e-4 ? normalize(pRt) : normalize(cross(vec3(0.0, 0.0, 1.0), skyDir));
+  vec3 pUp = normalize(cross(skyDir, pRt));
+  float pz = max(dot(Rv, skyDir), 1e-3);
+  // Angular offset of the reflected ray from the patch centre, in radians.
+  vec2 pOff = vec2(atan(dot(Rv, pRt) / pz), atan(dot(Rv, pUp) / pz));
+  // Wider than tall: the bright band above a polar horizon is.
+  float pE = length(pOff / vec2(uSkyLobe, uSkyLobe * ${CL_ASPECT.toFixed(3)}));
   vec3 skyLit = mix(uBounceCol, uSkyCol, 0.7);
-  float aw2 = uSkyLobe * uSkyLobe;
-  float dnw = ndhw * ndhw * (aw2 - 1.0) + 1.0;
-  spec += skyLit * (aw2 / (3.14159265 * dnw * dnw)) * F * uSkyGain;
-  float ac2 = (uSkyLobe * 0.30) * (uSkyLobe * 0.30);
-  float dnc = ndhs * ndhs * (ac2 - 1.0) + 1.0;
-  spec += skyLit * (ac2 / (3.14159265 * dnc * dnc)) * F * uSkyGain * 0.45;
+  // The body of the reflection.
+  //
+  // NOT A PLATEAU. The first version filled the ellipse flat out to a soft
+  // rim, on the reasoning that a catchlight has the source's own edge -- and
+  // it rendered as a uniform grey patch pasted on the iris, because a
+  // constant is exactly what a piece of paint looks like. A real reflection
+  // of a twilight sky is graded: the sky itself is brighter toward the
+  // horizon and the corneal curvature compresses that gradient into the
+  // highlight. So: a smooth falloff from the centre with a soft shoulder,
+  // which still has an edge (it reaches zero at pE = 1) but no flat top.
+  //
+  // (clBody, and NOT the obvious name: that name is a GLSL RESERVED WORD
+  // and the whole material silently failed to compile, which App.js turns
+  // into an eye with no overlay at all. It cost one A/B run in which six
+  // arms measured identical -- the null result that means nothing.)
+  float clBody = pow(1.0 - smoothstep(${CL_SOFT.toFixed(3)}, 1.0, pE),
+                     ${CL_FALLOFF.toFixed(3)});
+  // ...and a hot core inside it, which is the discrete bloomable point. It
+  // is pushed toward white: the body carries the sky's colour, and the core
+  // is where a real highlight clips.
+  float clCore = 1.0 - smoothstep(0.0, ${CL_CORE.toFixed(3)}, pE);
+  spec += F * uSkyGain * (skyLit * clBody
+          + mix(skyLit, vec3(1.0), ${CL_CORE_WHITE.toFixed(3)})
+            * clCore * ${CL_CORE_GAIN.toFixed(3)});
+
+  // AND A SECOND ONE, LOW ON THE CORNEA, FROM THE SNOW.
+  //
+  // One highlight is a bead with a dot on it; two at different depths is a
+  // transparent shell over a coloured disc, and that is what reads as wet.
+  // The lower one is the snowfield -- §6 gives it a high albedo and §3 puts
+  // the bounce at #cfe2f7, so on a real animal it is always there and always
+  // dimmer and cooler than the sky's.
+  vec3 gndDir = normalize(-upL * (uClAim * 0.62 + 0.30) + V);
+  vec3 gRt = cross(upL, gndDir);
+  gRt = length(gRt) > 1e-4 ? normalize(gRt) : normalize(cross(vec3(0.0, 0.0, 1.0), gndDir));
+  vec3 gUp = normalize(cross(gndDir, gRt));
+  float gz = max(dot(Rv, gndDir), 1e-3);
+  vec2 gOff = vec2(atan(dot(Rv, gRt) / gz), atan(dot(Rv, gUp) / gz));
+  float gE = length(gOff / vec2(uSkyLobe * ${CL_GND_W.toFixed(3)},
+                                uSkyLobe * ${(CL_GND_W * CL_ASPECT).toFixed(3)}));
+  spec += uBounceCol * F * uSkyGain * ${CL_GND_GAIN.toFixed(3)}
+          * (1.0 - smoothstep(${CL_SOFT.toFixed(3)}, 1.0, gE));
 
   // A second, wider lobe keeps the highlight alive after the bloom downsample
   // and stops it disappearing entirely at portrait framing.
