@@ -8,20 +8,26 @@ import { ATMO_PARS, SKY_SAMPLE, HDR_CLAMP } from '../shaders/sky.glsl.js';
  * Restraint is the brief (bible §7: "Dim. Restrained."), so the defaults here
  * are deliberately low. `ctx.aurora.intensity` is the one knob.
  *
- * Two decisions worth explaining:
+ * Three decisions worth explaining:
  *
- * 1. The march runs in REAL kilometres against a spherical earth, with the
+ * 1. Everything is in REAL kilometres against a spherical earth, with the
  *    emitting shell at 90-150 km. That is what makes the arcs converge and
  *    compress toward the horizon instead of hanging like a flat banner. It
  *    costs nothing extra -- the ray is the same ray -- and it is the single
  *    thing that separates aurora that reads as 100 km up from aurora that
  *    reads as a quad 50 m away.
  *
- * 2. The filament structure is baked into one small texture rather than
- *    evaluated with simplex noise per step. Three independent curtain fields
- *    live in R/G/B and the along-arc envelope in A, so the whole inner loop is
- *    ONE texture fetch. Per-step simplex would have been ~6x the cost for
- *    structure the eye cannot tell apart at this distance.
+ * 2. The sheets are crossed ANALYTICALLY, not marched. The camera sits on the
+ *    arc's axis, so a ray's across-arc coordinate is exactly linear in t and
+ *    the crossing is solvable; bump() has a closed-form integral, so the
+ *    chord through a sheet is one expression. See sheet() in the fragment
+ *    shader for what the 16-step march was costing -- in short, every defect
+ *    REVIEW-6 section 7 lists.
+ *
+ * 3. The filament structure is baked into one small texture rather than
+ *    evaluated with simplex noise. Three independent curtain fields live in
+ *    R/G/B and the along-arc envelope in A, so a whole sheet is ONE texture
+ *    fetch and the effect is three.
  *
  * Depth: the dome and the stars draw with depthTest OFF at a very negative
  * renderOrder, so they are painted immediately after the sky and then covered
@@ -50,6 +56,32 @@ export class Aurora {
     this.baseIntensity = 1.0;
     this._drift = 0;
     this._steps = 0;
+
+    /**
+     * Baked-curtain spectrum. Kept as data rather than literals so a probe can
+     * sweep it without editing the shader -- REVIEW-6 blocker 7 needed four
+     * variants measured against one structure-tensor instrument.
+     *
+     * `x` is along-arc and carries the filaments; `y` is ALTITUDE. Every
+     * altitude frequency that is not 1 tilts or chops the filaments, because
+     * the along-arc coordinate of a ray is constant down a screen column (the
+     * camera sits on the arc's axis) while altitude runs UP the column. The
+     * old [2,2,3,4] therefore broke each ray into ~80 px dashes; only the
+     * coarsest octave keeps a y term, and it is there so rays end at
+     * different heights instead of forming a perfect comb.
+     */
+    this.curtainSpec = {
+      XF: [18, 46, 128, 340],
+      YF: [2, 1, 1, 1],
+      AMP: [0.30, 0.25, 0.26, 0.19],
+      gain: 2.80, bias: 0.88, gamma: 1.05,
+      // Along-arc envelope: the arc comes and goes ALONG itself. A y term
+      // here cuts the curtain into horizontal blobs, which is most of what
+      // the critic photographed.
+      ENV: [[3, 1, 8191], [6, 1, 6427], [12, 1, 4231]],
+      ENVAMP: [0.55, 0.3, 0.15],
+      envGain: 2.15, envBias: 0.62, envGamma: 0.85,
+    };
   }
 
   init(ctx) {
@@ -72,6 +104,15 @@ export class Aurora {
   dispose() {
     this._curtainTex?.dispose();
     this.group?.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+  }
+
+  /** Re-bake the curtain texture after `curtainSpec` changed. Probe hook. */
+  rebakeCurtain() {
+    if (!this.uniforms) return;
+    const old = this._curtainTex;
+    this._curtainTex = this._bakeCurtain();
+    this.uniforms.uCurtain.value = this._curtainTex;
+    old?.dispose();
   }
 
   // -- baked curtain structure ----------------------------------------------
@@ -111,18 +152,21 @@ export class Aurora {
     // blobs", no filaments. Filaments are not a garnish on an auroral arc,
     // they ARE the arc: the emission follows magnetic field lines and the
     // rays are hundreds of metres to a few km across. So flatten the
-    // spectrum and push it fine. 128 and 340 cells are filaments 6.0 km and
-    // 2.3 km wide, which at 150 km is 2.3 and 0.9 degrees — 75 px and 28 px
-    // in a 2800 px frame, and that is what a curtain looks like.
-    const XF = [18, 46, 128, 340];
-    const YF = [2, 2, 3, 4];
-    const AMP = [0.30, 0.25, 0.26, 0.19];
+    // spectrum and push it fine.
+    //
+    // Measured for this pose: the ray's along-arc coordinate advances
+    // 0.12 / 0.22 / 0.38 km per screen pixel at the three bands, so 340 cells
+    // (2.26 km) is a filament 19 / 10 / 6 px wide and 128 cells (6.0 km) is
+    // 50 / 27 / 16 px. Those are the numbers that matter, not the subtended
+    // angle at the shell.
+    const { XF, YF, AMP, ENV, ENVAMP, gain, bias, gamma, envGain, envBias, envGamma }
+      = this.curtainSpec;
     for (let b = 0; b < 3; b++) {
       lattices.push(XF.map((nx, k) => makeLattice(nx, YF[k], 1301 + b * 977 + k * 37)));
     }
     // ... and one slow along-arc envelope, so the arc comes and goes.
-    const envL = [makeLattice(3, 2, 8191), makeLattice(6, 3, 6427), makeLattice(12, 4, 4231)];
-    const envAmp = [0.55, 0.3, 0.15];
+    const envL = ENV.map(([nx, ny, seed]) => makeLattice(nx, ny, seed));
+    const envAmp = ENVAMP;
 
     const data = new Uint8Array(W * H * 4);
     for (let j = 0; j < H; j++) {
@@ -136,13 +180,13 @@ export class Aurora {
           // Sharpen into distinct striations separated by dark gaps rather
           // than a soft cloud. The gaps have to reach actual zero or the
           // curtain integrates into a smooth green gradient.
-          v = Math.pow(clamp(v * 2.80 - 0.88, 0, 1), 1.05);
+          v = Math.pow(clamp(v * gain - bias, 0, 1), gamma);
           data[o + b] = Math.round(v * 255);
         }
         let e = 0, en = 0;
         for (let k = 0; k < envL.length; k++) { e += envAmp[k] * sample(envL[k], x, y); en += envAmp[k]; }
-        e = clamp((e / en) * 2.15 - 0.62, 0, 1);
-        data[o + 3] = Math.round(Math.pow(e, 0.85) * 255);
+        e = clamp((e / en) * envGain - envBias, 0, 1);
+        data[o + 3] = Math.round(Math.pow(e, envGamma) * 255);
       }
     }
     const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
@@ -163,32 +207,17 @@ export class Aurora {
   // -- curtains -------------------------------------------------------------
 
   /**
-   * Curtain sheets are a few km thick and the shell they live in is 100-300 km
-   * deep along the ray, so at `low` (6 steps) most rays would miss the sheets
-   * entirely and the aurora would break into speckle. Widen the sheets as the
-   * step count falls and divide the brightness back out, which trades detail
-   * for smoothness exactly where detail was never going to survive anyway.
+   * Was: widen the sheets as the step count falls, because at `low` (6 steps)
+   * most rays missed them entirely. There is no march any more -- each sheet
+   * is crossed analytically -- so the curtain is now identical at every tier
+   * and this hook only exists to keep `onQuality` honest about the star count.
    */
-  _stepLod(steps) {
-    return clamp(16 / steps, 1.0, 2.6);
-  }
-
-  _applySteps(steps) {
-    const k = this._stepLod(steps);
+  _applySteps() {
     const u = this.uniforms;
-    const t = u.uBandThick.value.set(4.5 * k, 7.0 * k, 11.0 * k);
-    u.uInvThick2.value.set(1 / (t.x * t.x), 1 / (t.y * t.y), 1 / (t.z * t.z));
+    if (!u) return;
     const f = u.uFoldW.value;
     u.uInvFoldW2.value.set(1 / (f.x * f.x), 1 / (f.y * f.y));
-    u.uScale.value = this.BASE_SCALE / k;
-    // At 6 steps a per-pixel jitter has nothing to average against and the
-    // interleaved-gradient pattern shows through as a fixed screen hatch --
-    // far worse than the banding it was there to hide, which the thickened
-    // sheets of the same LOD already smooth out. Off below ~10 steps.
-    // Capped at 0.5 even at high: a full-step jitter leaves a visible
-    // interleaved-gradient hatch across the curtains, and with sheets
-    // this soft there is very little banding for it to hide.
-    u.uJitter.value = clamp((steps - 6) / 8, 0, 1) * 0.5;
+    u.uScale.value = this.BASE_SCALE;
   }
 
   _buildCurtains(ctx, sky) {
@@ -197,7 +226,12 @@ export class Aurora {
     // Retuned after the postfx pipeline landed: the new exposure and
     // tonemap put the curtains far below where they were authored. Raised
     // again for review 4 -- see baseIntensity for the measurement.
-    this.BASE_SCALE = 0.042;
+    //
+    // x3.75 when the sheets came down from 4.5-11.0 km to 1.2-2.9 km: the
+    // analytic crossing integrates bump() over the WHOLE chord, so brightness
+    // is exactly proportional to sheet thickness and the ratio is the only
+    // honest way to keep the previous exposure.
+    this.BASE_SCALE = 0.042 * 3.75;
 
     // Arc frame. Rotated so the bands run ACROSS the aurora pose's view
     // rather than straight away from it.
@@ -219,10 +253,32 @@ export class Aurora {
       // appears at: atan(90 / |z|). -110/-200/-340 puts them at roughly
       // 39/24/15 degrees, so the top band clears the sun's glow.
       uBandZ: { value: new THREE.Vector3(-110, -200, -340) },
-      uBandThick: { value: new THREE.Vector3(4.5, 7.0, 11.0) },
-      uInvThick2: { value: new THREE.Vector3() },
+      // Sheet thickness in km. It was 4.5 / 7.0 / 11.0, which is 5-10x what a
+      // real auroral curtain is (a few hundred metres to about a kilometre),
+      // and that single number was what destroyed the filaments: the ray
+      // crosses the sheet obliquely, so it averages `thick * |n/m|` of
+      // ALONG-ARC distance. At 4.5 km that is 5.4 km at the right of this
+      // framing -- 2.4 whole periods of the 2.26 km filament octave, i.e. the
+      // filaments were integrated away before anything else touched them.
+      // At 1.2 km it is 0.75 km, a third of a period, and they survive.
+      uBandThick: { value: new THREE.Vector3(1.2, 1.87, 2.93) },
       uInvFoldW2: { value: new THREE.Vector2() },
-      uJitter: { value: 1 },
+      // Vertical emission profile, in altitude fraction vv (0 at 90 km, 1 at
+      // 150 km). vv runs UP the screen inside each band's footprint, so this
+      // vec4 IS the band's brightness profile from its lower border upwards:
+      // (floor, decaying amplitude, decay rate, lower-edge toe).
+      //
+      // It used to be (0.06, 0.40, 3.6) against a border spike of 2.70 at
+      // width 1/29.4, which put 25x more light into the bottom 11% of the
+      // band than into the whole body above it. The band's screen footprint
+      // is 347 / 243 / 163 px tall, so 11% of it is 38 / 27 / 18 px -- the
+      // same size as a filament is wide, and that is precisely why REVIEW-6
+      // photographed "a diagonal string of soft blobs" instead of filaments.
+      // A curtain has to be TALL on screen before anything in it can read as
+      // vertical.
+      uVert: { value: new THREE.Vector4(0.14, 0.46, 1.70, 0.035) },
+      // Bright lower border: (centre in vv, 1/half-width, amplitude).
+      uBorder: { value: new THREE.Vector3(0.05, 14.0, 1.00) },
       uPxAngle: { value: 0.0013 },
       uBandAmp: { value: new THREE.Vector3(1.0, 0.58, 0.32) },
       uFoldPos: { value: new THREE.Vector2(0, 0) },
@@ -242,7 +298,6 @@ export class Aurora {
     this._applySteps(steps);
 
     const mat = new THREE.ShaderMaterial({
-      defines: { AUR_STEPS: steps },
       uniforms: this.uniforms,
       vertexShader: /* glsl */ `
         varying vec3 vDir;
@@ -255,9 +310,11 @@ export class Aurora {
         precision highp float;
         uniform sampler2D uCurtain;
         uniform vec3 uSunDir;
-        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uJitter, uPxAngle, uMaxRadiance;
+        uniform float uTime, uDrift, uIntensity, uSFreq, uShear, uScale, uSkyKill, uPxAngle, uMaxRadiance;
+        uniform vec4 uVert;
+        uniform vec3 uBorder;
         uniform vec2 uArcRot, uFoldPos, uFoldW, uInvFoldW2;
-        uniform vec3 uBandZ, uBandThick, uBandAmp, uInvThick2;
+        uniform vec3 uBandZ, uBandThick, uBandAmp;
         uniform vec3 uColLow, uColMid, uColHigh, uColTop;
         varying vec3 vDir;
         ${ATMO_PARS}
@@ -268,15 +325,104 @@ export class Aurora {
         const float AUR_H1 = 150.0;
         const float AUR_INVH = 1.0 / (AUR_H1 - AUR_H0);
 
-        float ign(vec2 px){ return fract(52.9829189 * fract(0.06711056*px.x + 0.00583715*px.y)); }
-
         // Drop-in for exp(-x*x), taking x*x. A cubed parabola matches the
         // Gaussian to within a few percent over the range that is visible and
-        // costs no transcendental. With 16 steps x 3 bands x 2 folds that is
-        // the difference between this effect fitting its budget and not.
+        // costs no transcendental, and unlike a Gaussian its integral is
+        // finite and closed-form -- which is what makes the analytic crossing
+        // below possible at all.
         float bump(float x2) {
           float g = max(0.0, 1.0 - 0.283 * x2);
           return g * g * g;
+        }
+        // integral of bump(x*x) dx over its whole support, (32/35)/sqrt(0.283)
+        const float BUMP_INT = 1.71859;
+
+        /*
+          ONE curtain sheet, crossed ANALYTICALLY.
+
+          There used to be a 16-step raymarch here, and it was the cause of
+          every defect REVIEW-6 section 7 lists. The camera sits on the arc
+          axis, so the across-arc coordinate along a ray is exactly linear in
+          t -- the sheet is crossed at ONE solvable t, and a bump() has a
+          closed-form integral. A march therefore bought nothing and cost:
+
+            * the shell slab is ~165 km deep and a sheet is a few km, so at
+              16 steps ONE step landed inside a curtain. The estimate was a
+              1-sample Monte Carlo, and the sample position came from
+              interleaved-gradient noise keyed to gl_FragCoord -- a FIXED
+              screen pattern, identical on every accumulated TAA sample, so
+              nothing could average it. It shipped as the ordered-dither
+              screen the critic measured at high-pass sd 2.84 against 1.15 in
+              plain sky. Measured here: it was the ENTIRE structure signal --
+              the tensor read Jxx 33.2 with it and Jxx 0.64 without.
+            * jittering that one sample over a 10 km step moved the sampled
+              along-arc coordinate by +-2.6 km, which is one whole period of
+              the finest filament octave. Whatever the dither did not ruin,
+              the jitter smeared flat.
+
+          Solving instead costs three texture fetches for the whole effect,
+          is identical at every quality tier, and has no stochastic term at
+          all -- so there is nothing left to dither.
+
+          Returns vec2(emission, emission * altitude) so the caller can take
+          one emission-weighted colour lookup over all three sheets.
+        */
+        vec2 sheet(vec3 ro, vec3 dir, float invm, float aim, float n,
+                   float Zc, float thick, vec3 warpC, float foldMul,
+                   vec3 chan, float amp) {
+          // The sheet's across-arc position is warped by the fold sines,
+          // which are functions of the ALONG-ARC coordinate -- so solving for
+          // the crossing is a fixed point. Two passes: the correction is
+          // ~1 km near the centre of frame, where the ray runs across the
+          // arc, and ~35 km at the edge, where it runs along it.
+          float t = Zc * invm;
+          if (t <= 0.0) return vec2(0.0);
+          vec3 sv = vec3(0.0);
+          float fold = 0.0;
+          float s = n * t;
+          for (int i = 0; i < 2; i++) {
+            sv = vec3(sin(s * 0.0125 + uDrift * 9.0),
+                      sin(s * 0.0345 - uDrift * 5.0),
+                      sin(s * 0.0082 - uDrift * 6.0 + 1.9));
+            float f1 = s - uFoldPos.x;
+            float f2 = s - uFoldPos.y;
+            fold = bump(f1 * f1 * uInvFoldW2.x) + 0.7 * bump(f2 * f2 * uInvFoldW2.y);
+            t = (Zc + dot(warpC, sv) + fold * 26.0 * foldMul) * invm;
+            if (t <= 0.0) return vec2(0.0);
+            s = n * t;
+          }
+
+          vec3 p = ro + dir * t;
+          float v = clamp((length(p) - Rg - AUR_H0) * AUR_INVH, 0.0, 1.0);
+
+          // Explicit LOD from how many texels one pixel spans at this
+          // distance. Without it the filaments alias into a cross-hatch
+          // moire, which is exactly what fine striations turn into when you
+          // sample them past Nyquist.
+          float texPerPx = uSFreq * t * uPxAngle * 1024.0;
+          float lod = max(0.0, log2(max(texPerPx, 1.0)));
+          vec4 F = textureLod(uCurtain,
+                              vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07), lod);
+          float fil = dot(F.rgb, chan);
+
+          // Rippling lower border -- a constant-altitude border draws a
+          // dead-straight line across the frame. The offset is combed by the
+          // filament field as well as by the fold sines, so the bright lower
+          // edge ends in rays hanging below it rather than in a drawn line;
+          // that ragged bottom edge is the most recognisable thing about a
+          // real curtain and section 7 asks for it by name.
+          float vv = clamp(v - (0.075 * sv.y + 0.045 * sv.x) - 0.075 * (fil - 0.35), 0.0, 1.0);
+          float b = (vv - uBorder.x) * uBorder.y;
+          float vert = smoothstep(0.0, uVert.w, vv) * (uVert.x + uVert.y * exp(-vv * uVert.z))
+                     + uBorder.z * bump(b * b);
+          // Fade out at the top of the emitting shell, or the curtain ends on
+          // a drawn line where v clamps.
+          vert *= smoothstep(1.0, 0.78, v);
+
+          // Closed form for the chord: integral over t of bump(d*d/thick*thick)
+          // where d = m*t - centre, which is thick * BUMP_INT / |m|.
+          float w = fil * amp * F.a * (1.0 + 1.25 * fold) * vert * (thick * BUMP_INT * aim);
+          return vec2(w, w * vv);
         }
 
         void main() {
@@ -285,7 +431,7 @@ export class Aurora {
 
           // Cheap attenuation FIRST. Near the horizon the air kills it and
           // beside the sun the twilight drowns it, and in the aurora pose
-          // that is a third of the dome. No point marching those pixels.
+          // that is a third of the dome. No point solving those pixels.
           float am = 1.0 / max(dir.y + 0.06, 0.06);
           float ext = exp(-0.28 * (am - 1.0));
           float lum = dot(sampleSky(dir, uSunDir), vec3(0.2126, 0.7152, 0.0722));
@@ -293,117 +439,32 @@ export class Aurora {
           if (atten < 0.035) discard;
 
           vec3 ro = vec3(0.0, Rg + 0.002, 0.0);
-          float t0 = raySphere(ro, dir, Rg + AUR_H0).y;
-          float t1 = raySphere(ro, dir, Rg + AUR_H1).y;
-          if (t1 <= t0) discard;
-
-          // The camera sits on the polar axis, so the across-arc coordinate
-          // along the ray is exactly linear: q.y(t) = m * t. That means we can
-          // solve for the slab of t that could possibly contain a curtain and
-          // put all our steps there, instead of spreading them over a 300 km
-          // shell traversal that is mostly empty. Rays that can never reach a
-          // band -- the whole half-sky on the far side of the arc system --
-          // leave without marching at all.
           float m = dir.x * uArcRot.y + dir.z * uArcRot.x;
-          float W = 3.0 * uBandThick.z + 95.0;
-          float lo = min(min(uBandZ.x, uBandZ.y), uBandZ.z) - W;
-          float hi = max(max(uBandZ.x, uBandZ.y), uBandZ.z) + W;
-          if (abs(m) > 1e-4) {
-            float ta = lo / m, tb = hi / m;
-            float nt0 = max(t0, min(ta, tb));
-            float nt1 = min(t1, max(ta, tb));
-            if (nt1 <= nt0) discard;
-            t0 = nt0; t1 = nt1;
-          } else if (0.0 < lo || 0.0 > hi) {
-            discard;
-          }
+          if (abs(m) < 1e-3) discard;
+          float invm = 1.0 / m;
+          // A ray running along a sheet has an unbounded chord through it.
+          // Cap the geometric gain at 6x; past that the crossing is so far
+          // away that it leaves the emitting shell anyway.
+          float aim = min(abs(invm), 6.0);
+          float n = dir.x * uArcRot.x - dir.z * uArcRot.y;
 
-          float dt = (t1 - t0) / float(AUR_STEPS);
-          float jit = 0.5 + (ign(gl_FragCoord.xy) - 0.5) * uJitter;
+          vec2 acc = sheet(ro, dir, invm, aim, n, uBandZ.x, uBandThick.x,
+                           vec3(16.0, 7.0, 0.0), 1.0, vec3(1.0, 0.0, 0.0), uBandAmp.x)
+                   + sheet(ro, dir, invm, aim, n, uBandZ.y, uBandThick.y,
+                           vec3(0.0, 11.0, 26.0), 0.7, vec3(0.0, 1.0, 0.0), uBandAmp.y)
+                   + sheet(ro, dir, invm, aim, n, uBandZ.z, uBandThick.z,
+                           vec3(0.0, 0.0, 40.0), 0.0, vec3(0.0, 0.0, 1.0), uBandAmp.z);
 
-          // Accumulate emission and emission-weighted altitude, then look the
-          // colour up ONCE. Per-step colour ramping was three smoothsteps and
-          // three vec3 mixes for a gradient that is across pixels, not along
-          // the ray.
-          float accD = 0.0;
-          float accV = 0.0;
-
-          // Along-arc state, refreshed every other step. s moves slowly
-          // along the ray -- the view crosses the curtains, it does not run
-          // down them -- so the filament fetch and the warp sines can be held
-          // for two steps. The altitude term still updates every step, which
-          // is where the visible structure is. This roughly halves the texture
-          // traffic, which is what the march is actually bound by.
-          vec4 F = vec4(0.0);
-          float sA = 0.0, sB = 0.0, sC = 0.0;
-
-          for (int i = 0; i < AUR_STEPS; i++) {
-            vec3 p = ro + dir * (t0 + dt * (float(i) + jit));
-            float v = clamp((length(p) - Rg - AUR_H0) * AUR_INVH, 0.0, 1.0);
-
-            vec2 q = vec2(p.x * uArcRot.x - p.z * uArcRot.y,
-                          p.x * uArcRot.y + p.z * uArcRot.x);
-            float s = q.x;
-
-            if (i % 2 == 0) {
-              // Explicit LOD from how many texels one pixel spans at this
-              // distance. Without it the filaments alias into a cross-hatch
-              // moire, which is exactly what fine striations turn into when
-              // you sample them past Nyquist.
-              float texPerPx = uSFreq * (t0 + dt * float(i)) * uPxAngle * 1024.0;
-              float lod = max(0.0, log2(max(texPerPx, 1.0)));
-              F = textureLod(uCurtain, vec2(s * uSFreq + uDrift + v * uShear, v * 0.86 + 0.07), lod);
-              // Fold frequencies. At 0.0042 / 0.0131 / 0.0027 per km these
-              // had periods of 1496 / 480 / 2327 km, and a wide framing only
-              // spans ~200 km of arc, so the curtain showed at most a quarter
-              // of one bend: an arc with no folding in it, which is half of
-              // why it read as a smear. 3x up puts one or two folds inside
-              // the frame, which is what a real arc does.
-              sA = sin(s * 0.0125 + uDrift * 9.0);
-              sB = sin(s * 0.0345 - uDrift * 5.0);
-              sC = sin(s * 0.0082 - uDrift * 6.0 + 1.9);
-            }
-
-            float f1 = (s - uFoldPos.x);
-            float f2 = (s - uFoldPos.y);
-            float fold = bump(f1 * f1 * uInvFoldW2.x) + 0.7 * bump(f2 * f2 * uInvFoldW2.y);
-            float foldWarp = fold * 26.0;
-
-            float d1 = q.y - uBandZ.x - (16.0 * sA + 7.0 * sB) - foldWarp;
-            float d2 = q.y - uBandZ.y - (26.0 * sC + 11.0 * sB) - foldWarp * 0.7;
-            float d3 = q.y - uBandZ.z - (40.0 * sC);
-
-            float dens = bump(d1 * d1 * uInvThick2.x) * F.r * uBandAmp.x
-                       + bump(d2 * d2 * uInvThick2.y) * F.g * uBandAmp.y
-                       + bump(d3 * d3 * uInvThick2.z) * F.b * uBandAmp.z;
-            dens *= F.a * (1.0 + 1.25 * fold);
-            if (dens <= 0.0) continue;
-
-            // Rippling lower border -- a constant-altitude border draws a
-            // dead-straight line across the frame. The offset is combed by
-            // the filament field as well as by the fold sines, so the bright
-            // lower edge ends in rays hanging below it rather than in a
-            // drawn line; that ragged bottom edge is the most recognisable
-            // thing about a real curtain and §7 asks for it by name.
-            float vv = clamp(v - (0.075 * sB + 0.045 * sA) - 0.075 * (F.r - 0.35), 0.0, 1.0);
-            float b = (vv - 0.045) * 29.41;
-            float vert = smoothstep(0.0, 0.03, vv) * (0.06 + 0.40 * exp(-vv * 3.6))
-                       + 2.70 * bump(b * b);
-
-            float w = dens * vert;
-            accD += w;
-            accV += w * vv;
-          }
-
-          if (accD <= 1e-6) discard;
-          float vv = accV / accD;
+          if (acc.x <= 1e-6) discard;
+          // Emission-weighted altitude, then look the colour up ONCE.
+          float vv = acc.y / acc.x;
           vec3 col = mix(uColLow, uColMid, smoothstep(0.0, 0.45, vv));
           col = mix(col, uColHigh, smoothstep(0.42, 0.88, vv));
           col = mix(col, uColTop, smoothstep(0.86, 1.0, vv) * 0.6);
 
           // Additive into the same HDR target; bounded for the same reason.
-          vec3 acc = clampRadiance(col * (accD * dt * uScale * uIntensity * atten), uMaxRadiance);
-          gl_FragColor = vec4(max(acc, 0.0), 1.0);
+          vec3 out3 = clampRadiance(col * (acc.x * uScale * uIntensity * atten), uMaxRadiance);
+          gl_FragColor = vec4(max(out3, 0.0), 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
@@ -421,6 +482,10 @@ export class Aurora {
       new THREE.SphereGeometry(100, 40, 20, 0, TAU, 0, 1.78), mat);
     this.dome.frustumCulled = false;
     this.dome.renderOrder = -9800;
+    // No onBeforeRender seed here, deliberately. Every other stochastic
+    // system in this scene has to decorrelate its dither against
+    // ctx.postfx.taaSampleIndex; this one has no dither left to decorrelate,
+    // because the sheets are solved rather than sampled.
     this.group.add(this.dome);
   }
 
@@ -618,12 +683,9 @@ export class Aurora {
 
   onQuality(e, ctx) {
     this.enabled = !!ctx.quality.get('aurora');
-    const steps = Math.max(4, ctx.quality.get('auroraSteps') || 12);
-    if (steps !== this._steps && this.dome) {
-      this._steps = steps;
-      this._applySteps(steps);
-      this.dome.material.defines.AUR_STEPS = steps;
-      this.dome.material.needsUpdate = true;
-    }
+    // The curtains no longer depend on the step count -- there is no march --
+    // so a tier change costs no recompile and `low` now gets exactly the same
+    // curtain as `ultra`. auroraSteps still picks the star count.
+    this._steps = Math.max(4, ctx.quality.get('auroraSteps') || 12);
   }
 }
