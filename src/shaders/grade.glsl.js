@@ -66,12 +66,43 @@ vec3 agxLook(vec3 c, float slope, float offset, float power, float sat) {
   return vec3(lp) + sat * (scaled - vec3(lp));
 }
 
+/* ASYMMETRIC highlight shoulder, in AgX's normalised-log domain.
+   AgX's log window ends at AGX_MAX_EV and the next line is a hard clamp, so
+   every scene value at or above 2^4.026 = 16.3 comes out of the curve at
+   EXACTLY the same number. That clamp is a rail, not a rolloff: measured on
+   the portrait ruff it put 29% of a 64x64 block at precisely 255, and at
+   silhouette it flattened a rim that is 24% brighter in linear than the sky
+   behind it onto the same value as that sky.
+   The existing shoulder parameter cannot fix this, because it divides the
+   distance from mid grey on BOTH sides: it buys highlight headroom by lifting
+   the shadows the identical amount. Measured, shoulder 1.35 does clear the
+   clipping (54.9% -> 0.0%) and costs the frame 5 levels of standard
+   deviation (32.2 -> 27.2) doing it.
+   This one is the identity below knee, C1 across it (the hyperbolic tangent
+   has unit slope at 0), and asymptotic to 1 above it, so the top of the range
+   keeps a real gradient for as far as the scene goes and nothing lands on the
+   rail by construction. knee = 1 is exactly the old hard clamp and is the A/B
+   control.
+   Written out with exp rather than the tanh builtin: these passes compile as
+   GLSL ES 1.00 (ShaderMaterial with no glslVersion), where tanh does not
+   exist. The argument is non-negative by construction, so the (1-e)/(1+e)
+   form with a NEGATIVE exponent cannot overflow. */
+vec3 agxSoftShoulder(vec3 t, float knee) {
+  if (knee >= 0.999) return t;
+  float span = 1.0 - knee;
+  vec3 over = max(t - vec3(knee), vec3(0.0));
+  vec3 e = exp(-2.0 * over / span);
+  return min(t, vec3(knee)) + span * (1.0 - e) / (1.0 + e);
+}
+
 /**
  * color     scene-linear sRGB radiance, already exposed
  * shoulder  >1 lengthens the highlight rolloff, pivoting on 0.18 mid grey
+ * knee      where the soft highlight shoulder starts, in normalised log
+ *           (1.0 = the old hard clamp)
  * returns   display-LINEAR sRGB in [0,1]
  */
-vec3 agxToneMap(vec3 color, float shoulder, float lookSlope, float lookOffset,
+vec3 agxToneMap(vec3 color, float shoulder, float knee, float lookSlope, float lookOffset,
                 float lookPower, float lookSat) {
   color = max(color, vec3(0.0));
   color = AGX_LINEAR_SRGB_TO_REC2020 * color;
@@ -86,6 +117,7 @@ vec3 agxToneMap(vec3 color, float shoulder, float lookSlope, float lookOffset,
   const float pivot = (log2(0.18) - AGX_MIN_EV) / (AGX_MAX_EV - AGX_MIN_EV);
   color = pivot + (color - pivot) / max(shoulder, 1e-3);
 
+  color = agxSoftShoulder(color, knee);
   color = clamp(color, 0.0, 1.0);
   color = agxContrast(color);
   color = agxLook(color, lookSlope, lookOffset, lookPower, lookSat);

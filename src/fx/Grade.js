@@ -14,6 +14,7 @@ uniform float uBloomStrength;
 uniform float uChroma;
 uniform float uVignette;
 uniform float uShoulder;
+uniform float uHighlightKnee;
 uniform float uLookSlope;
 uniform float uLookOffset;
 uniform float uLookPower;
@@ -65,7 +66,8 @@ void main() {
   hdr *= 1.0 - uVignette * pow(fxSat(r2 * 0.72), 1.7);
 
   // --- tonemap -------------------------------------------------------------
-  vec3 c = agxToneMap(hdr, uShoulder, uLookSlope, uLookOffset, uLookPower, uLookSat);
+  vec3 c = agxToneMap(hdr, uShoulder, uHighlightKnee,
+                      uLookSlope, uLookOffset, uLookPower, uLookSat);
 
   // --- grade ---------------------------------------------------------------
   c = gradeHighlightDesat(c, uHighlightDesat);
@@ -118,6 +120,7 @@ export function makeGrade() {
     uChroma: { value: 0.0016 },
     uVignette: { value: 0.11 },
     uShoulder: { value: 1 },
+    uHighlightKnee: { value: 1 },
     uLookSlope: { value: 1 },
     uLookOffset: { value: 0 },
     uLookPower: { value: 1 },

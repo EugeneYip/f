@@ -67,6 +67,33 @@ function defaults() {
     whiteBalance: [0.995, 1.0, 1.01],
     grade: {
       shoulder: 1.0,
+      /* Where AgX's asymmetric highlight shoulder starts, in normalised log.
+         1.0 restores the hard clamp at AGX_MAX_EV and is the A/B control.
+
+         MEASURED on the worst 64x64 block of the portrait coverage matte,
+         %% at/above 252 and %% railed at exactly 255, all four arms applied
+         and read in ONE page session at one sim instant:
+
+             knee 1.00 (control)  54.9 / 27.2    frame sd 32.2
+             knee 0.90            44.3 /  0.0    frame sd 32.2
+             knee 0.80             0.7 /  0.0    frame sd 31.9
+             knee 0.75             0.0 /  0.0    frame sd 31.5
+             knee 0.70             0.0 /  0.0    frame sd 30.9
+
+         Two things to read out of that. Every single railed pixel is the hard
+         clamp and nothing else -- moving the knee to 0.90 leaves the 252
+         fraction almost untouched and takes the 255 fraction to exactly zero.
+         And the cost is tiny, because the knee only bites above 0.934 in
+         scene-linear: from control to 0.75 the subject's mean moves 196.3 ->
+         195.5 and the frame's standard deviation 32.2 -> 31.5. The frame's
+         contrast problem is an exposure problem, not this one; the same sweep
+         run on exposure moves sd 32.2 -> 34.7 (x0.70) -> 36.6 (x0.50).
+
+         0.75 rather than 0.80 because the reported quantity is a MAXIMUM over
+         235 blocks and an extremum flaps: the control measured 54.85 / 55.40 /
+         54.89 on three runs of identical code. 0.80 sits at 0.7-1.2% against a
+         3% bar; 0.75 sits at zero and costs 0.4 levels of sd to get there. */
+      highlightKnee: 0.75,
       // lookPower > 1 is the contrast lever that does NOT shorten the
       // highlight rolloff: it bends the midtones down while pinning 1.0, so
       // the fox's shade side separates from its lit side without touching the
@@ -773,6 +800,7 @@ export class PostFX {
     u.uChroma.value = g.chroma;
     u.uVignette.value = g.vignette;
     u.uShoulder.value = g.shoulder;
+    u.uHighlightKnee.value = g.highlightKnee ?? 1;
     u.uLookSlope.value = g.lookSlope;
     u.uLookOffset.value = g.lookOffset;
     u.uLookPower.value = g.lookPower;
