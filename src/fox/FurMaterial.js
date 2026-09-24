@@ -886,6 +886,35 @@ export const FUR_DEFAULTS = {
    * needles standing off the neck -- hiding the CARDS removes every one of
    * them and leaves the shells smooth granular surface, so they are cards.
    * 1.40 takes that 38% to 10%.
+   *
+   * AND IT IS NOT THE LEVER ON A BARE-LOOKING FACE. The review reads the
+   * brow, forehead and cheek as "a smooth bare grey-blue surface" and this
+   * is the first knob anyone reaches for. It does nothing, and the reason is
+   * a positive control rather than a sweep: at `portrait`, post ON, one page
+   * session, one instant, spec's own +/-3 mm brow box,
+   *
+   *     base                        brow fine 4.128
+   *     shells hidden (CARDS ONLY)  brow fine 0.430
+   *     shells back                 brow fine 3.898
+   *     cards hidden (SHELLS ONLY)  brow fine 3.735
+   *     cards back                  brow fine 3.829
+   *
+   * so 97% of the face's texture is the SHELLS and the entire card layer is
+   * worth 3% of it. Nothing that changes how OPAQUE an invisible layer is
+   * can matter, and the sweep agrees: uCardTipEdge 1.40 -> 0.90 -> 0.60 and
+   * uCardInner 0.17 -> 0.35 all land inside the +/-5% spread of three
+   * restore arms, measured both before and after the eye parting was
+   * shortened (see LEN_SPAN in FurSystem, which IS the lever there).
+   *
+   * The mechanism is contrast, not alpha: over open sky a card tip is white
+   * against blue and reads at any opacity, while over the coat it is the
+   * same colour as what is behind it. Making the interior read as strands
+   * needs per-strand shadowing, not more card.
+   *
+   * The shells' own knobs are flat too, same protocol at `portrait`:
+   * shellDeep 0.55 -> 0, strandRoot 0.58 -> 0.40 -> 0.30, fillTop 1.12 ->
+   * 0.80 and pathKMax 2.5 -> 1.5 all inside that same +/-5%, and
+   * strandRoot 0.30 makes it worse.
    */
   cardTipEdge: 1.40,
   cardJitter: 1.05,
