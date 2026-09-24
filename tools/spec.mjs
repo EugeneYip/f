@@ -870,6 +870,27 @@ const results = await page.evaluate(async () => {
    * 261/765 on a white animal against snow, which is why three agents and I
    * each failed to build a contour metric on it.
    */
+  /* KNOWN DEFECT, not fixed: the matte and the frame it masks are taken at
+     DIFFERENT SIM INSTANTS. matteOf establishes its own instant via atTime()
+     and renders with no settle; the callers then render the image they mask
+     with renderPose, whose default settle is 0.3 s. Fur moves in 0.3 s, so
+     edge pixels are classified against a coat that has since shifted. At the
+     `silhouette` site it is worse: the image is taken BEFORE matteOf, which
+     then resets the clock and settles 2.5 s.
+
+     I tried to fix it by settling a matching 0.3 s inside matteOf. That is
+     wrong and I am recording it so nobody repeats it: the two renders are
+     SEQUENTIAL, so adding 0.3 s here leaves them exactly as far apart and
+     moves everything 0.3 s further down the locomotion path. Spec went from
+     34 pass to 18, with `fur macro probes landed on coat`, `aurora structure
+     probe is measurable` and `silhouette hardness probe is measurable` all
+     reporting they could no longer find the animal.
+
+     The real fix is to let matteOf establish the instant and then render the
+     masked image with NO further advance -- renderPose(pose, post, 0) -- and
+     to reorder the `silhouette` site so the matte comes first. That needs
+     each call site checked individually, which is not safe to do while five
+     agents are editing the tree. Reported by the postfx agent. */
   function matteOf(pose) {
     const root = ctx.fox?.root;
     if (!root) return null;
@@ -1503,11 +1524,34 @@ record('highlights not clipped (frame)', f && f.clipFrac < 0.01,
   record('highlights not clipped (on the animal)', sc && sc.worstFrac < 0.03,
     sc ? `worst 64x64 block on the subject: ${(sc.worstFrac * 100).toFixed(2)}% ` +
          `at/above 252 and ${(sc.railFrac * 100).toFixed(2)}% railed at exactly 255 ` +
-         `(want < 3%), at ${sc.x},${sc.y} of ${sc.blocks} blocks sampled inside ` +
-         `the coverage matte`
+         `(want < 3%), of ${sc.blocks} blocks sampled inside the coverage ` +
+         `matte. Worst block was at ${sc.x},${sc.y}, but that is a MAXIMUM ` +
+         `over ${sc.blocks} blocks -- extremum statistics. An identical build ` +
+         `measured 54.85 / 55.40 / 54.89 across three runs with the location ` +
+         `moving between (896,1024) and (1344,512), so do not quote the ` +
+         `coordinate as if it named a feature`
        : 'subject clip probe produced no blocks — a failure, not a pass');
 }
-record('frame has contrast', f && f.sd > 35, `sd ${f?.sd.toFixed(1)}`);
+// UNSOURCED THRESHOLD, and I could not source it. ART_DIRECTION.md has no
+// frame-contrast spec at all -- 35 appears nowhere but here. Worse, the only
+// lever that reaches it is exposure, and the postfx agent swept it: sd 32.2
+// at exposure x1.00, 33.4 at x0.85, 34.7 at x0.70, 36.6 at x0.50, so clearing
+// 35 needs roughly x0.75 against §3's stated "exposure ~1.0". A check that
+// can only be satisfied by contradicting the art direction is a check with a
+// wrong number in it, not a render defect.
+//
+// It is also a whole-FRAME standard deviation on a composition that is
+// deliberately most sky and snow, with §168 asking for aerial perspective to
+// flatten the distance and §4b asking for the animal to sit only slightly
+// brighter than its background. It substantially measures the art direction's
+// own choices.
+//
+// Left FAILING rather than quietly relaxed or deleted: I have no sourced
+// number to replace it with, and moving a bar because the build misses it is
+// how a gate stops meaning anything. This needs an art-direction decision.
+record('frame has contrast', f && f.sd > 35,
+  `sd ${f?.sd.toFixed(1)} against an UNSOURCED floor of 35 — see the comment ` +
+  `above this check: reaching it requires exposure ~0.75 against §3's ~1.0`);
 
 // Horizon: no hard step.
 const hs = results.horizonStep;
