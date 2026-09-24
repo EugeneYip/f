@@ -72,6 +72,66 @@
 // 4.881). Set postfx.ao.intensity = 0 instead.
 //
 // AO.js belongs to the postfx agent, so this is a report, not a fix.
+//
+// ---------------------------------------------------------------------------
+// THE TORSO *IS* A SHADOW CASTER. REVIEW-5 BLOCKER 1 IS WRONG.
+// ---------------------------------------------------------------------------
+// The handed-down diagnosis was "the shadow-caster set excludes the body and
+// head shells while including the cards and the skin's legs". Every clause of
+// that is false, measured rather than argued:
+//
+//   * The complete caster list in the scene, by traversal, is ONE object:
+//     SkinnedMesh "foxBody" -- the whole skinned body, torso, skull, tail and
+//     legs together. furShells and furCards are both castShadow = false.
+//     There is nothing else with castShadow in the scene but the sun.
+//
+//   * Raw shadow mask (uDebugView 1, post off, one page session, one sim
+//     instant, animal stationary at root -0.0044, -0.0048, -0.0013):
+//       - at `wide`, the four leg ribbons MERGE about 0.6 m downsun into one
+//         solid band the width of the body and run on to the frame edge. The
+//         torso is in the map.
+//       - at `terrain`, only the ribbons are in frame, because the body's
+//         shadow has left it (see below). That is the image the critic read.
+//       - at sun elevation 45 deg, same build, same instant, only setSun
+//         changed: the mask is a single body-shaped blob under the animal
+//         with the skull and tail plainly legible. A caster set that can draw
+//         that at 45 deg has not lost the torso at 6.6 deg.
+//
+//   * The four strips ARE the legs, and the lit snow between them is correct.
+//     A shadow is displaced downsun by height / tan(elevation) = 8.64 x
+//     height at the default 6.6 deg rig. The belly is 0.20 m up, so its
+//     shadow lands 1.7 m away; the withers at 0.36 m land 3.1 m away. At any
+//     framing that holds the animal at a useful size, the body's shadow is
+//     off the bottom of the frame and the sun genuinely does shine under the
+//     animal. The critic's "117 px gap at full lit level between two leg
+//     shadows, directly under a solid body" is what a 6.6 deg sun does.
+//
+//   * The frustum is NOT clipping at the default rig either. far = 27.5 at a
+//     light distance of 22 gives 5.5 m of depth; the tip of the body shadow
+//     sits at 3.11 m downsun = 3.09 m of light-space depth and 0.358 m of
+//     light-space lateral against a 1.55 m half-width. Both clear.
+//
+// A trap for the next agent who tries this A/B: under VSMShadowMap three
+// renders every receiveShadow object into the shadow map as well as every
+// castShadow one (WebGLShadowMap.renderObject: castShadow OR (receiveShadow AND
+// type === VSMShadowMap)). foxBody is
+// receiveShadow = true, so setting ITS castShadow to false changes the mask
+// by exactly zero pixels and looks like proof that it was never a caster.
+// It is not; hide fox.root instead, which does remove it.
+//
+// WHAT IS ACTUALLY WRONG, and it is a different defect:
+//
+//   The caster is the BARE SKIN. fox.skinnedMesh's bounding box is 0.171 m
+//   wide (x -0.0856 .. +0.0857) while the drawn animal is the skin plus the
+//   fur shells plus the cards, and reads three to four times that across.
+//   So the shadow is a stick figure of a fluffy animal -- which is the real
+//   content of "a 250 px-wide animal throws four ~25 px sticks". The fix is
+//   a customDepthMaterial on foxBody that extrudes along the normal by the
+//   coat thickness, and foxBody belongs to anatomy/fur, so this is a report.
+//
+//   And the near-field darkening the critic was really looking for cannot
+//   come from the cast shadow at this rig at all -- it is 1.7 m away. It has
+//   to come from snContactOcc(), which is ours, and is tuned below.
 
 import * as THREE from 'three';
 import { rng } from '../util/math.js';
