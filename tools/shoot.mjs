@@ -277,8 +277,27 @@ const main = async () => {
           // head where it had been 0.35 s ago. Settling is done once, before
           // this loop; poses are resolved against the state they are shot in.
           D.setPose(name);
-          // Two throwaway renders in place of the settle: LOD that reads the
-          // camera resolves on render, and render does not advance time.
+          // A ZERO-DT SIM TICK, then two throwaway renders.
+          //
+          // The line this replaces claimed "LOD that reads the camera
+          // resolves on render". It does not. The fur LOD picks its shell
+          // count in a SYSTEM UPDATE, and render() does not run systems --
+          // so every pose was shot at whatever shell count the settle
+          // camera had chosen, frozen. Measured: the first eight poses all
+          // reported an identical 856k triangles, while the live LOD wants
+          // 18/10/9/18/17/18/16/4 shells for them. `wide` ships at 4 shells
+          // and was being reviewed at 14, and `macro_eye` was 56% over.
+          //
+          // spec.mjs settles 0.3 s per pose, so IT got the live counts. The
+          // critic's renders and the gate's numbers have therefore been
+          // describing different animals all along, which is the mechanism
+          // behind "the gate passes and it still looks wrong".
+          //
+          // step(0) runs every system without advancing time, so it costs
+          // none of the cross-pose drift the old D.settle(0.35) did. The
+          // tell that found this: poses after `aurora` DID vary, because
+          // `aurora` carries a `sun` and setPose already stepped for it.
+          D.ctx().app.step(0);
           D.render(); D.render();
           for (let i = 0; i < taa; i++) D.render();
           // `stats().frameMs` is the rAF loop's average, and the harness
