@@ -1281,6 +1281,37 @@ const results = await page.evaluate(async () => {
         }
       }
       out.subjectClip = worst ? { ...worst, blocks } : null;
+
+      // The coat's SHADED band, for a colour contract that can fail toward
+      // grey. Every existing coat-colour check bounds the blue side from
+      // ABOVE -- "not warm", "no bluer than the snow" -- so a coat that had
+      // lost its colour entirely and gone dead grey passed all of them.
+      // REVIEW-5 measured the shaded coat at B-R +11.4 against §3's shaded
+      // fur swatch #b9c7d8 (+31) and no instrument in this file could see it.
+      //
+      // Taken as the darkest 15% of coat pixels INSIDE the coverage matte,
+      // so the probe cannot land off the animal, in a socket, or on snow --
+      // which is how the macro fur probe spent three rounds grading eyelids.
+      const Ls = [];
+      for (let y = 0; y < Math.min(H, g.h); y += 2)
+        for (let x = 0; x < Math.min(W, g.w); x += 2) {
+          if (cov[y * W + x] < 0.9) continue;
+          const i = (y * g.w + x) * 4;
+          Ls.push(0.2126 * img[i] + 0.7152 * img[i + 1] + 0.0722 * img[i + 2]);
+        }
+      if (Ls.length > 500) {
+        const cut = Ls.slice().sort((a, b) => a - b)[Math.floor(Ls.length * 0.15)];
+        let R = 0, G = 0, B2 = 0, n2 = 0;
+        for (let y = 0; y < Math.min(H, g.h); y += 2)
+          for (let x = 0; x < Math.min(W, g.w); x += 2) {
+            if (cov[y * W + x] < 0.9) continue;
+            const i = (y * g.w + x) * 4;
+            const L = 0.2126 * img[i] + 0.7152 * img[i + 1] + 0.0722 * img[i + 2];
+            if (L > cut) continue;
+            R += img[i]; G += img[i + 1]; B2 += img[i + 2]; n2++;
+          }
+        out.coat_shade = n2 ? { r: R / n2, g: G / n2, b: B2 / n2, n: n2 } : null;
+      }
     }
   }
 
@@ -1430,6 +1461,19 @@ record('coat is no bluer than the snow it stands on',
   `${cl && sn ? ((cl.b - cl.r) - (sn.b - sn.r)).toFixed(0) : '?'}, want <= 10. ` +
   `§3 puts LIT fur at #fdfcfa; the coat's own highlights measure B-R +9, so ` +
   `this is about the BULK of the coat reading cool, not the shading model`);
+// ... and the other side of the same contract: a coat that has gone GREY.
+// §3's shaded fur swatch #b9c7d8 is B-R +31. The floor is 60% of that,
+// because the scene's exposure and the sun's own colour legitimately move
+// it, but dead neutral is not a lighting choice, it is a missing one. The
+// ceiling stops an overcorrection into ice-blue: the bulk coat read +59 for
+// rounds while the critic and the user both called the animal an ice carving.
+const cs = results.coat_shade;
+record('the coat keeps its colour in shadow',
+  cs && (cs.b - cs.r) >= 18.6 && (cs.b - cs.r) <= 50,
+  `shaded coat (darkest 15% inside the coverage matte, ${cs ? cs.n : 0} px) ` +
+  `B-R ${cs ? (cs.b - cs.r).toFixed(1) : '?'}, wanted 18.6 to 50 against §3's ` +
+  `shaded swatch #b9c7d8 at +31. Every other coat-colour check here bounds ` +
+  `blue from ABOVE only, so a coat going dead grey passed all of them`);
 record('lit coat is nearly as bright as the snow', cl && sn &&
   lum(cl) >= lum(sn) * 0.80,
   `coat ${hex(cl)} L=${cl ? lum(cl).toFixed(0) : '?'} against snow ${hex(sn)} ` +
@@ -1628,9 +1672,29 @@ if (!fs || !fs.brow || !fs.muzzle) {
     `(35% of the brow's ${ref.toFixed(2)}); coarse ${fs.muzzle.coarse.toFixed(2)}, ` +
     `fine-share ${fs.muzzle.ratio.toFixed(2)} (want >= 0.30 — a low share means ` +
     'blotches rather than hair)');
-  record('macro reference region carries hair detail', ref >= 1.5,
-    `brow fine ${ref.toFixed(2)}, coarse ${fs.brow.coarse.toFixed(2)}, ` +
-    `fine-share ${fs.brow.ratio.toFixed(2)}`, 'warn');
+  // The muzzle floor above is RELATIVE to the brow, so on its own the pair
+  // cannot see a global loss of coat detail: halve the fine detail everywhere
+  // and the floor halves with it. That made this an instrument that could
+  // only catch the muzzle falling behind the rest of the face, never the
+  // whole face going smooth -- which is the defect the critic actually
+  // reported. The absolute floor below is what closes that, and it is a hard
+  // check rather than a warn for the same reason.
+  //
+  // THRESHOLD PROVENANCE, and a warning about it: 6.0 was calibrated as 49%
+  // of a 12.28 measured before the AgX soft shoulder landed -- on a frame
+  // whose worst subject block was 67.97% at/above 252 and 29.00% railed at
+  // exactly 255. Clipping manufactures hard edges, and hard edges read as
+  // fine detail, so much of that 12.28 was the blow-out itself.
+  //
+  // On the correctly exposed frame the same region measures 0.43, and the
+  // render confirms why: the brow and cheek are a smooth bare surface with
+  // essentially no hair on them. The old number was flattering a defect that
+  // the clipping was hiding. So this check is working, but 6.0 is NOT yet a
+  // defensible target -- recalibrate it against a frame where the coat
+  // actually covers the face, and say what it was recalibrated to.
+  record('macro reference region carries hair detail', ref >= 6.0,
+    `brow fine ${ref.toFixed(2)} against an absolute floor of 6.0, coarse ` +
+    `${fs.brow.coarse.toFixed(2)}, fine-share ${fs.brow.ratio.toFixed(2)}`);
 }
 
 const sbr = results.silhouetteByRegion ?? {};
