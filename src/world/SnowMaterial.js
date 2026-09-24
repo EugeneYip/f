@@ -275,6 +275,16 @@ export class SnowMaterial {
         // interreflection. The sky arrives from straight up and is blocked
         // hardest; the bounce arrives from all round the horizon and is not.
         uOcclMix: { value: new THREE.Vector2(1.00, 0.65) },
+        // --- shaded-snow relief (see S_SKY_ANISO in snow.glsl.js) ----------
+        // x sky anisotropy · y micro cavity · z sparkle-in-shade, each a
+        // scale on its constant. 1,1,1 is the product; 0,0,0 reproduces the
+        // pre-REVIEW-6 shading, which is how the effect is measured against
+        // its own absence in one page session.
+        uShade: { value: new THREE.Vector3(1, 1, 1) },
+        // Mean of the detail map's cavity channel; measured off the baked
+        // target in _bakeDetail, never assumed. 0.5 was wrong by 0.115 and
+        // that alone made the cavity term saturate to a constant.
+        uDetailAoDC: { value: 0.5 },
         // 0 off · 1 shadow mask · 2 ridge self-shadow · 3 clipmap level ·
         // 4 sparkle · 5 detail normal · 6 footprint channels · 7/8 shadow dbg
         // · 9 contact occlusion.
@@ -285,6 +295,13 @@ export class SnowMaterial {
     // Share, do not clone, the field uniforms.
     for (const k of Object.keys(this.field)) uniforms[k] = this.field[k];
     uniforms.uDetail.value = this.detail;
+    // If the DC could not be measured, switch the cavity term OFF explicitly
+    // rather than leaving it centred on a guess: a term running on the wrong
+    // centre is worse than a term that is not running, and the console
+    // warning in _bakeDetail names it.
+    if (this.detailAoDC == null) uniforms.uShade.value.y = 0;
+    else uniforms.uDetailAoDC.value = this.detailAoDC;
+    console.info(`[snow] detail cavity DC ${(uniforms.uDetailAoDC.value).toFixed(4)}`);
 
     this.uniforms = uniforms;
     this.material = new THREE.ShaderMaterial({
@@ -394,6 +411,27 @@ export class SnowMaterial {
     geo.dispose();
     mat.dispose();
     this._detailRT = rt;
+
+    // Measure the cavity channel's DC rather than assuming it.
+    //
+    // The bake writes clamp(0.5 + h * 0.7, 0, 1) into .w and h is not
+    // zero-mean: its ridged granular octave is |noise| and only ever adds.
+    // Over the baked map the channel comes back at 0.615, not 0.5, so a
+    // cavity term centred on 0.5 sits above one nearly everywhere and
+    // clamps to a constant -- which is exactly what happened, and it
+    // measured 0.000 HF sd of effect. One 512x512 readback at init, on a
+    // target that is about to be mipmapped anyway.
+    try {
+      const buf = new Uint8Array(N * N * 4);
+      ctx.renderer.readRenderTargetPixels(rt, 0, 0, N, N, buf);
+      let s = 0;
+      for (let i = 3; i < buf.length; i += 4) s += buf[i];
+      this.detailAoDC = s / (N * N) / 255;
+    } catch (e) {
+      // Never silently fall back to a number that disables the term: say so.
+      console.warn('[snow] cavity DC readback failed; micro cavity is off', e);
+      this.detailAoDC = null;
+    }
     return rt.texture;
   }
 

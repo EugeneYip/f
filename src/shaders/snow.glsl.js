@@ -555,6 +555,16 @@ varying float vFw;
 uniform float uShadowEmpty;
 uniform vec2  uShadowTexel;   // 1 / shadow map size
 uniform vec2  uShadowBias;    // x: constant depth slack · y: slack in TEXELS
+// A/B handle for the three terms that put relief back into shaded snow:
+// x sky anisotropy · y micro cavity · z sparkle-in-shade. All 1.0 in the
+// product. Zeroing all three reproduces the pre-REVIEW-6 shading exactly, so
+// the effect can be measured against its own absence inside ONE page session
+// at ONE instant, rather than across two trees with six other agents
+// committing into them. See S_SKY_ANISO.
+uniform vec3  uShade;
+// Mean of the detail map's cavity channel, read back off the baked target at
+// init. See the cavD block in main().
+uniform float uDetailAoDC;
 vec4 gShadowDbg;   // c.xy, m.x, m.y — debug views 7/8
 
 float snShadowMask(){
@@ -868,13 +878,26 @@ void main(){
   float crystal = clamp(0.35 + 1.1 * dMic.z * wMic + 0.5 * (1.0 - wMic), 0.0, 1.4);
 
   // Micro cavity occlusion, from the .w channel sn_detail used to discard.
-  // Centred on 0.5 and weighted exactly like dn, so the MEAN of the field is
-  // untouched at every distance and only the variation appears. Compacted
-  // snow has no micro relief left to occlude with, same as dn.
-  float cavD = ((dRip.w - 0.5) * (wRip * 0.34)
-              + (dGrn.w - 0.5) * (wGrn * 0.40)
-              + (dMic.w - 0.5) * (wMic * 0.26)) * (1.0 - 0.75 * comp);
-  float microOpen = saturate(1.0 + S_SKY_CAV * 2.0 * cavD);
+  //
+  // Centred on the map's OWN mean, not on 0.5, and that distinction is the
+  // whole term. DETAIL_BAKE_FRAG writes clamp(0.5 + h * 0.7, 0, 1), and h is
+  // not zero-mean -- its ridged granular octave only ever adds -- so the
+  // channel measures 0.615 +- 0.115 over the baked map, not 0.5. Centred on
+  // 0.5 the modulation came out at 1.30 +- 0.175, i.e. above one nearly
+  // everywhere, and a saturate() then flattened 96% of it to exactly 1.0.
+  // Measured: the term moved the frame by 0.000 HF sd, which is how it was
+  // caught. SnowMaterial reads the DC back off the baked target once at init
+  // and publishes it, so it cannot go stale if the bake changes.
+  //
+  // Weighted exactly like dn, so the MEAN is untouched at every distance and
+  // only the variation appears. A layer that has faded out contributes
+  // through a weight <= 0.01, so its unfetched 0.5 placeholder is worth at
+  // most 0.002 of cavD. Compacted snow has no micro relief left to occlude
+  // with, same as dn.
+  float cavD = ((dRip.w - uDetailAoDC) * (wRip * 0.34)
+              + (dGrn.w - uDetailAoDC) * (wGrn * 0.40)
+              + (dMic.w - uDetailAoDC) * (wMic * 0.26)) * (1.0 - 0.75 * comp);
+  float microOpen = clamp(1.0 + uShade.y * S_SKY_CAV * 2.0 * cavD, 0.25, 1.75);
 
   // --- light terms ----------------------------------------------------------
   float NdotL = dot(N, L);
@@ -926,7 +949,8 @@ void main(){
   // undisturbed ground at any sun elevation: the far field, the horizon
   // match and the overall exposure cannot move, only the relief appears.
   vec3 Lsky = normalize(vec3(L.x, max(L.y, 0.0) + S_SKY_GLOW_LIFT, L.z));
-  float skyAniso = 1.0 + S_SKY_ANISO * (saturate(dot(N, Lsky)) - saturate(Lsky.y));
+  float skyAniso = 1.0 + uShade.x * S_SKY_ANISO
+                 * (saturate(dot(N, Lsky)) - saturate(Lsky.y));
 
   float skyVis = saturate(0.52 + 0.48 * N.y) * hollow * (1.0 - 0.45 * comp * comp)
                * skyAniso * microOpen
@@ -1030,7 +1054,7 @@ void main(){
   // it, which is not restraint, it is a dead plane. The sun and the ridge
   // horizon both keep a floor; comp and distance do not, because a sintered
   // slab really has no loose facets and a sub-pixel glint really is gone.
-  float sparkLit = mix(S_SPK_SHADE, 1.0, shadowMask * horizon);
+  float sparkLit = mix(S_SPK_SHADE * uShade.z, 1.0, shadowMask * horizon);
   float sparkGate = saturate(0.25 + NdotL * 2.5) * sparkLit
                   * (1.0 - comp * 0.85) * sparkDist;
   if (sparkGate > 0.004) {
