@@ -680,6 +680,14 @@ export const FUR_DEFAULTS = {
    * the arm to reach for first if a later wave needs half a millisecond.
    */
   shellDeep: 0.55,
+  /*
+   * How far a shell's WRITTEN depth is moved out to the coat's outer envelope.
+   * See the long note at the end of the shell vertex shader -- this is the
+   * grey flank blanket, and it is the SSAO pass reading the shell stack's
+   * 48 mm-deep depth lottery, not anything in the coat's own shading.
+   * 1.0 would need depthFunc LEQUAL; the residual keeps the stack ordered.
+   */
+  depthFlat: 0.0,
   fillTop: 1.12,
   fillJitter: 0.30,
   cardTip: 0.45,
@@ -1705,6 +1713,7 @@ export function buildFurUniforms(ctx) {
     uFill: { value: d.fill },
     uPathKMax: { value: d.pathKMax },
     uShellDeep: { value: d.shellDeep },
+    uDepthFlat: { value: d.depthFlat },
     uFillTop: { value: d.fillTop },
     uFillJitter: { value: d.fillJitter },
     uCardTip: { value: d.cardTip },

@@ -152,6 +152,7 @@ uniform float uCardEyeGuard;   // 0..1, how hard a card is cut where it would
 uniform vec3  uNose;           // nose pad centre, bind space
 uniform vec2  uNoseFade;       // the rhinarium is bare skin, not short fur
 uniform float uShellCount;
+uniform float uDepthFlat;      // how far the shells' WRITTEN depth moves to the coat's outer envelope
 uniform float uCoatScale;
 uniform float uLay;
 uniform float uDroop;
@@ -1110,6 +1111,64 @@ void main(){
   vec4 mvPosition = viewMatrix * wp;
   gl_Position = projectionMatrix * mvPosition;
 
+  // ---- the depth the coat REPORTS, as opposed to the depth it occupies ----
+  //
+  // THIS IS THE GREY BLANKET ON THE FLANK, AND IT IS NOT A FUR SHADING BUG.
+  //
+  // The shells write depth (see the long note in FurMaterial: without it DoF
+  // resolves every coat pixel outside the skin's outline as background). So
+  // whichever shell happens to survive the stochastic cut at a pixel stamps
+  // that pixel's depth, and the winner is a lottery over the whole 48 mm of
+  // flank coat. The depth buffer over the coat is therefore not a surface at
+  // all -- it is a 48 mm-deep point cloud, 58 px deep at the hero framing.
+  //
+  // Nothing in the coat's own shading cares. Every SCREEN-SPACE pass does:
+  // the GTAO pass reconstructs its normals from cross(dFdx, dFdy) of exactly
+  // this buffer and searches horizons over a 0.11 m radius, so it finds
+  // occluders in the coat's own thickness everywhere and returns ~0.7. The
+  // composite then multiplies the frame by mix(#5a7099, white, ao), which is
+  // where the blue-grey comes from.
+  //
+  // MEASURED, one page session, TAA reset per arm, hero/high/1920x1200,
+  // flank box rows 500-700 cols 800-1150, same-state control first:
+  //
+  //     arm                        meanL    p10    frac<160    sd
+  //     base                       153.65  111.3    0.627     44.92
+  //     base again (control)       153.65  111.3    0.627     44.92
+  //     quality ao = false         186.38  158.1    0.147     27.86
+  //     shells depthWrite = false  186.59  153.6    0.224     28.08
+  //     cards  depthWrite = false  149.36  111.4    0.670     42.10
+  //
+  // Turning the AO pass off and taking the SHELLS out of the depth buffer are
+  // the same measurement to within the p10's own spread; the cards are not in
+  // it. And the handed-down diagnosis -- a term accumulating per shell -- is
+  // disproved by holding the tier at high and sweeping the count alone:
+  // 6/10/14/18/26 shells read 158.4/154.7/153.2/153.7/154.7, i.e. 4.8 levels
+  // of the 21-level gap to low and 1.7% of its 37-point frac<160 gap.
+  //
+  // So: report the coat's OUTER SURFACE, not the hair inside it. Every shell
+  // biases its depth toward the envelope it would have at t = 1 -- the same
+  // offset, lay and wind expression evaluated at the tip -- so the buffer
+  // holds a smooth offset surface that AO, DoF and TAA's reprojection can all
+  // read as one surface. Colour, coverage and blend order are untouched: this
+  // writes gl_Position.z only, and x/y/w are the rasterised shell's own.
+  //
+  // uDepthFlat stops short of 1.0 on purpose. At exactly 1 every shell writes
+  // the same depth and the second one fails a LESS test, so the coat would
+  // collapse to one shell unless the material also went LEQUAL. Keeping a
+  // residual (1 - uDepthFlat) of the true spread keeps the stack strictly
+  // ordered with no depth-func change: at 0.90 and 18 shells the 48 mm flank
+  // still separates consecutive shells by 0.27 mm, which is 7e-6 of NDC at
+  // 2 m against a 24-bit buffer's 6e-8.
+  if (uDepthFlat > 0.001){
+    vec3 dO  = nb * (L * (1.0 - t)) + tb * (L * lay * (1.0 - t * t));
+    vec3 dW  = m3 * (sk3 * dO) + W * (1.0 - t * t);
+    vec4 mvE = mvPosition + vec4(mat3(viewMatrix) * dW, 0.0);
+    vec4 cE  = projectionMatrix * mvE;
+    float zN = mix(gl_Position.z / gl_Position.w, cE.z / cE.w, uDepthFlat);
+    gl_Position.z = zN * gl_Position.w;
+  }
+
   #ifdef USE_FOG
     vFogDepth = -mvPosition.z;
   #endif
@@ -1714,6 +1773,22 @@ void main(){
 
   vec4 mvPosition = viewMatrix * wp;
   gl_Position = projectionMatrix * mvPosition;
+
+  // The cards join the shells on the coat's outer envelope for DEPTH only.
+  // See the long note at the end of the shell vertex shader. Leaving the
+  // cards out of it was measured and is not an option: with the shells
+  // flattened and 26 000 cards still stamping their own depth through the
+  // envelope, the texel-to-texel depth step over the flank only falls from
+  // 5.44 mm to 4.42 mm and the AO pass still returns 0.69. The cards are
+  // the LAST thing the animal draws, so whatever they write is what every
+  // screen-space pass reads.
+  if (uDepthFlat > 0.001){
+    vec4 mvE = mvPosition + vec4(mat3(viewMatrix) * (wn * aboveCoat), 0.0);
+    vec4 cE  = projectionMatrix * mvE;
+    float zN = mix(gl_Position.z / gl_Position.w, cE.z / cE.w, uDepthFlat);
+    gl_Position.z = zN * gl_Position.w;
+  }
+
   #ifdef USE_FOG
     vFogDepth = -mvPosition.z;
   #endif
