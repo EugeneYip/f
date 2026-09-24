@@ -782,6 +782,62 @@ export const FUR_DEFAULTS = {
   clumpAO: 0.75,
   aoBake: 0.22,
   rim: 0.30,
+
+  /*
+   * THE COAT'S SHADOW ON ITSELF. See furSelfShadow() in fur.glsl.js for the
+   * model; these are the numbers and why they are these numbers.
+   *
+   * `coatSigma` is an extinction coefficient in 1/metres of hair, so the
+   * optical depth of a region is sigma x its own coat depth:
+   *
+   *     rhinarium  1.6 mm -> 0.05     muzzle 14.6 mm -> 0.44
+   *     cheek     33.2 mm -> 1.00     skull  38.3 mm -> 1.15
+   *     flank     47.4 mm -> 1.42     tailMid 67.1 mm -> 2.01
+   *
+   * (depths from CoatShadow.js's per-region probe of the same field). That
+   * ordering is the point of using metres rather than the normalised shell
+   * index t: every region runs t from 0 to 1, so a normalised depth would
+   * bury the 8 mm muzzle as deeply as the 47 mm flank and put a dark smudge
+   * on exactly the region art direction 4f/4h require to stay shallow and
+   * bright. Here the muzzle gets 31% of the flank's optical depth for free,
+   * from a field that is already per-vertex and already shared with the
+   * shadow caster.
+   *
+   * WHY IT IS SAFE TO ADD A TERM THIS STRONG. Before it, the direct light
+   * reaching the deepest shell was 0.83x what the tips receive -- a coat
+   * whose interior is 83% as bright as its surface. That number is not a
+   * tuning choice, it falls out of the AO chain: ao bottoms out at uAOFloor
+   * = 0.54 and the direct term then hands back 62% of the remainder via
+   * mix(ao, 1.0, 0.62). So the one lever that was supposed to make the coat
+   * read deep was clamped and then 62% cancelled, which is why every agent
+   * who turned an AO knob measured nothing.
+   *
+   * coatSigmaSky is the mean secant of a cosine-weighted hemisphere through
+   * a slab, which is 2.0 analytically. 1.5 is deliberately short of it
+   * because the coat's outer third is separated hairs rather than a slab and
+   * the existing uAOInner ramp is already doing part of this job.
+   *
+   * coatSigmaMin floors cos(N,L) at 0.25, capping the sun's path at 4x the
+   * coat depth. At a 5 degree polar sun most of the animal is grazing, so
+   * this cap is load-bearing rather than a corner case: without it the
+   * terminator band goes to exp(-inf).
+   *
+   * coatSigmaCard 0.55 -- a guard hair pushes THROUGH the pile rather than
+   * lying in it, and a card is a billboard several hairs wide, so at full
+   * sigma the card roots read as hard black sticks against the undercoat.
+   *
+   * coatSigmaFloor 0.10 remaps the transmittance onto [0.10, 1] instead of
+   * [0, 1]. Physically it is the multiple-scattering term a single-extinction
+   * model throws away, and hair is a high-albedo medium so it is not small.
+   * Practically it is what keeps art direction 2.3 ("shadows must stay
+   * chromatic, never crushed to 0") true where the stochastic dither lets a
+   * gap open to the skin.
+   */
+  coatSigma: 30.0,
+  coatSigmaMin: 0.25,
+  coatSigmaSky: 1.5,
+  coatSigmaCard: 0.55,
+  coatSigmaFloor: 0.10,
   // How much of the undercoat felt's opacity the strand layer modulates.
   // See furHair(): the felt is the one layer with no hair in it, and wherever
   // max(a, under) picks it the coat renders as a flat plate the width of a
@@ -1632,6 +1688,11 @@ export function buildFurUniforms(ctx) {
     uShellJitter: { value: d.shellJitter },
     uTuftAmt: { value: d.tuftAmt },
     uClumpAO: { value: d.clumpAO },
+    uCoatSigma: { value: d.coatSigma },
+    uCoatSigmaMin: { value: d.coatSigmaMin },
+    uCoatSigmaSky: { value: d.coatSigmaSky },
+    uCoatSigmaCard: { value: d.coatSigmaCard },
+    uCoatSigmaFloor: { value: d.coatSigmaFloor },
     uAniso: { value: 1 },
     uStrandRound: { value: d.strandRound },
     uStrandAniso: { value: d.strandAniso },

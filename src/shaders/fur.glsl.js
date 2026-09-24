@@ -211,6 +211,14 @@ uniform float uMicroOn;
 uniform float uFeltStrand;   // strand structure in the undercoat felt
 uniform float uRim;
 
+// --- inter-shell self-shadowing -------------------------------------------
+// The coat casts a shadow on itself. See furSelfShadow().
+uniform float uCoatSigma;      // extinction per metre of hair travelled
+uniform float uCoatSigmaMin;   // floor on cos(N,L) -- caps the grazing path
+uniform float uCoatSigmaSky;   // mean secant for the sky's own path
+uniform float uCoatSigmaCard;  // card share of it (guard hair is sparser)
+uniform float uCoatSigmaFloor; // multiple-scattering floor on the transmittance
+
 // --- stochastic / TAA ------------------------------------------------------
 uniform float uStochastic;     // 0 = smooth alpha · 1 = IGN dithered cut-out
 uniform float uFrameSeed;
@@ -756,6 +764,68 @@ float kkLobe(vec3 T, vec3 N, vec3 H, float shift, float power){
 }
 
 /**
+ * THE COAT SHADOWS ITSELF.
+ *
+ * Everything else in this file describes how much hair is at a point and
+ * which way it points. Nothing described how much hair is BETWEEN that point
+ * and the light -- so a hair 2 mm off the skin under 46 mm of pile received
+ * the same sun as a hair standing on the outside of the ruff, and the only
+ * thing separating them was a depth AO that is floored at uAOFloor and then
+ * has 62% of its remainder handed back on the direct term. Measured through
+ * that chain, the deepest shell in full sun receives 0.83 of the direct light
+ * the tips receive. A coat whose interior is 83% as bright as its surface is
+ * not a coat, it is an alpha wash, and that is the whole content of the
+ * reviewer's "wide flat translucent blades": a card over sky is white on
+ * blue, but a card over coat is the same colour as the coat behind it,
+ * because neither of them is shadowed by anything.
+ *
+ * The model is Beer-Lambert through a slab, which is the standard cheap
+ * stand-in for a deep opacity map and costs two exp() instead of a second
+ * shadow pass over nineteen stochastic shells:
+ *
+ *     transmittance = exp(-sigma * pathLength)
+ *
+ * The "above" argument is the metres of hair lying between this fragment and the OUTER
+ * surface of the coat, measured along the surface normal. It is metres, not
+ * a fraction of the coat, and that distinction does the most important work
+ * in the term: an 8 mm muzzle and a 47 mm flank both run t from 0 to 1, so a
+ * normalised depth would bury the muzzle as deeply as the flank and turn the
+ * short face coat -- the one region art direction 4f insists must stay
+ * shallow -- into a dark smudge. Optical depth scales with the hair actually
+ * travelled through, so the muzzle gets a sixth of the flank's.
+ *
+ * Two paths, because the two light sources are not the same shape:
+ *
+ *   .x SUN. One direction, so the path is above/cos(N,L) and gets longer the
+ *      more the sun rakes across the surface. This is what gives the coat a
+ *      light-dependent interior: at a 5 degree polar sun almost every
+ *      surface on the animal is grazing, the path through the pile is three
+ *      or four times its depth, and the inside of the coat goes properly
+ *      dark while the tips stay lit. cos(N,L) is floored rather than
+ *      clamped to zero: where the surface faces away from the sun the hair
+ *      is behind the whole animal and the longest path is the right answer.
+ *
+ *   .y SKY. A hemisphere, so there is no single direction and the path is
+ *      the mean secant over it -- a constant multiplier on the depth. This
+ *      is the term that matters on the shaded cheek and the nape, where the
+ *      sun contributes almost nothing and the ambient IS the light. Without
+ *      it the change would be invisible at exactly the two framings the
+ *      review names.
+ */
+vec2 furSelfShadow(float above, float cosL){
+  float d = uCoatSigma * max(above, 0.0);
+  vec2 tr = vec2(exp(-d / max(cosL, uCoatSigmaMin)), exp(-d * uCoatSigmaSky));
+  // Remapped onto [floor, 1] rather than [0, 1]. Beer-Lambert through 47 mm
+  // of pile really does go to zero, but our coat is a stack of stochastic
+  // shells rather than a sealed medium, so wherever the dither lets the skin
+  // show through a gap an exactly-zero interior renders as a black speck --
+  // and art direction 2.3 forbids crushed shadows outright. The floor is a
+  // multiple bounce term by another name: hair is high-albedo, so light that
+  // gets in does not stop at the first strand.
+  return uCoatSigmaFloor + (1.0 - uCoatSigmaFloor) * tr;
+}
+
+/**
  * The fur BRDF.
  *   N    shading normal, already bent to the per-strand cylinder
  *   T    hair direction, world
@@ -763,9 +833,11 @@ float kkLobe(vec3 T, vec3 N, vec3 H, float shift, float power){
  *   t    depth through the coat
  *   ao   combined occlusion
  *   rnd  per-strand random — breaks the specular into individual hairs
+ *   sh   .x transmittance towards the sun · .y towards the sky dome
  */
 vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
-              float tipWhite, vec3 tintMul, bool cheap, float thinness, float transBoost)
+              float tipWhite, vec3 tintMul, bool cheap, float thinness, float transBoost,
+              vec2 sh)
 {
   vec3  L = uSunDir;
   vec3  H = normalize(L + V);
@@ -800,7 +872,14 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // 1/PI keeps the fox at the same exposure as everything three lights with
   // the standard BRDF.
   vec3 sunScatter = mix(vec3(luma(uSunColor)), uSunColor, uSunSat);
-  vec3 direct = sunScatter * uSunIntensity * wrapD * mix(ao, 1.0, 0.62) * RECIPROCAL_PI;
+  // sh.x is a SHADOW, not an ambient occlusion, so it is not damped the way
+  // the ao term is by mix(ao, 1.0, 0.62). That damping exists because an AO term is
+  // a guess at how much of the whole environment a point can see and must
+  // not be allowed to extinguish a light that demonstrably reaches it; a
+  // transmittance along the actual light direction IS how much of that light
+  // reaches it. Damping it would be the downstream cancellation that made
+  // the existing depth AO measure flat.
+  vec3 direct = sunScatter * uSunIntensity * wrapD * mix(ao, 1.0, 0.62) * sh.x * RECIPROCAL_PI;
 
   // ---- ambient: cool sky above, snow bounce below -------------------------
   //
@@ -823,7 +902,11 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   float up = N.y * 0.5 + 0.5;
   vec3 amb = mix(uGroundBounce, skyDome, up);
   amb = mix(vec3(luma(amb)), amb, uAmbientSat);
-  vec3 ambient = amb * (uAmbient * RECIPROCAL_PI) * ao;
+  // sh.y goes here rather than into ao because ao is clamped from below
+  // by uAOFloor (0.54) and the clamp is what has been holding the interior
+  // flat. A floor is right for an AO heuristic and wrong for a measured
+  // optical depth: 46 mm of pile really does stop almost all of the sky.
+  vec3 ambient = amb * (uAmbient * RECIPROCAL_PI) * ao * sh.y;
 
   vec3 col = albedo * (direct + ambient);
 
@@ -834,7 +917,7 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
     float s2 = kkLobe(T, N, H, uSpecShiftB + j * 1.7, uSpecPowB);
     s2 *= 0.35 + 0.95 * rnd;   // the secondary lobe glints hair by hair
     float vis = clamp(ndl * 2.2 + 0.30, 0.0, 1.0) * mix(0.25, 1.0, t);
-    col += uSunColor * uSunIntensity * vis * ao *
+    col += uSunColor * uSunIntensity * vis * ao * sh.x *
            (s1 * uSpecGainA * uSpecTintA + s2 * uSpecGainB * uSpecTintB);
   }
 
@@ -880,7 +963,11 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // A cool sky rim keeps the shadow side alive on the silhouette. Same dome
   // colour as the ambient: a grazing fragment sees the sky it reflects over
   // a wide lobe, not the zenith alone.
-  col += skyDome * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao);
+  // The rim is sky light too, so it takes the sky path. The transmission
+  // lobe above does NOT: it is already the light that came through the coat,
+  // and attenuating it by the coat again would count the same extinction
+  // twice and put the halo out.
+  col += skyDome * albedo * (uRim * pow(1.0 - ndv, 2.6) * mix(0.2, 1.0, t) * ao * sh.y);
 
   return col;
 }
@@ -1106,9 +1193,26 @@ ${isShell ? /* glsl */ `
   ao *= mix(uAOInner, 1.0, pow(tJ, uAOPow));
   ao *= mix(0.60, 1.0, 1.0 - hair.y * 0.5);
   ao = max(ao, uAOFloor);
+
+  // Coat lying between this shell and the outside, in METRES: the local coat
+  // depth times the fraction of it still above us. tJ, not t, so the hair-
+  // scale shell dither carries into the shadow -- that jitter is already a
+  // stable object-space noise at 680 cycles/m (1.5 mm, hair scale), and
+  // riding the optical depth on it is what makes the term read as individual
+  // hairs shadowing each other rather than as a smooth vignette through the
+  // stack. It was previously only modulating an AO that the floor had
+  // flattened, so it cost ALU and showed nothing.
+  vec2 sh = furSelfShadow(vP1.w * (1.0 - tJ), dot(normalize(vNrm), uSunDir));
 ` : /* glsl */ `
   // Base layer: skin under the coat — dark, occluded, faintly cool.
   ao = max(ao * mix(uAOInner, 1.0, 0.58), uAOFloor);
+  // The skin has the WHOLE coat above it, so the above argument is the full local depth.
+  // On the flank that is 47 mm and the skin goes nearly black, which is
+  // correct and invisible (the coat above it is opaque); on the rhinarium the
+  // coat is 1.6 mm and the term is almost exactly 1, which is why this is
+  // safe to apply to the base pass at all. A NORMALISED depth here would have
+  // blacked out the nose and the pads.
+  vec2 sh = furSelfShadow(vP1.w, dot(normalize(vNrm), uSunDir));
   #ifdef USE_COLOR
     // Pad leather and the nose come through the vertex colour. Under a dense
     // paw coat almost none of it should read, or the fox grows teddy-bear feet.
@@ -1118,7 +1222,7 @@ ${isShell ? /* glsl */ `
 
   vec3 col = furShade(N, T, V, t, ao, rnd, vP1.z, tint,
                       ${isShell ? 'deep' : 'false'}, ${isShell ? '1.0 - clamp(alpha, 0.0, 1.0)' : '0.0'},
-                      vShellMod.y);
+                      vShellMod.y, sh);
 
 ${isShell ? /* glsl */ `
   // Stochastic cut-out. The threshold is hashed in OBJECT space, so it is
@@ -1349,6 +1453,12 @@ void main(){
   float vn = mix(v, pow(max(v, 1e-4), 0.70), uCardCurve);
   float vt = mix(v * (0.42 + 0.58 * v), v * v * (1.32 - 0.32 * v), uCardCurve);
   vec3  offB = nb * (L * vn * rise) + tb * (L * lay * vt);
+  // How much pile is still above this point on the card, in metres. The
+  // card's own perpendicular climb is L*vn*rise; the coat's outer surface is
+  // at the local coat depth. A tip that has cleared the shells gets 0 and is fully lit,
+  // which is the whole shape of a guard hair: dark where it leaves the
+  // undercoat, bright where it stands out of it.
+  float aboveCoat = max(0.0, coat - L * vn * rise);
   // The shading tangent is the derivative of that curve, not the chord, or
   // the Kajiya-Kay lobe travels along a hair the geometry is not drawing.
   float dn = mix(1.0, 0.70 * pow(max(v, 0.08), -0.30), uCardCurve);
@@ -1459,7 +1569,15 @@ void main(){
 
   vRoot = position;
   vAxis = hdir;
-  vShellMod = vec2(1.0, uRegionC[ri].w > 0.0 ? uRegionC[ri].w : 1.0);
+  // .x carries the SHELL coat depth to the card fragment shader, not the
+  // card's own length. They are different numbers and the difference is the
+  // point: uCardInteriorLen is 0.30, so a card away from the outline is 30%
+  // of its full length and therefore sits *deeper inside the surrounding
+  // pile* than a silhouette card of the same v. Shadowing a card by its own
+  // length would make the buried ones the brightest thing in the coat, which
+  // is roughly what they are now. (.x is the shell hair-length scale on the
+  // shell path and has always been a hardcoded 1.0 here.)
+  vShellMod = vec2(coat, uRegionC[ri].w > 0.0 ? uRegionC[ri].w : 1.0);
   vWPos = wp.xyz;
   vNrm  = wn;
   vTan  = hairW;
@@ -1487,7 +1605,9 @@ void main(){
    */
   float rootMask = furSkinMask2(position).y;
   float tipMask  = furSkinMask2(position + offB).y;
-  vP0   = vec4(v, rb.z, aFurAO, ra.x * mix(rootMask, min(rootMask, tipMask), uCardEyeGuard));
+  // .y is the base pass's vertex-colour weight and has never been read on the
+  // card path; it carries the metres of coat above this vertex instead.
+  vP0   = vec4(v, aboveCoat, aFurAO, ra.x * mix(rootMask, min(rootMask, tipMask), uCardEyeGuard));
   vP1   = vec4(rb.x, rb.y, ra.w, L);
   vCard = vec4(side * 0.5 + 0.5, v, rnd, rc.y);
   vEdge = 1.0 - abs(dot(wn, toCam));
@@ -1730,8 +1850,17 @@ void main(){
 
   float ao = (1.0 - vP0.z * uAOBake) *
              mix(uAOInner + 0.3, 1.05, pow(clamp(v, 0.0, 1.0), uAOPow * 0.6));
+  // That AO runs 0.96 at the root to 1.05 at the tip -- a 9% ramp, which is
+  // to say the card layer has had no interior occlusion at all. A card is a
+  // guard hair rooted at the skin and passing through the entire undercoat,
+  // so its root is the most occluded thing in the coat and its tip the least
+  // occluded. uCoatSigmaCard scales the extinction because a guard hair
+  // pushes through the pile rather than lying in it, and because the card is
+  // a billboard several hairs wide: the same sigma the shells use makes the
+  // roots read as hard black sticks.
+  vec2 sh = furSelfShadow(vP0.y * uCoatSigmaCard, dot(normalize(vNrm), uSunDir));
   vec3 col = furShade(N, T, V, clamp(0.5 + 0.5 * v, 0.0, 1.0), ao, hr, vP1.z, vec3(1.0),
-                      false, 1.0 - clamp(a, 0.0, 1.0) * 0.55, vShellMod.y);
+                      false, 1.0 - clamp(a, 0.0, 1.0) * 0.55, vShellMod.y, sh);
 
   gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
   #include <tonemapping_fragment>
