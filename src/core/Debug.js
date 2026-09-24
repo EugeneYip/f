@@ -8,6 +8,9 @@ import { applyAdaptiveFov, REF_ASPECT } from './App.js';
  * always looks at the SAME framings, with dynamics fully settled, frame after
  * frame. Do not change pose names without updating the review baseline.
  */
+/** The sun as it was before any pose overrode it; see setPose. */
+let sunDefault = null;
+
 export const POSES = {
   // Authored against MEASURED anatomy (not guesswork). Re-baselined after
   // §4f moved the bulk into the coat, §4g lengthened the rostrum to
@@ -317,7 +320,22 @@ export class Debug {
         // Without the zero-dt step below the flag sat unread and the aurora
         // pose was photographed under the default +6.6 sun -- 0.004% of sky
         // above +3 green, against 25.6% once the sun actually moved.
-        if (pose.sun) { api.setSun(pose.sun[0], pose.sun[1]); ctx.app.step(0); }
+        // A pose that sets the sun must also UNSET it, or it leaks into every
+        // pose shot after it. shoot.mjs sets the sun once before the loop and
+        // walks POSES in declaration order, so `aurora`'s -6 degrees was
+        // silently applying to `terrain`, `hero_long`, `nape`, `frontal` and
+        // `chin` in every default run -- including the gate's own shots. The
+        // aurora was visible in `frontal`. Caught by the framing agent, in a
+        // bug I introduced when I gave the pose its sun.
+        if (pose.sun) {
+          if (!sunDefault) sunDefault = ctx.sunDirection.clone();
+          api.setSun(pose.sun[0], pose.sun[1]);
+          ctx.app.step(0);
+        } else if (sunDefault) {
+          ctx.sunDirection.copy(sunDefault);
+          ctx.sunDirty = true;
+          ctx.app.step(0);
+        }
         const camNow = ctx.camera.getWorldPosition(new THREE.Vector3());
         const f = focusOnEye(pose, ctx, camNow);
         if (f) ctx.focusDistance = f;
