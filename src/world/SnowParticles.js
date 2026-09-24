@@ -36,41 +36,89 @@ export class SnowParticles {
     this._counts = '';
 
     // Metres, m/s. share is the fraction of ctx.quality snowParticles.
+    //
+    // ---- `size` here is a SCREEN size in disguise. Do not "correct" it ----
+    //
+    // Review 6 blocker 4: at 12 000 instances this system moved the sky band
+    // by a maximum of 4 levels of 255 in `idle`, and hiding all four layers
+    // changed the frame LESS than re-rendering it unchanged did. Re-measured
+    // per layer at `hero`, 1280x800, snow ON vs OFF at one simulation instant
+    // with ctx.postfx.reset() per arm and a bit-identical same-state control,
+    // as sky-band meanAbs:
+    //
+    //     near 0.0010 · mid 0.0011 · far 0.0003 · spindrift 0.0242
+    //
+    // So the 8 880 particles of the three AIRBORNE layers contributed 0.0024
+    // between them, and the ground streamers -- the one layer nobody claimed
+    // was the point -- carried 91 % of the whole system.
+    //
+    // The cause is projected AREA, and neither count nor opacity can reach
+    // it. At the old 8-9 mm a flake 10 m out is 1.5 px wide, and the entire
+    // airborne field covered about 0.03 % of the frame: there is no alpha
+    // that makes 0.03 % of a frame read, and 12 000 sprites cannot fill a
+    // 52 x 28 x 52 m box at any believable flake size anyway. Coverage goes
+    // as size^2 and only linearly in alpha, so size is the only lever with
+    // leverage, and each layer's size below is set for the SCREEN size it
+    // needs at the distance it actually occupies -- which is also exactly
+    // what §7's "near sparse LARGE flakes with motion blur" asks for. These
+    // are motion-smeared aggregates seen defocused, not crystal diameters.
+    //
+    // Same measurement after: near 0.42 · mid 0.10 · far 0.03 · spindrift
+    // 0.10, i.e. sky-band meanAbs 0.0244 -> 0.8723 at `hero` and sky max
+    // 17 -> 68, on a control that is bit identical across repeats.
     this.defs = {
       near: {
-        share: 0.10, box: [8, 6, 8], size: 0.008, fall: 0.85,
-        curlAmp: 0.40, curlFreq: 0.10, curlTime: 0.03, streak: 0.10, spin: 2.2,
+        // 26 % of the budget and the layer that does the most work: ~1 200
+        // large, heavily defocused flakes held behind the subject plane.
+        share: 0.26, box: [8, 6, 8], size: 0.085, fall: 0.85,
+        curlAmp: 0.40, curlFreq: 0.10, curlTime: 0.03, streak: 0.26, spin: 2.2,
         // Held back past the subject plane (every body framing sits at
         // 1.8-2.3 m). Nearer than that, a single flake crossing the ~2 px
         // nose pad swamps a 0.008-linear feature and trips the spec gate --
         // and the DoF turns it into a bokeh disc that reads as dirt on the
         // lens, which the bible forbids outright. Foreground flakes in
         // close framings are not worth either cost.
-        near: [2.40, 5.00], opacity: 0.55, crystal: false, groundFade: 0.10, scatter: 1.0,
+        //
+        // 2.40 m stays, and the size increase is what buys the visibility
+        // instead. Tested: dropping it to 1.10 m is worth only +22 % at
+        // `hero` and +9 % at `silhouette` over keeping it, and `macro_eye`
+        // frames 0.35 m of world at 1.1 m -- an 85 mm flake there is 140 px
+        // of bokeh across a shot focused at 0.13 m. Not worth 22 %.
+        near: [2.40, 5.00], opacity: 0.72, crystal: false, groundFade: 0.10, scatter: 1.0,
         sheet: 0.16, sheetK: 0.30, heightK: 0.26,
       },
       mid: {
-        share: 0.34, box: [26, 14, 26], size: 0.009, fall: 0.70,
-        curlAmp: 1.70, curlFreq: 0.045, curlTime: 0.05, streak: 0.12, spin: 1.1,
-        near: [2.40, 5.50], opacity: 0.60, crystal: false, groundFade: 0.18, scatter: 0.95,
-        sheet: 0.075, sheetK: 0.72, heightK: 0.32,
+        // The body of the storm. sheetK down from 0.72 because the gate was
+        // removing ~30 % of an already invisible layer; the drift structure
+        // now comes from having enough visible flakes for the sheet to
+        // modulate in the first place.
+        share: 0.44, box: [26, 14, 26], size: 0.036, fall: 0.70,
+        curlAmp: 1.70, curlFreq: 0.045, curlTime: 0.05, streak: 0.20, spin: 1.1,
+        near: [2.40, 5.50], opacity: 0.82, crystal: false, groundFade: 0.18, scatter: 0.95,
+        sheet: 0.075, sheetK: 0.55, heightK: 0.32,
       },
       far: {
-        share: 0.30, box: [62, 26, 62], size: 0.038, fall: 0.45,
+        // §7's "far haze": 600 slow veils rather than 3 600 specks. At
+        // 38 mm and 40-100 m every far sprite was under the minimum screen
+        // size, so subPix^2 was throwing away most of its alpha as well --
+        // the layer measured 0.0003 and was the worst value in the budget.
+        // 0.60 m clears the clamp outright, and the 3 000 instances that
+        // frees go to near and mid where they are seen.
+        share: 0.05, box: [62, 26, 62], size: 0.60, fall: 0.45,
         curlAmp: 0.90, curlFreq: 0.018, curlTime: 0.04, streak: 0.10, spin: 0.4,
-        near: [5, 15], opacity: 0.20, crystal: false, groundFade: 0.4, scatter: 0.85,
+        near: [5, 15], opacity: 0.14, crystal: false, groundFade: 0.4, scatter: 0.85,
         sheet: 0.035, sheetK: 0.85, heightK: 0.42,
       },
       // Streamers skating over the surface. This is the layer that actually
       // reads as "polar wind" -- snow in the air just reads as weather.
       spindrift: {
-        share: 0.26, box: [48, 0.55, 48], size: 0.060, fall: 0.0,
+        share: 0.25, box: [48, 0.55, 48], size: 0.095, fall: 0.0,
         curlAmp: 0.55, curlFreq: 0.075, curlTime: 0.16, streak: 0.70, spin: 0.0,
         // A 0.3 m streamer 0.8 m from the lens is a 20-degree smear across
         // the sky, and heavily defocused it reads as a smudge on the
         // glass. Held well back; it still reads from 2 m out, which is
         // where every body-framing pose sits.
-        near: [2.40, 5.00], opacity: 0.55, crystal: false, groundFade: 0.0, scatter: 1.15,
+        near: [2.40, 5.00], opacity: 0.66, crystal: false, groundFade: 0.0, scatter: 1.15,
         ground: true, sheet: 0.09, sheetK: 0.62, heightK: 0.0,
       },
     };
@@ -299,7 +347,11 @@ export class SnowParticles {
   _activeLayers(ctx) {
     const n = clamp(ctx.quality.get('snowLayers') || 1, 1, 3);
     if (n >= 3) return ['near', 'mid', 'far', 'spindrift'];
-    if (n === 2) return ['mid', 'far', 'spindrift'];
+    // Tier 2 used to drop `near` and keep `far`, which is backwards: measured
+    // per layer, `near` is the largest airborne contributor and `far` is the
+    // smallest by a factor of three even after being enlarged. If a tier can
+    // only afford three layers, near/mid/spindrift are the three worth having.
+    if (n === 2) return ['near', 'mid', 'spindrift'];
     return ['mid', 'spindrift'];
   }
 
