@@ -64,18 +64,70 @@ const CARD_COUNT_FALLBACK = 13000;
  * anisotropy is the fissure's own aspect rather than a number picked to make
  * an aperture measurement move.
  *
- * Outside it the coat is present but SHORT, over a long ramp: coverage comes
- * back almost immediately (no bare skin, 4f rule 3) while full depth takes
- * three times the bare radius to return, so nothing near the eye is tall
- * enough to arch back over it. The long length ramp is what lets the bare
- * zone shrink to the fissure without the aperture closing again -- measured,
- * shortening it from 32 mm to 27 mm alone costs 4.4% of the aperture at
- * `portrait`.
+ * Outside it the coat is present but SHORT, over a ramp: coverage comes back
+ * almost immediately (no bare skin, 4f rule 3) while full depth takes twice
+ * the bare radius to return, so nothing near the eye is tall enough to arch
+ * back over it. That ramp is what lets the bare zone shrink to the fissure
+ * without the aperture closing again.
+ *
+ * ITS LENGTH WAS THREE TIMES THE BARE RADIUS AND IT SHAVED THE WHOLE FACE.
+ * The note that set it recorded "shortening it from 32 mm to 27 mm alone
+ * costs 4.4% of the aperture at portrait", which is a real measurement of
+ * the wrong end of the curve; re-measured across the whole range with a
+ * validated aperture control, 33 -> 21.6 mm costs 1.3% and 33 -> 14 mm
+ * costs 18%. The table is on LEN_SPAN below.
  */
 const FISSURE_MARGIN = 1.10;   // bare out to this x the corneal limbus
 const FISSURE_ASPECT = 1.75;   // the slot is this much wider than it is tall
 const COVER_SPAN = 1.12;       // coverage back by here: short fur, not skin
-const LEN_SPAN = 3.07;         // full coat depth back by here
+/*
+ * Full coat depth back by this multiple of the bare radius.
+ *
+ * 3.07 IS A 33 mm DISC OF SHORT COAT AROUND EACH EYE, AND THAT IS THE BARE
+ * FACE. The bare radius is ~10.8 mm, so at 3.07 the coat does not reach full
+ * depth until 33 mm from the eyeball centre -- and a fox skull is about
+ * 40 mm across the braincase. The two ramps therefore cover the brow, the
+ * forehead and the upper cheek between them, which is exactly the region
+ * the review calls "a smooth bare grey-blue surface", and it is also review
+ * 5 blocker 5's "50-90 px pale ring +38 levels brighter than the cheek".
+ * That ring is the coat's parting, not the eye assembly.
+ *
+ * The span exists so that nothing near the eye is tall enough to arch back
+ * over it, so it cannot simply be deleted -- it has to be traded against the
+ * aperture, with the aperture measured rather than eyeballed. The control is
+ * the count of DARK pixels within 12 mm of the projected eye anchor plus
+ * their bounding box: the eye is the only dark thing on a white animal, so
+ * coat arching over the lid takes both down. It is validated against a
+ * known-bad arm rather than assumed -- see the 1.30 row, which is the arm
+ * whose render plainly buries the upper lid.
+ *
+ * ABBA, `portrait`, post ON, 5152 px/m, arms alternated in one page session
+ * at one instant, controls in brackets:
+ *
+ *     LEN_SPAN   brow fine     muzzle fine    eye dark px     eye box
+ *       3.07    2.97 / 3.28   3.37 / 3.05   3982 / 3975     85 x 62
+ *       2.00    3.77 / 3.90   4.31 / 4.01   3921 / 3923     85 x 61
+ *       1.30    4.01 / 3.98   4.20 / 4.53   3251 / 3245     95 x 50   NO
+ *
+ * and at `macro_eye`, 29140 px/m, same protocol:
+ *
+ *       3.07    4.78 / 4.72   3.77 / 3.84   152179 / 151420  699 x 598
+ *       2.00    5.13 / 5.11   4.38 / 4.32   152741 / 152788  683 x 567
+ *       1.30    5.08          4.31          140137           699 x 499  NO
+ *
+ * So 2.00 buys +31% of the brow's fine detail and +41% of the muzzle's for
+ * 1.3% of the aperture at portrait and none at all at macro, while 1.30 buys
+ * almost nothing further and costs 18% of it -- the instrument separates the
+ * two by a factor of fourteen, which is what makes 2.00 a trade rather than
+ * a guess. The renders agree: at 2.00 the iris, the lid margin and the
+ * canthi are where they were and the coat around them has hair strokes in it
+ * (shots/furx-eye4/macro_eye.eyeSpan20.png against .eyeSpanBack.png); at
+ * 1.30 the upper lid is under coat.
+ *
+ * COVER_SPAN is untouched, so coverage still returns at 1.12 x bare and
+ * 4f rule 3 is unaffected -- this moves only where full LENGTH returns.
+ */
+const LEN_SPAN = 2.00;
 const EYE_CLEAR_MIN = 0.008;
 const EYE_CLEAR_MAX = 0.016;
 
