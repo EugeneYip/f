@@ -1386,7 +1386,8 @@ void main(){
   // Wind phase is the LOCK's: a tuft is a bundle of hairs that have matted
   // together, so it swings as one body. Per-card phase shears the bundle
   // apart on every gust and undoes the clumping in motion.
-  vec3 W = furDynamics(rootW, L * (0.30 + 1.0 * soft), lrnd, ${CARD_SHAPE.droopBoost});
+  float bendable = L * (0.30 + 1.0 * soft);
+  vec3 W = furDynamics(rootW, bendable, lrnd, ${CARD_SHAPE.droopBoost});
   // Gravity for GUARD HAIR ONLY. furDynamics scales gravity, wind, gust and
   // the body's lag by one boost, so raising that to get a hair to hang also
   // makes it flap; and uDroop is shared with the shells, whose hair is
@@ -1425,10 +1426,17 @@ void main(){
   // caudally, and can no longer change how far any hair stands off its skin.
   // reachReport's clause is strengthened by it, not weakened: with the
   // symmetric projection the sag cannot move perpendicular reach at all.
-  vec3 sag = uGravity * (uCardDroop * L * (0.30 + 1.0 * soft));
-  float sagN = dot(sag, wn);
-  sag -= wn * mix(max(0.0, sagN), sagN, uCardDroopSym);
-  W += sag;
+  // BOTH gravity terms are projected, not just this one. furDynamics already
+  // put uGravity * uDroop * bendable * droopBoost into W, and that copy is
+  // subject to exactly the same objection -- on the topline it is another
+  // pull straight into the skin. It is reconstructed here rather than
+  // returned separately because furDynamics is shared with the shells, whose
+  // gravity is the undercoat's and is not a stand-off question.
+  vec3 cardSag = uGravity * (uCardDroop * bendable);
+  vec3 dynGrav = uGravity * (uDroop * bendable * ${CARD_SHAPE.droopBoost});
+  float nOld = max(0.0, dot(cardSag, wn));            // the old asymmetric clamp
+  float nNew = dot(cardSag + dynGrav, wn);            // all of it, both signs
+  W += cardSag - wn * mix(nOld, nNew, uCardDroopSym);
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);
 

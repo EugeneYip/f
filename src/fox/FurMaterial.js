@@ -965,16 +965,22 @@ export const FUR_DEFAULTS = {
    *
    * ABBA, four arms in the order 0 1 1 0, so the two readings of each value
    * bracket the other arm and the run-to-run spread is visible in the table
-   * itself rather than asserted:
+   * itself rather than asserted. BOTH gravity terms are covered -- this one
+   * and the copy furDynamics already put into W:
    *
    *     quantity            sym 0  sym 0     sym 1  sym 1
-   *     top    % bad         21.0   20.4      13.0   12.9    -38%
-   *     top    cliffs          38     35        12     13    -66%
-   *     right  % bad          8.6    8.6       2.9    3.6    -62%
-   *     left   % bad         15.6   14.7      15.2   15.2    unmoved
-   *     bottom % bad          7.3    7.5       7.6    7.0    unmoved
-   *     head   worstP10     1.027  1.114     1.387  1.331    clears 1.15
-   *     legs   worstP10     1.692  1.922     2.146  1.950
+   *     top    % bad         22.6   23.9       9.5    8.4    -61%
+   *     top    cliffs          35     42         5      6    -86%
+   *     right  % bad         14.0   13.4       4.4    2.2    -76%
+   *     left   % bad          8.8    9.4      10.5    9.3    unmoved
+   *     bottom % bad          7.0    6.7       7.8    7.8    unmoved
+   *     head   worstP10     1.000  1.106     1.512  1.608    clears 1.15
+   *     legs   worstP10     1.991  2.035     2.705  2.558
+   *     body   worstP10     1.000  1.000     1.000  1.000    still fails
+   *
+   * The topline also gets measurably TALLER: the topmost covered row moves
+   * from y 384/383 to y 372/369 on a 615 px animal, which is the 12 px of
+   * stand-off gravity was taking off the back.
    *
    * The two edges that move are exactly the two that see an upward-facing
    * surface at this framing -- the topline, and the right edge where it wraps
