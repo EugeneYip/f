@@ -932,7 +932,12 @@ const results = await page.evaluate(async () => {
       for (let c = 0; c < 3; c++) sum += (B.d[i + c] - A.d[i + c]) / 255;
       cov[p] = Math.max(0, Math.min(1, 1 - sum / 3));
     }
-    return { cov, W, H };
+    // The rhinarium's image position, so the contour scans can EXCLUDE it.
+    // §4f rule 3 requires the nose leather to be bare, and a bare rhinarium
+    // is a clean monotonic crossing -- exactly what the hair-floor scans are
+    // built to fail. See matteBands.
+    const nose = project('nose');
+    return { cov, W, H, nose };
   }
 
   /**
@@ -975,9 +980,12 @@ const results = await page.evaluate(async () => {
 
     // Walk inward from an edge; `at(i, k)` is coverage k steps in along scan
     // i. One routine serves all four directions.
-    const scan = (n, len, at) => {
-      const tvs = []; let short = 0;
+    const scan = (n, len, at, skip = null) => {
+      const tvs = []; let short = 0, dropped = 0;
       for (let i = 0; i < n; i += 2) {
+        // Scans crossing the bare rhinarium, which §4f rule 3 requires to be
+        // bare. Counted, never silently discarded.
+        if (skip && skip(i)) { dropped++; continue; }
         // SKIP SCANS THAT START ALREADY COVERED.
         //
         // If the animal leaves the frame, the first sample on that scan is
@@ -1019,7 +1027,7 @@ const results = await page.evaluate(async () => {
         const net = Math.abs(prof[prof.length - 1] - prof[0]);
         if (net > 0.3) tvs.push(tv / net);
       }
-      return { tvs, short };
+      return { tvs, short, dropped };
     };
     const pct = (a, f) => (a.length
       ? +a.slice().sort((p, q) => p - q)[Math.min(a.length - 1, Math.floor(f * a.length))].toFixed(3)
@@ -1030,6 +1038,25 @@ const results = await page.evaluate(async () => {
       for (let x = 0; x < W; x++) if (cov[y * W + x] > 0.5) { if (y < top) top = y; if (y > bot) bot = y; break; }
     if (bot <= top) return null;
 
+    // §4f rule 3 REQUIRES bare nose leather, so scans that cross the
+    // rhinarium are being graded against a rule the art direction forbids
+    // them to satisfy. Measured by the fur agent: the rhinarium is 3.8% of
+    // all left-edge scans and 2.4% of all bottom-edge scans, and accounts for
+    // 43-48% of the left edge's failures -- 10 of 19 failing left scans fell
+    // within 15 mm of the nose, nearest 4.7 mm. It alone spends more than the
+    // whole 2% allowance, so `left`, `bottom` and `body` could not pass as
+    // written no matter how good the coat got.
+    //
+    // Excluded by scan-line index: for the left/right edges a scan line is a
+    // row, so drop rows within the rhinarium's radius of the nose's y; for
+    // top/bottom it is a column, so drop by x. 15 mm against a 13 mm
+    // rhinarium leaves a 1 mm margin each side for the fur-to-leather
+    // transition. Every count below reports what it dropped.
+    const noseR = 15 * pxPerMm;
+    const np = m.nose;
+    const dropRow = (y) => !!np && Math.abs(y - np.y) <= noseR;
+    const dropCol = (x) => !!np && Math.abs(x - np.x) <= noseR;
+
     const res = {};
     const bands = {
       head: [top, top + (bot - top) * 0.33],
@@ -1038,13 +1065,15 @@ const results = await page.evaluate(async () => {
     };
     for (const [name, [y0, y1]] of Object.entries(bands)) {
       const y0i = Math.round(y0) + 1, nb = Math.max(0, Math.round(y1) - 1 - y0i);
-      const L = scan(nb, W, (i, k) => cov[(y0i + i) * W + k]);
-      const R = scan(nb, W, (i, k) => cov[(y0i + i) * W + (W - 1 - k)]);
+      const skipY = (i) => dropRow(y0i + i);
+      const L = scan(nb, W, (i, k) => cov[(y0i + i) * W + k], skipY);
+      const R = scan(nb, W, (i, k) => cov[(y0i + i) * W + (W - 1 - k)], skipY);
       const tvs = L.tvs.concat(R.tvs), short = L.short + R.short;
+      const dropped = L.dropped + R.dropped;
       const usable = tvs.length >= 8 && tvs.length >= short;
       const lp = pct(L.tvs, 0.10), rp = pct(R.tvs, 0.10);
       res[name] = usable && resolvable
-        ? { n: tvs.length, shortRows: short,
+        ? { n: tvs.length, shortRows: short, noseDropped: dropped,
             tvMedian: pct(tvs, 0.50), tvP10: pct(tvs, 0.10),
             leftP10: lp, rightP10: rp,
             // The WORSE side is what the gate asserts. A band can be hairy on
@@ -1058,13 +1087,14 @@ const results = await page.evaluate(async () => {
     // Whole-contour edges, so top and bottom are measured at all.
     res.edges = {};
     for (const [e, sc] of Object.entries({
-      left:   scan(H, W, (y, k) => cov[y * W + k]),
-      right:  scan(H, W, (y, k) => cov[y * W + (W - 1 - k)]),
-      top:    scan(W, H, (x, k) => cov[k * W + x]),
-      bottom: scan(W, H, (x, k) => cov[(H - 1 - k) * W + x]),
+      left:   scan(H, W, (y, k) => cov[y * W + k], dropRow),
+      right:  scan(H, W, (y, k) => cov[y * W + (W - 1 - k)], dropRow),
+      top:    scan(W, H, (x, k) => cov[k * W + x], dropCol),
+      bottom: scan(W, H, (x, k) => cov[(H - 1 - k) * W + x], dropCol),
     })) {
       res.edges[e] = {
-        n: sc.tvs.length, tvP10: pct(sc.tvs, 0.10), tvMedian: pct(sc.tvs, 0.50),
+        n: sc.tvs.length, noseDropped: sc.dropped,
+        tvP10: pct(sc.tvs, 0.10), tvMedian: pct(sc.tvs, 0.50),
         badFrac: sc.tvs.length
           ? +(sc.tvs.filter((v) => v < 1.15).length / sc.tvs.length).toFixed(3) : null,
       };
@@ -1730,12 +1760,19 @@ if (!fs || !fs.brow || !fs.muzzle) {
   // exactly 255. Clipping manufactures hard edges, and hard edges read as
   // fine detail, so much of that 12.28 was the blow-out itself.
   //
-  // On the correctly exposed frame the same region measures 0.43, and the
-  // render confirms why: the brow and cheek are a smooth bare surface with
-  // essentially no hair on them. The old number was flattering a defect that
-  // the clipping was hiding. So this check is working, but 6.0 is NOT yet a
-  // defensible target -- recalibrate it against a frame where the coat
-  // actually covers the face, and say what it was recalibrated to.
+  // I then read 0.43 off one run and concluded the brow was bare. THAT WAS
+  // A BAD RUN, and the fur agent was right to refuse to recalibrate against
+  // it: it could not reproduce 0.43 outside spec, reading 2.53 to 5.1 on the
+  // same pose, same box, same metric, and it noted spec's own frame had the
+  // brow box at meanL 142.9 against the muzzle box at 202.8 -- a 60-level
+  // gap between two boxes on the same coat, which says the box had landed in
+  // shadow. The run also had two agents editing the tree mid-measurement.
+  //
+  // On a quiet tree the same region reads 13.34 and passes. 6.0 therefore
+  // stands as calibrated, at 45% of that. What remains true from the visual
+  // read is narrower than what I claimed: the CHEEK AND JOWL still read as a
+  // smooth grey-blue mass, which the fur agent confirmed independently and
+  // traced to the shells rather than the cards.
   record('macro reference region carries hair detail', ref >= 6.0,
     `brow fine ${ref.toFixed(2)} against an absolute floor of 6.0, coarse ` +
     `${fs.brow.coarse.toFixed(2)}, fine-share ${fs.brow.ratio.toFixed(2)}`);
@@ -1853,7 +1890,10 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
       record(`contour has no bare run at profile: ${e}`,
         !!(ed && ed.badFrac != null && ed.badFrac <= 0.02),
         ed ? `${((ed.badFrac ?? 0) * 100).toFixed(1)}% of ${ed.n} scans below the ` +
-             `1.15 hair floor (p10 ${ed.tvP10}, median ${ed.tvMedian}) — §4f allows 2%`
+             `1.15 hair floor (p10 ${ed.tvP10}, median ${ed.tvMedian}) — §4f allows ` +
+             `2%. ${ed.noseDropped ?? 0} scans excluded as rhinarium, which §4f ` +
+             `rule 3 requires to be BARE: before this exclusion the nose alone ` +
+             `was 3.8% of left-edge scans against a 2% budget`
            : 'edge not measured');
     }
 
