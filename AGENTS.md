@@ -270,6 +270,21 @@ horizon check by cutting art-bible snow sparkle 71%. If you believe a threshold
 is wrong, report it with the measurement and leave it failing — the
 orchestrator owns `tools/**` and will change it.
 
+## git is broken on this machine: prefix every call
+
+The system `git` at /usr/bin/git is Xcode's shim, and the Xcode license has
+not been agreed on this host, so every plain `git` invocation exits 69 with a
+license error -- including from inside agents, where it looks like an
+unrelated failure and silently costs you your commit.
+
+    DEVELOPER_DIR=/Library/Developer/CommandLineTools git status
+
+That points the shim at the Command Line Tools instead. It needs no password
+and works for every git subcommand. Use it for EVERY git call.
+
+Do NOT run `sudo xcodebuild -license`: it is interactive and needs the user's
+password, which no agent has. Only the user can clear this properly.
+
 ## Scratch files: namespace them
 
 The scratchpad directory is **shared between all agents**. One agent's probe

@@ -1720,7 +1720,7 @@ const eh = results.edgeHardness ?? {}, ehn = results.edgeHardnessNoFur ?? {};
         !!(v && v.worstP10 != null && v.worstP10 >= 1.15),
         v && v.worstP10 != null ? `WORSE SIDE ${v.worstP10} (left ${v.leftP10}, ` +
             `right ${v.rightP10}); combined path length over net crossing ${v.tvP10} at the 10th ` +
-            `percentile (median ${v.tvMedian}, ramp ${v.rampMedianMm}mm of fox) ` +
+            `percentile (median ${v.tvMedian}) ` +
             `over ${v.n} scans, of which ${v.shortRows} were CLIFFS scored 1.0 ` +
             `(a ramp under two sampling intervals is a monotonic crossing, not ` +
             `an unmeasurable row). Sampled every 1.5mm — a fifth of the coat's ` +
