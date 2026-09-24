@@ -1276,7 +1276,18 @@ ${isShell ? /* glsl */ `
   // the camera sees, so the flank read as hard corrugation rather than soft
   // locks; and where it drove the depth negative the max(above, 0) clamp made
   // it asymmetric, so a zero-mean term still cost mean luminance.
-  float lockMod = clamp(uCoatLock * furLockShadow(vRoot, lockSite, vAxis, vSunB)
+  // LOD-FADED ON THE CLUMP OCTAVE'S OWN FREQUENCY, exactly as the clump's
+  // ALPHA is at the end of furHair(). This is a per-fragment shading term
+  // read off a 7.4 mm lattice: at the wide framing that lattice is far under
+  // a pixel, and a sub-Nyquist per-fragment signal crawls. ART_DIRECTION 2.6
+  // makes temporal stability a non-negotiable, and the coat has been through
+  // this once already -- the shell dither had to be band-passed by its own
+  // on-screen cell size for the same reason. Dissolving the SHADING on the
+  // same curve as the COVERAGE also keeps the two from disagreeing about
+  // whether a tuft exists at a given distance.
+  float lockLod = octaveFade(px, uClumpFreq * vP1.x);
+  float lockMod = clamp(uCoatLock * lockLod
+                        * furLockShadow(vRoot, lockSite, vAxis, vSunB)
                         / max(vP1.w, 1e-4), -0.9, 0.9);
   float above = vP1.w * (1.0 - tJ) * (1.0 + lockMod);
   vec2 sh = furSelfShadow(above, dot(normalize(vNrm), uSunDir));
