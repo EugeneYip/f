@@ -579,7 +579,7 @@ const F0_TEAR = 0.028;      // tear film, n = 1.336
 // 0.075 is the old value and it reproduces the defect exactly, which is the
 // positive control. 0.12 already clears it; above that the pupil only gets
 // brighter, and §4b wants it black. 0.13 for a little margin.
-const COAT_ROUGH = 0.13;    // corneal tear film; 0.075 resolved the horizon
+const COAT_ROUGH = 0.050;   // corneal tear film. See COAT_IBL below.
 const SKY_LOBE = 0.15;      // cornea overlay's broad sky reflection
 // GGX peaks at 1/(pi*a^2), so a lobe widened from 0.052 to 0.15 loses 8.3x of
 // its peak at constant gain -- which is why the first attempt at a "shaped"
@@ -588,6 +588,79 @@ const SKY_LOBE = 0.15;      // cornea overlay's broad sky reflection
 // energy. 0.26 restores about 40% of the old point's peak, spread over a
 // shape instead of a dot.
 const SKY_GAIN = 0.26;      // ...and its strength
+
+// THE HARD LINE IS NOT A ROUGHNESS PROBLEM, AND 0.13 BOUGHT 6 % OF IT.
+//
+// Everything above is correctly ATTRIBUTED -- the line is the scene PMREM
+// reflected in the tear film -- but the sweep that chose 0.13 was read with a
+// metric that takes the largest row-to-row jump ANYWHERE in the pupil, and
+// that statistic abandons the terminator the moment another edge (the pupil's
+// own rim) overtakes it. That is what "6369 px -> 48 px" was: the max jumping
+// to a different feature, not the terminator moving.
+//
+// Re-measured with a metric that evaluates the step AT ITS OWN ROW -- mean
+// B-R over rows y+1..y+4 minus rows y-4..y-1, inside a fixed pupil disc,
+// eroded 6 px off the edge, with the catchlight excluded because a 250-level
+// specular dominates any row statistic that contains it. macro_eye, one page
+// session, one sim instant, TAA reset per arm, two identical arms bit
+// identical:
+//
+//   arm                                   step at the terminator   pupil B-R
+//   uCoatRough 0.075  (the old value)              2.743             13.97
+//   uCoatRough 0.13   (what shipped)               2.571             13.75
+//   uCoatRough 0.30                                1.548             14.02
+//   scene.environment = null                       0.804              6.76
+//
+// THE CAUSE, stated properly. `Sky._regenerateEnv` PMREMs a sky DOME, and
+// `sampleSky` is an atmosphere model, so BELOW the horizon the environment
+// holds nothing at all. A tear film therefore reflects a bright sky in its
+// upper half and a void in its lower, and the boundary between them is a step
+// with no width. Roughness can only blur that step; it cannot supply the
+// missing radiance, which is why every value trades the line against a bluer
+// pupil.
+//
+// WHAT WAS TRIED AND REJECTED, because it cost most of a session and the next
+// agent should not pay for it twice. Giving the two globes their own
+// environment -- a 96x48 equirect built in code from ctx.skyColor /
+// groundBounce / sunColor, sky above, snow below, crossfaded across the
+// horizon, PMREM'd at init -- DOES kill the line (step 2.50 -> 0.20-0.37 at
+// every gain from 0.06 to 0.34). It also cannot be calibrated: the pupil is
+// the centre of a convex mirror facing the camera, so what it reflects is the
+// horizon, and the ground that removes the step is the same radiance that
+// lights the pupil. At the gain that matched the scene's iris luminance
+// (45.5) the pupil reached luminance 45 -- as bright as the iris. Dimming the
+// ground brought the step straight back (0.47 -> 1.43 as the gain rose),
+// because a dim ground under a bright sky IS the step. The two are one
+// variable and no amount of tuning separates them.
+//
+// WHAT WORKS is to stop asking a 256 px PMREM to be a mirror at all. On the
+// CORNEA, and only there, the globe's specular IBL is switched off and the
+// wet reflection is carried by the analytic lobes the corneal overlay already
+// owns plus the clearcoat's DIRECT response to Environment.js's four lights.
+// The sclera keeps its env sheen. Measured on the same arms:
+//
+//   arm                    step@terminator   pupil rgb        iris R-B / lum
+//   base (scene PMREM)          2.501    (10.7, 17.9, 27.8)     27.96 / 45.51
+//   uCoatIBL 0.50               2.504     (8.2, 14.1, 22.2)     31.41 / 44.09
+//   uCoatIBL 0.10, rough 0.05   1.526     (6.4, 11.1, 17.3)     34.01 / 42.93
+//   uCoatIBL 0, rough 0.05      0.898     (6.0, 10.5, 16.2)     34.53 / 42.65
+//
+// 0.898 is the floor: `scene.environment = null` measures 0.804 on the same
+// metric, so there is no line left to remove. The iris keeps 94 % of its
+// luminance and gets WARMER (R-B 28.0 -> 34.5), because what went away was a
+// blue specular veil lying over an amber iris. And because the roughness only
+// ever existed to smear the horizon, the tear film can go back to being
+// smooth -- which is what puts the catchlight's peak at 251 with 6 px over
+// 235, against 211 and none before.
+//
+// A TRAP WORTH THE LINE, and my predecessor measured it correctly:
+// `material.envMapIntensity` is a NO-OP while a material relies on
+// `scene.environment`. three's `refreshUniformsStandard` only copies it when
+// `material.envMap` is truthy, and `WebGLRenderer.setProgram` then overwrites
+// the uniform with `scene.environmentIntensity` for exactly the
+// `material.envMap === null` case (three.module.js:14503 and :17605). An A/B
+// arm built on it measures nothing at all.
+const COAT_IBL = 0.0;       // globe specular IBL, ON THE CORNEA ONLY
 
 /**
  * EVERY uniform this file injects, declared in ONE place.
@@ -614,7 +687,7 @@ uniform float uLidYaw, uLidPitch;
 uniform float uLidScatter;
 uniform float uLidSwell;
 uniform float uNasalSign, uLidAO, uLidCrease, uCanthus;
-uniform float uCoatRough, uSkyLobe, uSkyGain;
+uniform float uCoatRough, uSkyLobe, uSkyGain, uCoatIBL;
 uniform vec3 uCaruncle;
 uniform vec3 uIrisInner, uIrisMid, uIrisOuter, uLimbal, uPupilCol, uSclera;
 uniform vec3 uMarginCol, uLidSkin, uLidFur;
@@ -1662,6 +1735,7 @@ export class Eyes {
       uCoatRough: { value: COAT_ROUGH },
       uSkyLobe: { value: SKY_LOBE },
       uSkyGain: { value: SKY_GAIN },
+      uCoatIBL: { value: COAT_IBL },
 
       // §4b: "amber / golden-brown, noticeably warm". These were authored a
       // stop and a half darker than that and the eye graded out to a brown
@@ -1900,9 +1974,15 @@ export class Eyes {
   reflectedLight.directDiffuse *= eyAO;
   reflectedLight.indirectDiffuse *= eyAO;
   reflectedLight.directSpecular *= eyAO;
-  reflectedLight.indirectSpecular *= eyAO;
+  // THE ENV REFLECTION COMES OFF THE CORNEA, AND ONLY THE CORNEA. See the
+  // note at COAT_IBL: a 256 px PMREM with no ground in it cannot be a mirror,
+  // and at the roughness a tear film needs it resolves its own sky/void
+  // horizon as a hard line across the pupil. The sclera is not a mirror and
+  // keeps its damp env sheen.
+  float eyIBL = mix(1.0, uCoatIBL, eyOnCornea);
+  reflectedLight.indirectSpecular *= eyAO * eyIBL;
   clearcoatSpecularDirect *= eyAO;
-  clearcoatSpecularIndirect *= eyAO;
+  clearcoatSpecularIndirect *= eyAO * eyIBL;
 `);
     };
     m.customProgramCacheKey = () => 'foxEyeGlobe';
