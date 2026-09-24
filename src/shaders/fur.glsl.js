@@ -1172,6 +1172,7 @@ uniform float uCardJitter;
 uniform float uCardClump;
 uniform float uCardCurve;   // 0 = the straight-ish original shape, 1 = hooked
 uniform float uCardDroop;   // extra gravity for GUARD HAIR only
+uniform float uCardDroopSym; // 1 = sag may not change perpendicular reach
 uniform float uCardInteriorLen;  // card length multiplier AWAY from the outline
 uniform vec2  uCardEdgeLen;      // vEdge band the multiplier ramps out over
 uniform float uCardIntMix[${REGION_COUNT}];  // per-region share of it, 0 = exempt
@@ -1405,8 +1406,28 @@ void main(){
   // and pull a dorsal hair toward the back, and on a surface already facing
   // straight down it does nothing, because there the hair is already hanging.
   // So the clause is satisfied by construction instead of by a wider cap.
+  //
+  // AND IT MAY NOT SHORTEN IT EITHER, which the max() above did not say.
+  // The clamp removes the sag's normal component only where that component
+  // points OUT of the surface. On an UPWARD-facing surface it points IN, so
+  // the whole of it survived and gravity subtracted perpendicular reach --
+  // and the topline is the one place on the animal where the surface faces
+  // up. Arithmetic on the dorsal band, region 13, soft 0.14 and lay 1.20:
+  // rise puts the tip 0.95 L along the normal, this sag pulled it back
+  // 0.55 L * (0.30 + soft) and furDynamics another 0.26 * 0.40 L of the same,
+  // so the back kept 43-55% of the reach the flank got from the identical
+  // card. That is measured on the coverage matte, not reasoned: see
+  // uCardDroopSym in FUR_DEFAULTS for the before/after.
+  //
+  // Removing the component in BOTH directions is what the paragraph above
+  // already claims this line does -- gravity becomes a pure comb in the
+  // tangent plane, which can still hang a flank hair and pull a dorsal hair
+  // caudally, and can no longer change how far any hair stands off its skin.
+  // reachReport's clause is strengthened by it, not weakened: with the
+  // symmetric projection the sag cannot move perpendicular reach at all.
   vec3 sag = uGravity * (uCardDroop * L * (0.30 + 1.0 * soft));
-  sag -= wn * max(0.0, dot(sag, wn));
+  float sagN = dot(sag, wn);
+  sag -= wn * mix(max(0.0, sagN), sagN, uCardDroopSym);
   W += sag;
   wp.xyz += W * (v * v);
   vec3 hairW = normalize(wh * max(L, 1e-4) + 2.0 * v * W);

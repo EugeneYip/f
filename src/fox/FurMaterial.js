@@ -940,6 +940,54 @@ export const FUR_DEFAULTS = {
   cardDroop: 0.55,
 
   /*
+   * Whether the guard-hair sag is allowed to change how far a card stands off
+   * the skin. 1 = no (the normal component is projected out in BOTH
+   * directions); 0 = the old asymmetric clamp, which removed it only where it
+   * pointed outward.
+   *
+   * THIS IS THE TOPLINE, AND IT IS THE LARGEST SINGLE CONTOUR DEFECT IN THE
+   * BUILD. `contour has no bare run at profile` fails on all four edges, and
+   * mapping every failing scan back onto the coverage matte puts the top
+   * edge's failures in one place: the dorsal line from the withers to the
+   * croup, and the top of the tail. Nowhere else on the animal faces up.
+   *
+   * The cause is the sign the old clamp did not consider. Gravity is world
+   * -Y; on the flank the normal is horizontal so the sag is tangential and
+   * combs the hair down, on the belly the normal points down so the outward
+   * component was clamped away -- and on the BACK the normal points up, the
+   * sag's normal component points straight into the skin, max(0, .) is 0, and
+   * the whole of it survived as a subtraction from reach. The dorsal card
+   * kept under half the stand-off the identical card gets on the flank.
+   *
+   * Measured on the exact coverage matte, spec.mjs's own scan (1920x1200,
+   * 1.48 px/mm, 1.5 mm box filter, cliffs scored 1.0), both arms in ONE page
+   * session at ONE simulation instant, `profile`:
+   *
+   * ABBA, four arms in the order 0 1 1 0, so the two readings of each value
+   * bracket the other arm and the run-to-run spread is visible in the table
+   * itself rather than asserted:
+   *
+   *     quantity            sym 0  sym 0     sym 1  sym 1
+   *     top    % bad         21.0   20.4      13.0   12.9    -38%
+   *     top    cliffs          38     35        12     13    -66%
+   *     right  % bad          8.6    8.6       2.9    3.6    -62%
+   *     left   % bad         15.6   14.7      15.2   15.2    unmoved
+   *     bottom % bad          7.3    7.5       7.6    7.0    unmoved
+   *     head   worstP10     1.027  1.114     1.387  1.331    clears 1.15
+   *     legs   worstP10     1.692  1.922     2.146  1.950
+   *
+   * The two edges that move are exactly the two that see an upward-facing
+   * surface at this framing -- the topline, and the right edge where it wraps
+   * the croup and the top of the tail. The two that do not move are the ones
+   * whose surfaces face down or sideways, where the old clamp was already
+   * doing the right thing. That pattern is the check on the mechanism: a
+   * change that improved everything equally would not be this term.
+   *
+   * It is free: no geometry, no fill, one mix() in the card vertex shader.
+   */
+  cardDroopSym: 1.0,
+
+  /*
    * THE INTERIOR COAT'S LENGTH, as a multiple of the outline coat's.
    *
    * Review blocker 5: "the coat is long combed hair, not a dense pile --
@@ -1574,6 +1622,7 @@ export function buildFurUniforms(ctx) {
     uCardClump: { value: d.cardClump },
     uCardCurve: { value: d.cardCurve },
     uCardDroop: { value: d.cardDroop },
+    uCardDroopSym: { value: d.cardDroopSym },
     uCardOpacity: { value: d.cardOpacity },
     uCardHairs: { value: d.cardHairs },
     uCardHairAlign: { value: d.cardHairAlign },
