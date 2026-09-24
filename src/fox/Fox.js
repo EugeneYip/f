@@ -246,7 +246,24 @@ export class Fox {
     for (const [name, boneName, xc, zc] of pawSpecs) {
       const c = this._measureContact(xc, zc);
       this.pawContact[name] = c;
-      mk(name, boneName, [c.x, 0, c.z]);
+      // y = c.bottom, NOT 0.
+      //
+      // `_measureContact` measures where the sole actually is and this line
+      // threw the answer away and substituted the authored ground plane. They
+      // are not the same: smooth-union rounds the pad/toe blend UP, so the
+      // drawn sole sits at y = +2.5 mm while the anchor sat at 0. Locomotion
+      // pins THIS anchor to `ground - sink`, so every paw was planted with
+      // 2.5 mm of drawn skin already below the commanded contact -- 2.5 mm
+      // that then propagated through the shell canopy and the card fringe
+      // into `spec.mjs`'s `the drawn foot meets the drawn snow`.
+      //
+      // It also buys margin on the audit's 22 mm stance classifier from the
+      // other end: the paw bone rides `20.5 - c.bottom` above the anchor
+      // instead of a flat 20.5, so stance clearance drops by the same 2.5 mm
+      // without touching `sink`. Measured: bone-over-anchor 19.9 -> 17.4 mm at
+      // idle. Both effects are the same correction, which is what makes it
+      // safe: nothing is being traded, an error is being removed.
+      mk(name, boneName, [c.x, c.bottom, c.z]);
     }
   }
 

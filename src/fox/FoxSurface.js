@@ -309,6 +309,35 @@ export async function buildFoxSurface(skeleton, {
       len *= 0.78 + 0.22 * smoothstep(0.055, 0.150, y);
     }
 
+    // --- the SOLE is pad leather, not coat ---------------------------------
+    //
+    // `addPaw` already says "pad leather faces the ground" and tints it, and
+    // §4f rule 3's list of places bare skin is allowed is "the rhinarium, the
+    // eyes and the paw pads" -- so this facet is the one surface on the animal
+    // that is *supposed* to be hairless. It was carrying the full 9.5 mm.
+    //
+    // Measured (`paws` coverage matte, coat split into shells and cards, four
+    // arms in one page session at one sim instant), the coat hanging below the
+    // drawn skin at the worst paw was 20.5 mm -- 2.2x the 9.5 mm the surface
+    // authors, because cards reach ~1.2x the local coat and then droop. Every
+    // millimetre of it is under the snow by construction, where it can only
+    // read as the leg being amputated at the snow line, and it is the whole of
+    // spec.mjs's `the drawn foot meets the drawn snow` overage.
+    //
+    // Masked on the NORMAL, not on height, so it takes the ground-facing facet
+    // and nothing else: the paw's front, sides and top keep their 9.5 mm and
+    // the outline at every framing is still hair. `ny < -0.45` is ~63 deg
+    // below horizontal; at `paws` the camera sits 64 mm above the snow and
+    // cannot see a surface that steep on a paw that is in the snow.
+    //
+    // 0.40x leaves 3.8 mm, which is §4f rule 2's own short-coat band, not
+    // zero -- there is still interdigital hair, just not a skirt.
+    if (reg === R.pawFront || reg === R.pawHind) {
+      const down = smoothstep(-0.45, -0.88, ny);
+      const low = smoothstep(0.030, 0.014, y);
+      len *= 1 - 0.60 * down * low;
+    }
+
     // Never let a hair point into the body.
     // Minimum rise off the skin. 0.04 is 2.3 degrees, i.e. flat, and a flat
     // hair cannot break a silhouette — see the trunk flowRadial note in
