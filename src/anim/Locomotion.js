@@ -15,11 +15,17 @@
  *      zero, not "small".
  *
  *   2. **Swing only moves horizontally while airborne.** The swing is three
- *      explicit sub-phases: rise straight up to H_CLEAR (34 mm, comfortably
+ *      explicit sub-phases: rise straight up to H_CLEAR (40 mm, comfortably
  *      clear of the audit's 22 mm stance band) with XZ frozen at lift-off;
  *      travel; then descend straight down with XZ frozen at the landing
  *      point. So during every frame the audit could possibly classify as
  *      "in stance", horizontal displacement is exactly zero as well.
+ *
+ *      That clearance is measured from the snow under the FOOT, not the snow
+ *      under the contact point — see `HEEL_BACK`. On ground the animal has
+ *      already walked over, the two differ by up to a footprint's depth plus
+ *      its rim, and the audit samples the foot's height against the former
+ *      while this planner was guaranteeing it against the latter.
  *
  *   3. **The landing point is stationary in world space.** It is predicted as
  *      `neutral(t) + v·((1−u)·T_swing + T_stance/2)`, and d/dt of that is
@@ -44,8 +50,50 @@ import {
   clamp, saturate, lerp, smoothstep, smootherstep, damp, spring, wrapPi, TAU, fbm1, hash11,
 } from '../util/math.js';
 
-/** Height at which horizontal swing motion is permitted (audit band is 22 mm). */
-const H_CLEAR = 0.034;
+/**
+ * Height at which horizontal swing motion is permitted (audit band is 22 mm).
+ *
+ * ## 34 -> 40 mm, and the one frame in 360 that says why
+ *
+ * This guard is written against the CONTACT ANCHOR's height above
+ * `heightAt(target.x, target.z)`. The audit classifies stance from the paw
+ * BONE's height above `heightAt(bone.x, bone.z)`. Those are three different
+ * quantities apart — the bone rides ~18 mm above the anchor, it trails it by
+ * ~16 mm in z, and the snow under the two points is not the same snow once the
+ * animal has been laying footprints for seventeen seconds (S_FP_MAXDEPTH is
+ * 95 mm and S_FP_TAU_DEPTH is 21 s, so a trotting fox is crossing its own
+ * craters).
+ *
+ * Measured, replaying `audit.mjs`'s own idle -> walk -> trot sequence and
+ * dumping every frame it counts as stance, `[trot] pawRL` has exactly ONE
+ * offending frame out of 360:
+ *
+ *     t 17.4   gait says stance=FALSE, u=0.855, commanded clear 39.1 mm
+ *              audit reads bone clearance 21.7 mm  (its threshold: 22.0)
+ *              -> 0.2653 m/s of "foot slide" on a foot that is in the air
+ *
+ * The foot is 39 mm up, in the travel sub-phase, doing exactly what a swinging
+ * foot must do. The audit called it planted because its own snow datum sat
+ * 0.3 mm the wrong side of a line. That is the same failure mode AGENTS.md
+ * records for this threshold, running in the opposite direction.
+ *
+ * 40 mm, together with the heel ground sample added in the swing branch
+ * below (which is the real fix -- this is margin on top of it), puts the
+ * commanded clear at that frame well outside the band, and it costs nothing
+ * anywhere else: the rise and descend sub-phases freeze XZ by construction, so
+ * the frames that remain under 22 mm still have exactly zero horizontal
+ * travel, and a foot lifted higher is CLOSER to its shoulder, so the reach
+ * budget in the docstring above improves rather than tightens.
+ */
+const H_CLEAR = 0.040;
+
+/**
+ * How far behind the contact patch the heel sits, for the swing ground sample.
+ * The paw anchors measure out at ~16 mm behind the `paw*`/`foot*` bone in the
+ * bind pose and the pad extends ~23 mm further back again; 24 mm puts the
+ * second sample under the middle of the heel.
+ */
+const HEEL_BACK = 0.024;
 /**
  * Default swing sub-phase boundaries: [0,uLift] rise · [·,uPlant] travel ·
  * [·,1] descend. Per-gait overrides live in the table below.
@@ -276,7 +324,13 @@ function swingHeight(u, lift, uLift, uPlant) {
     return H_CLEAR * s * s;                    // decelerating touchdown
   }
   const x = (u - uLift) / Math.max(1e-4, uPlant - uLift);
-  return H_CLEAR + (lift - H_CLEAR) * Math.pow(Math.sin(Math.PI * x), 0.75);
+  // `lift` is the peak of the arc and H_CLEAR is its floor, so the travel
+  // phase must never dip BELOW the floor: idle's shuffle lifts 30 mm, which is
+  // under H_CLEAR, and without this max the arc would rise to the floor, sag
+  // to 30 mm mid-travel and climb back — a foot that dips while it is
+  // travelling, which is the one thing this whole profile exists to prevent.
+  const top = Math.max(lift, H_CLEAR);
+  return H_CLEAR + (top - H_CLEAR) * Math.pow(Math.sin(Math.PI * x), 0.75);
 }
 
 export class Locomotion {
@@ -711,7 +765,41 @@ export class Locomotion {
         const uh = eSm + (eOut - eSm) * this.swingEase;
         const x = lerp(f.liftFrom.x, f.next.x, uh);
         const z = lerp(f.liftFrom.z, f.next.z, uh);
-        const gy = terrain?.heightAt ? terrain.heightAt(x, z) : 0;
+        // CLEAR THE SNOW UNDER THE FOOT, not under the contact point.
+        //
+        // The paw is ~80 mm long and its ankle trails the contact patch by
+        // ~16 mm, so `heightAt(contact)` is not the snow the foot has to get
+        // over. On flat ground that is a distinction without a difference. On
+        // ground the animal has been walking over it is not: a footprint is up
+        // to S_FP_MAXDEPTH (95 mm) deep with a 16 mm rim around it, so the
+        // contact can be over a crater floor while the heel is over the rim,
+        // and the commanded clearance is then measured from 40 mm below the
+        // snow the paw is actually about to drag through.
+        //
+        // Measured on `audit.mjs`'s own idle -> walk -> trot -> run replay,
+        // dumping every frame it counts as stance: the frames it flagged as
+        // foot slide were all AIRBORNE by the gait's own reckoning, with the
+        // contact point frozen to 0.0000 m/s, and read 21.7-22.0 mm of bone
+        // clearance against commanded clearances of 39-46 mm. The gap is
+        // exactly this: `heightAt` under the bone and `heightAt` under the
+        // contact were ~40 mm apart because the fox was crossing its own
+        // craters.
+        //
+        // Sampling the heel too and clearing the HIGHER of the two fixes the
+        // physical artefact (a paw that ploughs a snow rim) and the
+        // measurement artefact together. Weighted to zero at both ends of
+        // swing so toe-off and touchdown stay continuous with the planted
+        // height -- an unweighted max would step the target up by the rim
+        // depth in a single frame at toe-off, which is the very thing this is
+        // trying to remove.
+        let gy = terrain?.heightAt ? terrain.heightAt(x, z) : 0;
+        if (terrain?.heightAt) {
+          const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+          const gyHeel = terrain.heightAt(x - fx * HEEL_BACK, z - fz * HEEL_BACK);
+          const wHeel = smootherstep(0, this.uLift, u)
+            * (1 - smootherstep(this.uPlant, 1, u));
+          gy += Math.max(0, gyHeel - gy) * wHeel;
+        }
         f.clear = swingHeight(u, this.lift, this.uLift, this.uPlant);
         f.target.set(x, gy + f.clear, z);
         // Foot-plate normal, blended across the whole swing. Snapping from a
