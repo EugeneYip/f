@@ -108,27 +108,64 @@ export const TIERS = {
     // cheap improvement and naming the deficit separately is the honest
     // order; sequential single-shot timing on this machine is not.
     furShells: 18, furFins: true, furCards: 26000, furAniso: true,
-    // Head curvature refinement. OFF below `ultra` until the budget exists.
-    //
-    // Measured at hero/high, drawn triangles: 0 levels 1023k, 1 level 1170k,
-    // 2 levels 1331k. Against the anatomy agent's measured ~22 ms per million
-    // drawn triangles, ONE level is already ~3 ms on a 16.37 ms frame against
-    // a 16.70 budget. There is no row of that table that fits in 0.3 ms.
+    // Head curvature refinement, ON at `high`. It fixes REVIEW-7's faceting:
+    // neighbour face-normal step at the muzzle median 13.57 -> 5.28 deg, p90
+    // 28.84 -> 9.48, over-10deg 54.5% -> 7.3%, flank and legs bit-identical.
     //
     // It was defaulting to 2 levels at EVERY tier -- `Fox.js` reads
     // `ctx.quality.get('foxRefineLevels') ?? true` -- so `low` was paying for
-    // it too. That is the regression this line closes.
+    // it too. `low` and `medium` stay at 0; that regression stays closed.
     //
-    // The refinement itself is good and is not in question: neighbour
-    // face-normal step at the muzzle went median 13.57 -> 5.28 deg, p90
-    // 28.84 -> 9.48, over-10deg 54.5% -> 7.3%, with the flank and legs
-    // bit-identical. It fixes REVIEW-7's faceting. We simply cannot draw it
-    // yet at the tier the reviews grade.
+    // THE ~3 MS PRICE TAG ON THIS WAS WRONG BY 7x, and it was an extrapolation
+    // rather than a measurement: 147k extra triangles times the anatomy
+    // agent's ~22 ms per million DRAWN triangles. That rate is a whole-scene
+    // average across tiers, where triangle count moves together with shells,
+    // cards, terrain segments and particles. The MARGINAL rate for adding
+    // triangles to a mesh already being drawn is nothing like it.
     //
-    // REVISIT when frame budget is reclaimed. The named candidate is the VSM
-    // pre-blur: two full passes over 3072^2 at blurSamples 16 = 302 M texel
-    // fetches per frame, which the penumbra agent measured as producing NO
-    // measurable penumbra on the snow now that PCSS does that job.
+    // Measured instead. `foxRefineLevels` is consumed once inside Fox.init(),
+    // so it cannot be A/B'd inside one page -- but Fox.js honours
+    // `window.__FOX_REFINE`, so: two pages in ONE browser, both paused and
+    // settled at hero/idle, timed ALTERNATELY in short windows with
+    // audit.mjs's own step+render loop, paired adjacent differences, median
+    // over 7-9 pairs. Same-page control pairs interleaved. Triangle counts
+    // checked to differ before anything was timed, so a dead
+    // `window.__FOX_REFINE` could not read as a free feature:
+    //
+    //     levels   triangles    frame ms   cost      control
+    //     0         912,148     13.848      --       0.007-0.020
+    //     1       1,034,584     14.29      +0.453    p25 0.438 p75 0.460
+    //     2       1,165,480     14.662     +0.805    p25 0.770 p75 0.865
+    //
+    // 3.2 ms per million marginal, not 22. Run with the pages opened in the
+    // opposite order the 1-level arm reads +0.472, so there is no positional
+    // bias between the two contexts.
+    //
+    // 0.805 ms against the 2.20 ms the shadow frustum and the VSM tap count
+    // just returned. `high` would land near 14.6 ms against the 16.70 budget.
+    //
+    // STILL 0, AND NOT BECAUSE OF THE BUDGET. Turning it on at `high` was the
+    // only run in which spec's `matte silhouette is hair at profile: body`
+    // FAILED, at WORSE SIDE 1.000 against a 1.15 floor -- and 1.000 is
+    // exactly the value that check gives a single monotonic crossing, i.e.
+    // BARE MESH on the body outline, which is ART_DIRECTION section 2's first
+    // non-negotiable.
+    //
+    // Say how strong that evidence is, because it is not conclusive. The same
+    // check on refineLevels 0 read 1.596 and 1.214 on two runs either side of
+    // it, so it carries at least +-0.2 of run-to-run spread and 1.000 is only
+    // 0.21 below the lower of those. What makes it worth acting on is that
+    // 1.000 is a floor value rather than a low sample. One run is not a
+    // controlled A/B and this was not one.
+    //
+    // The mechanism would have to be indirect -- the anatomy agent reports the
+    // flank and legs bit-identical under refinement, so the suspect is the fur
+    // LOD, which picks its shell count per pose and sees 253k more triangles.
+    // That is fur and anatomy territory, not the shadow's.
+    //
+    // So the budget question is closed and the silhouette question is open:
+    // 0.805 ms is available, and somebody who owns the coat should run this
+    // as a proper paired A/B before turning it on.
     foxRefineLevels: 0,
     terrainSegments: 384, terrainRadius: 190,
     snowParticles: 12000, snowLayers: 3,
