@@ -126,7 +126,24 @@ export const GAITS = {
   idle: {
     speed: 0, cycle: 1.0, duty: 1.0,
     offsets: { RL: 0, FL: 0.25, RR: 0.5, FR: 0.75 },
-    lift: 0.030, drop: 0.018, track: 1.02, sink: 0.017, uLift: 0.17, uPlant: 0.74,
+    // SINK 0.017 -> 0.008. The 17 mm was set to satisfy an audit threshold,
+    // not to make a foot sit in snow: the note by the stance target says so
+    // in its own words -- "the audit classifies stance from that BONE at a
+    // 22 mm threshold, so a shallow sink left the bone hovering at 15-21 mm
+    // ... a committed sink puts the bone near 3 mm for all of stance". The
+    // ankle rides ~20.5 mm above the contact patch, so 17 mm of sink drives
+    // the SOLE 17 mm under the snow and the paw coat another 9.5 mm below
+    // that, which is the whole of REVIEW-7 blocker 5's "no feet" at the pose
+    // built to show feet. This is the same shape of defect AGENTS.md already
+    // records once -- a 22 mm stance tolerance that "drove the metacarpal
+    // down and buried the sole 48 mm under the snow while all 78 paw checks
+    // stayed green".
+    //
+    // 8 mm still puts the ankle bone at ground + 12.5 mm, i.e. 9.5 mm inside
+    // the classifier with the whole stance committed, and a standing animal
+    // has no foot roll to bounce it across the line. The measured burial is
+    // in the commit message.
+    lift: 0.030, drop: 0.018, track: 1.02, sink: 0.008, uLift: 0.17, uPlant: 0.74,
     press: 0.13, bob: 0.0, bobBeats: 2, sway: 0.0, swayBeat: 0, pitch: 0,
     scapula: 0, spineFlex: 0, yawSway: 0,
     flight: 0, impact: 0.0,

@@ -608,3 +608,66 @@ against the 0.28 m every source in `REFERENCE-FOX.md` §4b agrees on.
 which is where we are. The remaining discrepancy against a photographed fox is
 **ruff**, not trunk — the neck crest reads higher than the withers, and that
 is a coat-distribution question, not a proportion one.
+
+## 6b. Foot burial: the 25 mm budget double-counted the footprint
+
+**This section supersedes the "25 mm = 9.5 mm of paw coat + 15 mm of
+legitimate sink" decomposition that lived only in a code comment on
+`tools/spec.mjs`'s `the drawn foot meets the drawn snow`. The budget is
+17.5 mm, and the derivation is below.**
+
+§6 says "no floating. Paws must visibly sink and displace." The image-space
+check that enforces the other side of it measures, at the `paws` framing, how
+far the lowest DRAWN pixel of each foot sits below the projected snow line at
+that paw's (x, z). REVIEW-7 blocker 5 is that the check passed at 18.8 mm
+against 25 mm while `crop/pw_feet.png` shows no feet at all, and that a
+budget of that size is the same shape as the 22 mm stance tolerance AGENTS.md
+records as having buried a sole 48 mm deep with all 78 paw checks green. That
+reading is correct, and the arithmetic is where it goes wrong.
+
+**The two terms are not independent, because the reference moves.** The check
+takes its snow line from `ctx.terrain.heightAt`, and the terrain under a
+planted paw is *pressed* — `Locomotion._pressSnow` stamps a depression there
+every footfall, which is the displacement §6 asks for. So the sink is already
+partly in the reference, and allowing a further 15 mm for it counts the same
+millimetres twice. What is genuinely below the drawn snow line is:
+
+| term | mm | source |
+|---|---|---|
+| paw coat hanging below the sole | 9.5 | `FUR[R.pawFront]`, the same figure the old decomposition used |
+| commanded stance sink | 8.0 | `GAITS.idle.sink`, the depth the IK target is driven below the contact ground |
+| **budget** | **17.5** | |
+
+and the part of the sink the press has already taken out of the reference is
+unclaimed headroom rather than an allowance.
+
+**Measured against it**, at `paws`, on the coverage matte, no bone consulted:
+
+| | pawL | pawR | footL | footR |
+|---|---|---|---|---|
+| sink 17 mm (as shipped in REVIEW-7) | 20.5 | 17.0 | 14.2 | 16.3 |
+| sink 8 mm | **15.3** | 11.2 | 8.3 | 8.7 |
+
+The transfer is about 0.58 mm of burial per mm of sink, not 1.0, precisely
+because the press gives some of it back. 15.3 mm against 17.5 is 2.2 mm of
+margin on the worst foot.
+
+**Why the sink was 17 mm in the first place, which is the part worth
+remembering.** Not because a 3.5 kg animal sinks 17 mm into wind-packed
+sastrugi — because `tools/audit.mjs` classifies a frame as stance when the
+ankle bone is within 22 mm of the ground, the ankle rides ~20.5 mm above the
+contact patch, and the comment that set it says so outright: "a shallow sink
+left the bone hovering at 15-21 mm, where the foot roll bounced it back and
+forth across the line ... a committed sink puts the bone near 3 mm for all of
+stance." The foot was driven under the snow to keep a classifier quiet. This
+is the third audit threshold on this project to become a design constraint
+and the second to do it by burying a foot.
+
+8 mm still leaves the ankle at ground + 12.5 mm, i.e. 9.5 mm inside the
+classifier with the whole stance committed, and a standing animal has no foot
+roll to bounce it across the line.
+
+**If you are about to widen this budget: don't.** Tighten the animal instead.
+A foot that needs more than 17.5 mm of allowance is a foot the viewer cannot
+see, and the whole reason this check lives in image space is that a
+bone-space one cannot tell those apart.
