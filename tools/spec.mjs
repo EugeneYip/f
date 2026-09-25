@@ -1967,12 +1967,23 @@ if (!fs || !fs.brow || !fs.muzzle) {
 } else {
   const ref = fs.brow.fine;
   const floor = ref * 0.35;
+  // The muzzle cannot pass against a reference the same run FAILS.
+  //
+  // The floor here is 35% of the brow, and the brow has its own absolute
+  // floor of 6.0. When the brow reads 5.08 it fails -- and the muzzle was
+  // still being graded against 35% of that 5.08, i.e. 1.78, and passing.
+  // The REVIEW-7 critic caught it: "passes against a floor derived from a
+  // region the same run FAILS". A relative check whose reference is broken
+  // is not measuring anything, so it fails with it.
   record('fur reads as hair at macro: muzzle',
-    fs.muzzle.fine >= floor && fs.muzzle.ratio >= 0.30,
+    ref >= 6.0 && fs.muzzle.fine >= floor && fs.muzzle.ratio >= 0.30,
     `muzzle fine ${fs.muzzle.fine.toFixed(2)} against a floor of ${floor.toFixed(2)} ` +
     `(35% of the brow's ${ref.toFixed(2)}); coarse ${fs.muzzle.coarse.toFixed(2)}, ` +
     `fine-share ${fs.muzzle.ratio.toFixed(2)} (want >= 0.30 — a low share means ` +
-    'blotches rather than hair)');
+    'blotches rather than hair)' + (ref >= 6.0 ? '' :
+      `. REFERENCE INVALID: the brow reads ${ref.toFixed(2)} against its own ` +
+      '6.0 floor, so this relative floor is derived from a region that is ' +
+      'itself failing'));
   // The muzzle floor above is RELATIVE to the brow, so on its own the pair
   // cannot see a global loss of coat detail: halve the fine detail everywhere
   // and the floor halves with it. That made this an instrument that could
