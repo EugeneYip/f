@@ -983,7 +983,23 @@ export const FUR_DEFAULTS = {
    * is no way to have the dark half of a plush surface for free.
    */
   tuftLit: 0.90,
+  /*
+   * INERT, AND FOR A STRUCTURAL REASON RATHER THAN A WIRING ONE, so nobody
+   * spends another wave on it. The clump octave DOES reach the deep shells --
+   * octaveFade(px, fc) at macro is 1 - smoothstep(0.13, 0.40, 0.013), i.e.
+   * full strength. But the tuft it cuts with is tuftR = mix(1.15, 0.34, t*t),
+   * and the deep shells are the low-t ones: at t = 0.29 the radius is
+   * 1.08-1.39 CELLS, larger than any Worley F1 distance, so the cone covers
+   * its whole cell and the cut removes nothing. The tuft is authored wide at
+   * the root precisely so it covers the skin. A tuft cut can therefore never
+   * make holes down there, at any gain -- which is what the orchestrator
+   * measured as 112 px of 640k at 0.35 and 791 px at 1.0.
+   *
+   * The deep shells' defect was never missing STRUCTURE, it was too much
+   * ALPHA. See uDeepFill.
+   */
   deepTuft: 0.0,
+  deepFill: 1.0,
   tuftCav: [1.0, 0.32],
   tuftSurf: [0.30, 1.0],
   // How much of the undercoat felt's opacity the strand layer modulates.
@@ -1714,19 +1730,33 @@ export const FUR_DEFAULTS = {
 
   cardCut: 0.004,
   cardProf: 0.55,
-  // 0: with the lattice no longer dissolving (uCardHairLod) the align
-  // guarantee holds again and the quad edge is already at alpha 0, so the
-  // feather is redundant. Kept because it is the only lever if a future
-  // tier ever has to run the fixed lattice.
+  // 0: the feather was an attempt at the same defect from the alpha side and
+  // it loses union coverage (fringe fill 0.350 -> 0.301, band 24% shallower).
+  // Kept wired because it is the only lever if a tier ever has to run the
+  // dissolved lattice on purpose.
   cardProfMix: 0.0,
+  cardVeil: 0.0,
   /*
-   * PIXELS PER HAIR CELL. 2.2 is one TAA jitter either side of a 1 px
-   * hair: below about 2 the lattice is what the card LOD used to dissolve
-   * and the coat crawls; far above it the card gives up hairs it could
-   * have drawn.
+   * WHAT SHARE OF ITS HAIRS A FACE-ON CARD KEEPS, and the vEdge band it ramps
+   * back to full over. See the long note in the card fragment shader.
+   *
+   * The hair lattice dissolves at every body framing -- fwidth(s) is n over
+   * the card's PIXEL width, about 17 over 9, against a dissolve completing at
+   * 0.85 -- so an interior card renders as one flat constant-alpha ribbon
+   * with two straight sides. Resolving it is a clear gain on the flank and a
+   * disaster in the fringe, measured on a live-LOD coverage matte at profile:
+   *
+   *     uCardHairs   interior grain   fringe fill   band px   right bad%
+   *       5.0 base        3.52           0.346      139 570      0.7
+   *       1.0             3.86           0.338      127 822      7.1
+   *       0.5             4.90           0.310       89 420     21.5
+   *
+   * so it is split by vEdge rather than taken globally. 0.10 of 5 x (2..5) is
+   * 1-3 hairs on a face-on card, which is what the 0.5 arm rendered as combed
+   * individual strands rather than a wash.
    */
-  cardCellPx: 2.2,
-  cardHairLod: 0.0,
+  cardHairInner: 1.0,
+  cardHairEdge: [0.35, 0.80],
   // The lock's dense core, as a share of the half-width, and the duty it
   // falls to at the outermost hair. See the note in the card fragment
   // shader: a global duty cut thins the pile and trips spec.mjs's fill
@@ -1938,6 +1968,7 @@ export function buildFurUniforms(ctx) {
     uCoatLock: { value: d.coatLock },
     uTuftLit: { value: d.tuftLit },
     uDeepTuft: { value: d.deepTuft },
+    uDeepFill: { value: d.deepFill },
     uTuftCav: { value: new THREE.Vector2(d.tuftCav[0], d.tuftCav[1]) },
     uTuftSurf: { value: new THREE.Vector2(d.tuftSurf[0], d.tuftSurf[1]) },
     uAniso: { value: 1 },
@@ -1981,8 +2012,9 @@ export function buildFurUniforms(ctx) {
     uCardWFloor: { value: d.cardWFloor },
     uCardProf: { value: d.cardProf },
     uCardProfMix: { value: d.cardProfMix },
-    uCardCellPx: { value: d.cardCellPx },
-    uCardHairLod: { value: d.cardHairLod },
+    uCardVeil: { value: d.cardVeil },
+    uCardHairInner: { value: d.cardHairInner },
+    uCardHairEdge: { value: new THREE.Vector2(d.cardHairEdge[0], d.cardHairEdge[1]) },
     uCardCore: { value: d.cardCore },
     uCardEdgeDuty: { value: d.cardEdgeDuty },
   };

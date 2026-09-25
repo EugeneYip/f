@@ -232,6 +232,7 @@ uniform float uCoatLock;       // metres of coat a metre of lateral lock offset
 // long note where they are applied.
 uniform float uTuftLit;        // directional gain, lit face vs shaded face
 uniform float uDeepTuft;       // tuft-scale holes in the cheap deep shells
+uniform float uDeepFill;       // make the cheap path honour the felt envelope
 uniform vec2  uTuftCav;        // x gain, y the crest field's own mean, so
                                // the cavity is zero-mean. See FUR_DEFAULTS.tuftCav.
 uniform vec2  uTuftSurf;       // depth band the relief ramps in over
@@ -1395,7 +1396,39 @@ ${isShell ? /* glsl */ `
   // failure the mask was added to stop ("zeroing the coat LENGTH is not enough
   // on its own": the shells collapse onto the skin and keep drawing). Visible
   // at macro_eye as a cuff of opaque undercoat lapping over the iris.
-  vec4 hair = vec4(clamp(vP0.w * uDensity, 0.0, 1.0), 0.45, hash13(vRoot * 131.7), 1.0);
+  /*
+   * THE CHEAP PATH'S ALPHA IS A STANDING ASSUMPTION, AND IT IS NOW FALSE.
+   *
+   * Shells below shellFill * uShellDeep skip the hair field and return a
+   * constant alpha of vP0.w * uDensity, i.e. essentially 1.0, on the stated
+   * reasoning that they "are solid felt with the whole coat stacked above
+   * them, so nothing they compute can reach the eye". The SHADING half of
+   * that is fine. The ALPHA half is an approximation of the felt envelope,
+   * and it was a fair one only while the felt was opaque down there.
+   *
+   * It is not any more, and I am the one who broke it. 110eb5a took uFillTop
+   * 1.12 -> 0.70 to get the waxy sheet off the nape, which moves the felt's
+   * top from t = 0.605 to t = 0.378. At the deep boundary, t = shellFill *
+   * uShellDeep = 0.297, the envelope 1 - smoothstep(fillTop * 0.38, fillTop,
+   * t) therefore went from 0.95 -- which 1.0 approximates well -- to 0.22.
+   * The cheap path now draws 4.5x the alpha the full path would, so the
+   * composite stops dead at the first deep shell and wherever the coat above
+   * is locally sparse the camera sees ONE OPAQUE UNTEXTURED SURFACE with a
+   * hard edge where the sparse patch ends. That is REVIEW-7 blocker 2's
+   * 430x490 px grey polygon beside the eye at 47.6-63.0% flat.
+   *
+   * It also explains why uDeepTuft is inert at 0.35 and moves 0.12% of the
+   * frame at 1.0: cutting tuft-shaped holes in a wall that is 4.5x too opaque
+   * does not move the composite. The alpha is the defect, not the structure.
+   *
+   * So honour the envelope instead of assuming it. Un-jittered, because the
+   * jitter needs cRand and cRand needs the clump cell, which is the call this
+   * path exists to skip -- 4 ALU against the ~200 the field costs.
+   */
+  float fillTopD = shellFill * uFillTop;
+  float fillD    = 1.0 - smoothstep(fillTopD * 0.38, fillTopD, tJ);
+  vec4 hair = vec4(clamp(vP0.w * uDensity, 0.0, 1.0)
+                   * mix(1.0, fillD, uDeepFill), 0.45, hash13(vRoot * 131.7), 1.0);
   // Neutral for the cheap path: those shells are solid felt under the whole
   // coat and have no surface for a cavity to sit in.
   float crest = uTuftCav.y;
@@ -2108,8 +2141,10 @@ uniform float uCardHairLen;    // shortest per-hair length, in card lengths
 uniform float uCardHairFade;   // per-hair tip ramp, in card lengths
 uniform float uCardProf;       // cross-card profile power once the lattice
 uniform float uCardProfMix;    // dissolves; see the note at the lod mix
-uniform float uCardCellPx;     // pixels one hair cell is held to on screen
-uniform float uCardHairLod;    // 0 disables that cap (the old fixed lattice)
+uniform float uCardVeil;       // share of the dissolved veil kept as a floor
+                               // under the resolved lattice; see the lod mix
+uniform float uCardHairInner;  // share of the hair count a FACE-ON card keeps
+uniform vec2  uCardHairEdge;   // vEdge band it ramps back to full over
 uniform float uCardCore;       // share of the half-width at full duty
 uniform float uCardEdgeDuty;   // duty multiplier at the card's outermost hair
 
@@ -2157,32 +2192,56 @@ void main(){
    */
   float n  = mix(nRaw, max(1.0, floor(nRaw + 0.5)), uCardHairAlign);
   /*
-   * HAIRS PER CARD IS A SCREEN-SPACE QUANTITY, and treating it as a constant
-   * is what turns a card into a plate.
+   * HAIRS PER CARD IS NOT ONE NUMBER, because the lattice is doing two
+   * OPPOSITE jobs at the two places a card is seen.
    *
-   * n is fixed in card space, so the on-screen width of one hair cell is the
-   * card's width divided by n -- which means the lattice is resolved at macro
-   * and far under a pixel at body range, where fwidth(s) reaches ~1.4 against
-   * a dissolve that completes at 0.85. Past that the branch below replaces
-   * every hair with the card's mean and the card renders as one ribbon. The
-   * cap at uCardHairs 5.0 exists for the same reason from the other side:
-   * raising it "drives fwidth(s) past the lattice's LOD dissolve".
+   * s is vCard.x times n, and vCard.x spans 0 to 1 across the card whatever
+   * its physical size, so fwidth(s) is n divided by the card's width IN
+   * PIXELS. At every body framing that is about 17 over 9, i.e. ~1.9 against
+   * a dissolve that completes at 0.85, and past it the branch below lays the
+   * lattice's mean flat across the quad: a ribbon of constant alpha with two
+   * straight sides. That is the wide flat blade, and it is why uCardHairs
+   * 5 -> 14 moves the interior flank mean by 0.018 levels of 182.
    *
-   * Both are the same missing idea. Choose n per fragment so a cell lands on
-   * uCardCellPx pixels: the card keeps every hair it can actually resolve and
-   * gives up only the ones it could not have drawn, the lattice never
-   * dissolves, and uCardHairs stops being a compromise between two framings
-   * -- it is now the macro count, with body range deriving its own.
+   * Note what that expression does NOT contain: the card's width in metres.
+   * Narrowing a card shrinks its pixel width and pushes fwidth(s) UP, so
+   * narrower cards KEEP the lattice dissolved and more cards buy coverage
+   * without buying structure. n is the only term that moves it. (I had this
+   * backwards and shipped a width reduction partly on it; the width change
+   * stands on its own measurement, but not on that reasoning.)
    *
-   * Integral, because uCardHairAlign's guarantee needs it: with n an integer
-   * the lattice starts and ends on the card's own edges, alpha is 0 there by
-   * construction, and the card's silhouette is the outermost HAIR's rather
-   * than the quad's. A fractional cap would put a cut hair back on the quad
-   * boundary, which is the straight hard side this is trying to remove.
+   * And lowering n globally is not the answer either. Measured on a true
+   * coverage matte at profile, 1920x1200, with the fur LOD live:
+   *
+   *     uCardHairs   interior grain   fringe fill   band px   right bad%
+   *       5.0 base        3.52           0.346      139 570      0.7
+   *       1.0             3.86           0.338      127 822      7.1
+   *       0.5             4.90           0.310       89 420     21.5
+   *
+   * The interior gains 39% of its fine detail and the FRINGE COLLAPSES: a
+   * third of its depth and thirty times the bare-run rate. Both are the same
+   * fact. A card is seen face-on over the body, where the dissolve turns 17
+   * hairs into one flat ribbon and resolving them into two or three is a
+   * clear gain; and it is seen at its TIP around the silhouette, where the
+   * quad has tapered to a few pixels and the dissolved veil IS the soft faint
+   * outer reach of the coat. The dissolve does useful work at the tips and
+   * harmful work on the flank, and any global n trades one for the other.
+   *
+   * vEdge separates them for free: it is 1 - |dot(surfaceNormal, view)|, so
+   * it is near 0 on a flank facing the camera and near 1 wherever the surface
+   * turns away, which is exactly where the fringe is. Resolve the interior,
+   * leave the silhouette alone.
+   *
+   * Re-floored after the blend because uCardHairAlign needs n integral to
+   * land the lattice on the card's own edges -- alpha is then 0 there by
+   * construction and the card's outline is its outermost HAIR rather than the
+   * quad. The steps that introduces fall at a different vEdge on every card,
+   * because nRaw carries the card's own random, so they cannot line up into a
+   * contour band.
    */
-  float cellX = max(fwidth(vCard.x), 1e-6);
-  float nLod  = max(1.0, floor(1.0 / (uCardCellPx * cellX)));
-  n = mix(n, min(n, nLod), uCardHairLod);
+  float nI = max(1.0, floor(n * uCardHairInner + 0.5));
+  n = max(1.0, floor(mix(nI, n,
+          smoothstep(uCardHairEdge.x, uCardHairEdge.y, clamp(vEdge, 0.0, 1.0))) + 0.5));
   float s  = vCard.x * n + rnd * 7.31 * (1.0 - uCardHairAlign);
   float fi = floor(s);
   float fr = fract(s);
@@ -2323,7 +2382,27 @@ void main(){
   float pArea = 0.5 * (1.0 + uCardProf);
   float flatA = clamp(rad * 0.70, 0.0, 1.0)
               * mix(1.0, prof / max(pArea, 1e-3), uCardProfMix);
-  a = mix(clamp(flatA, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
+  float aVeil = clamp(flatA, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v);
+  /*
+   * AND THE GAPS ARE NOT EMPTY, which is the whole reason resolving the
+   * lattice used to cost the fringe.
+   *
+   * Coverage inside a card is E[rad] and does not depend on n at all, so
+   * resolving the lattice cannot remove hair -- and yet dropping uCardHairs
+   * to 0.5 took the fringe band from 139 570 px to 89 420 and the right
+   * edge's bare-run rate from 0.7% to 21.5%. The reason is that the two
+   * branches distribute the same coverage differently: dissolved, EVERY pixel
+   * of the card carries alpha 0.7 x rad, including the outermost sliver that
+   * is the only thing reaching a given scanline; resolved, 30% of those
+   * pixels are exactly zero. The soft continuous halo around the coat IS the
+   * dissolved veil, and a comb replaces it with a picket fence.
+   *
+   * But a real coat has undercoat between its guard hairs, not sky. So keep
+   * the veil as a FLOOR and let the resolved hairs stand proud of it: max,
+   * not mix. Coverage can then only rise, the halo survives, and the
+   * structure is added on top of it.
+   */
+  a = mix(aVeil, max(a, aVeil * uCardVeil), lod);
 
   // Strongest exactly where the surface turns away — the silhouette.
   // Interior opacity floor, per region.
