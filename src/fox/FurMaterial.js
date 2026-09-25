@@ -1751,9 +1751,50 @@ export const FUR_DEFAULTS = {
    *       1.0             3.86           0.338      127 822      7.1
    *       0.5             4.90           0.310       89 420     21.5
    *
-   * so it is split by vEdge rather than taken globally. 0.10 of 5 x (2..5) is
-   * 1-3 hairs on a face-on card, which is what the 0.5 arm rendered as combed
-   * individual strands rather than a wash.
+   * so I split it by vEdge rather than taking it globally -- and THAT DOES
+   * NOT WORK EITHER, which is why this ships at 1.0 (off).
+   *
+   * Measured at hero, one session, one instant, base repeated and matching to
+   * four decimals: uCardHairInner 1.0 (off) against 0.06 and 0.20 moves the
+   * interior flank grain by 0.02 of 3.52, i.e. nothing. The reason is that
+   * the gain from the global arm came from the HIGH-vEdge cards, not the
+   * face-on ones -- a face-on card is already gated to alpha 0.17 by
+   * uCardInner, so how many hairs it divides that into barely reaches the
+   * frame. The blades over the coat and the fringe over sky are the SAME
+   * cards, seen at the same vEdge, so vEdge cannot separate them.
+   *
+   * What separates them is only WHERE they land, over coat or over sky, which
+   * a fragment shader does not know. And the fringe cost is not the gaps'
+   * alpha either: a veil floor under the resolved lattice (uCardVeil, also
+   * wired and off) recovers 3% of the 34% lost band, and removing the
+   * per-hair length variation entirely (cardHairLen 1.0) recovers 2%. The
+   * mechanism is that resolved hairs concentrate the same coverage into
+   * fewer lumps whose outer extent sits INSIDE the quad, so the card's
+   * effective footprint narrows ~25% -- arithmetically the same cost as
+   * narrowing cardWidth by 25%, and it lands on the silhouette.
+   *
+   * WHICH IS THE CASE FOR MORE CARDS, and the only one. More cards ALONE buys
+   * nothing: fwidth(s) is n over the card's PIXEL width, so narrower cards
+   * push it UP and keep the lattice dissolved, and coverage inside a card is
+   * E[rad] = the duty regardless of count. More cards WITH a resolved lattice
+   * is different, because the per-card footprint lost above is paid back by
+   * overlap. Rendered at the existing ultra tier (40 000 cards) with
+   * uCardHairs 0.5, dorsal fringe over sky at hero, column scan:
+   *
+   *     arm                       band/col   fill    runs/col   peaks/100px
+   *       high 26k, n dissolved      85.7    0.102     1.40        4.32
+   *       high 26k, n resolved      133.7    0.114     3.97        6.74
+   *       ultra 40k, n resolved     138.4    0.122     4.11        7.43
+   *
+   * 3x as many separate hairs and a 56% deeper fringe, and 40k beats 26k on
+   * every column. CAVEAT, stated because it is the reason none of this
+   * shipped: that is the TAA-resolved shaded frame, and the exact coverage
+   * matte at profile says the opposite for the same arms (fill -10.5%, right
+   * contour 0.7% -> 21.5% bad). Post-off removes the TAA that resolves the
+   * coat's stochastic alpha, so the two instruments disagree about a comb by
+   * construction, and I would not spend the card budget until one of them is
+   * shown to be measuring the thing a viewer sees. matte.mjs has no
+   * --quality flag, so the ultra arm cannot currently be checked on it.
    */
   cardHairInner: 1.0,
   cardHairEdge: [0.35, 0.80],
