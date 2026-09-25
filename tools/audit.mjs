@@ -520,12 +520,23 @@ const main = async () => {
 
     for (const [tier, p] of Object.entries(perf)) {
       // Do not fail a budget on a measurement we already know is invalid.
+      //
+      // ONLY the frame time is invalid under contention. The `continue` that
+      // used to be here skipped the draw-call and triangle checks as well --
+      // and another process on the GPU cannot change how many draw calls or
+      // triangles THIS renderer submits. That silently dropped 8 checks
+      // whenever the machine was busy, which is the entire 122-vs-114
+      // difference two agents kept reporting, and it made "audit must not
+      // lose checks" unenforceable exactly when the tree was busiest.
+      //
+      // Found by the penumbra agent, which noticed its own two gate runs on
+      // one unchanged tree disagreeing about how many checks existed.
       if (report.contended) {
         record(`[${tier}] frame budget`, true, `${p.frameMs} ms (contended, not enforced)`, 'warn');
-        continue;
+      } else {
+        record(`[${tier}] frame budget`, p.frameMs <= BUDGET.frameMs[tier],
+          `${p.frameMs} ms (budget ${BUDGET.frameMs[tier]} ms)`, tier === 'ultra' ? 'warn' : 'error');
       }
-      record(`[${tier}] frame budget`, p.frameMs <= BUDGET.frameMs[tier],
-        `${p.frameMs} ms (budget ${BUDGET.frameMs[tier]} ms)`, tier === 'ultra' ? 'warn' : 'error');
       record(`[${tier}] draw calls`, p.drawCalls <= BUDGET.drawCalls,
         `${p.drawCalls} calls (budget ${BUDGET.drawCalls})`, 'warn');
       record(`[${tier}] triangles`, p.triangles <= BUDGET.triangles,
