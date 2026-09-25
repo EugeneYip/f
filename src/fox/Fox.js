@@ -97,9 +97,19 @@ export class Fox {
     // with `addInitScript` before load; nothing in the product ever writes it,
     // and an absent global leaves the refinement on. See FoxSurface's
     // SKULL_ZONE_R block for what it controls.
+    //
+    // The LEVEL COUNT and THRESHOLD read from quality first, the same way
+    // `foxVoxelCell` does, so the orchestrator can price this from Quality.js
+    // without editing an anatomy file. Both are absent today and fall through
+    // to the defaults; see the trade table in FoxSurface for what each setting
+    // costs and buys.
     const refine = (typeof window !== 'undefined' && window.__FOX_REFINE !== undefined)
-      ? window.__FOX_REFINE : true;
-    const built = await buildFoxSurface(this.rig, { cell, onYield, refine });
+      ? window.__FOX_REFINE
+      : (ctx.quality.get('foxRefineLevels') ?? true);
+    const built = await buildFoxSurface(this.rig, {
+      cell, onYield, refine,
+      refineThresholdDeg: ctx.quality.get('foxRefineThresholdDeg') ?? 12,
+    });
     this.geometry = built.geometry;
     this.field = built.field;
     this.eyes = built.eyes;

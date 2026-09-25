@@ -382,7 +382,7 @@ function sqDist(pos, a, b) {
  * @param pos     Float64Array, mutated only by being copied
  * @param nor     Float32Array of analytic normals (drives the selection)
  * @param index   Uint32Array triangle indices
- * @returns { pos, index, gradH, added, levels }
+ * @returns { pos, nor, index, gradH, nv, nvBase, added, perLevel }
  */
 export function refineCurvature(field, pos, nor, index, opts = {}) {
   const {

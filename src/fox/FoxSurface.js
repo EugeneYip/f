@@ -64,6 +64,60 @@ export const CELL = { low: 0.0076, medium: 0.0067, high: 0.0060, ultra: 0.0056 }
  * not what any review pose is pointed at. So the zone is the HEAD, and the
  * leg/hock/paw curvature is recorded here for whoever gets the budget for it.
  *
+ * ## WHAT IT COSTS, AND THE CHEAPER SETTINGS IF THAT IS TOO MUCH
+ *
+ * Shipped setting (6.0 mm cell, 2 levels, 12 deg) is 41782 triangles against
+ * 27752, i.e. +50.6 %, which at `hero`/`high` is +252 540 DRAWN triangles
+ * (911 276 -> 1 163 816) once the 14 shells and the shadow caster have each
+ * drawn the skin again.
+ *
+ * That is NOT free and it is NOT inside the 0.3 ms of headroom. Frame times on
+ * this machine are unusable directly -- the same arm's minimum ranged 16.45 to
+ * 32.72 ms across page loads and the same-state control moved further than the
+ * signal -- so the cost was measured as a RATIO inside a single page, where
+ * contention divides out: sweep the fur shell count (one instance = exactly one
+ * more copy of the skin), take the slope, multiply by the triangles this adds,
+ * divide by that page's own frame time. Four runs, two per arm:
+ *
+ *   slope   19.41 / 22.02 / 24.96 / 21.03 ms per million drawn triangles
+ *   cost    13.8 % / 24.0 % / 25.4 % / 31.1 % of the frame, median 24.7 %
+ *
+ * which is about 2.3 - 5.1 ms, median ~4 ms, on a clean 16.37 ms frame. So this
+ * setting is over budget by roughly an order of magnitude on the headroom, and
+ * that is a decision for whoever owns the budget rather than something to be
+ * quietly tuned away. The alternatives, all measured, p90 neighbour-normal step:
+ *
+ *   cell  lvl thr    tris    vs now   nose med/p90   ear med/p90   flank med/p90
+ *   6.0    0   -    27752     0.0 %   13.33 / 28.84  8.61 / 24.20  1.75 / 4.85
+ *   6.0    1   12   34452   +24.1 %    7.32 / 14.93  4.73 / 12.82  1.75 / 4.85
+ *   6.0    2   16   37440   +34.9 %    5.97 / 10.93  4.54 / 10.18  1.75 / 4.85
+ *   6.0    2   12   41782   +50.6 %    5.29 /  9.28  3.80 /  9.19  1.75 / 4.85  <- shipped
+ *
+ * The last row is the only one at the 6 mm cell that puts BOTH under 10 deg.
+ *
+ * ## The cheap version exists, and it is a REALLOCATION, not a reduction
+ *
+ * The premise of this whole change is that a uniform cell spends triangles
+ * where there is no curvature. That cuts both ways: if the head is refined
+ * anyway, the BASE cell only has to be fine enough for the body, and the body
+ * is 1.75 deg at 6 mm -- four times finer than it needs to be.
+ *
+ *   cell  lvl thr    tris    vs now   nose med/p90   ear med/p90   flank med/p90
+ *   7.0    2   12   34606   +24.7 %    4.90 /  9.95  4.10 /  9.83  2.12 / 5.71
+ *   8.0    3   10   33704   +21.4 %    5.65 /  9.85  3.76 /  8.99  2.33 / 6.47
+ *   9.0    3   10   30090    +8.4 %    5.05 /  9.71  3.96 /  9.44  2.55 / 7.10
+ *
+ * A 9 mm base cell with three levels of head refinement hits the SAME target
+ * for +8.4 % instead of +50.6 %, and the flank goes from 4.85 to 7.10 deg at
+ * p90 -- still far below anything visible on an 80 mm radius.
+ *
+ * It is not done here because it is not this change's to make: it moves every
+ * vertex on the animal, so every landmark, every fur field, every silhouette
+ * gate and `coatShadow`'s numbers all move with it, and CELL.low (7.6 mm) would
+ * end up FINER than `high`, so the whole tier ladder needs rescaling. That is
+ * an orchestrator-sized decision. `foxRefineLevels` and `foxRefineThresholdDeg`
+ * are read from `ctx.quality` in Fox.js so the rows above are one line each.
+ *
  * ## The zone is three capsules, not a sphere
  *
  * A single ball around the head cannot separate the ear tips from the armpit:
