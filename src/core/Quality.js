@@ -41,7 +41,47 @@ export const TIERS = {
   high: {
     label: 'High',
     dpr: 1.0, maxDpr: 2.0,
-    shadowMapSize: 3072, shadowCascades: 3, softShadow: true,
+    // 2048, and the shadow is FINER than it was at 3072, not coarser.
+    //
+    // Environment.shadowHalf went 1.55 -> 1.00 m in the same change, measured
+    // against the caster's own coverage box over 240 samples (5 gaits x 8 sun
+    // rigs x 6 instants; worst reach from the frustum centre 0.4824 m, peak
+    // coverage 2.08 % of the map, nothing ever within 1200 texels of an edge).
+    // Metres per texel therefore goes 1.0091 -> 0.9766 mm. The +-4.5 TEXEL VSM
+    // kernel stays 4.4 mm wide, CoatShadow's 32 mm tuft and 28 mm pore
+    // lattices still land on the same count of texels, the receiver-plane bias
+    // is dz/du * texelU which IS metres-per-texel and so is invariant, and
+    // SnowMaterial._penTaps still reads 8 at 2048 as it did at 3072.
+    //
+    // What goes away is blurring empty map. three's VSM pre-blur is two FULL
+    // passes over the whole map every frame, so it cost 302 M texel fetches to
+    // serve a caster occupying 1.3 % of it.
+    //
+    // Measured with EXT_disjoint_timer_query_webgl2 around
+    // renderer.shadowMap.render(), normalised by a whole-frame query on the
+    // same clock so the query's own inflation cancels, anchored to the 15.95
+    // ms clean frame. A same-config control arm returns -0.001 ms and the
+    // tap-count arm reproduces the independent wall-clock sweep (0.862 vs
+    // 0.99 ms), so the conversion is calibrated, not assumed:
+    //
+    //     3072/1.55 n16   BEFORE          0
+    //     3072/1.55 n10   taps only      +0.86 ms
+    //     2048/1.00 n16   frustum only   +1.17 ms
+    //     2048/1.00 n10   BOTH           +1.75 ms
+    //     1536/1.00 n10                  +2.12 ms   (1.30 mm/texel: too coarse)
+    //     3072/1.55 n1    tap floor      +2.03 ms   (breaks VSM: no variance)
+    //
+    // The ratio conversion runs 15 % under the wall clock on the one arm both
+    // instruments measured, so call the pair 1.75-2.0 ms.
+    //
+    // Only `high` moves. low/medium/ultra keep their map sizes and so gain
+    // texel density from the smaller frustum for free -- and with it a
+    // proportionally narrower blur in MILLIMETRES, since three specifies the
+    // kernel in texels: ultra 3.41 -> 2.20 mm, medium 6.81 -> 4.39, low 3.03
+    // -> 1.95. That moves medium onto high's calibrated 4.4 mm and moves ultra
+    // further below it. Tying `radius` to millimetres instead of texels would
+    // fix that properly, and would cost ultra ~19 % more blur; not done here.
+    shadowMapSize: 2048, shadowCascades: 3, softShadow: true,
     // 26000, and the arithmetic that got here is worth keeping because I
     // got it wrong once.
     //

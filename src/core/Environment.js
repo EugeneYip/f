@@ -93,8 +93,29 @@ export class Environment {
 
   applyQuality(ctx) {
     const size = ctx.quality.get('shadowMapSize');
-    this.sun.shadow.mapSize.set(size, size);
-    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    const sh = this.sun.shadow;
+    sh.mapSize.set(size, size);
+    if (sh.map) { sh.map.dispose(); sh.map = null; }
+    // AND mapPass, which three allocates ONLY when it is null
+    // (WebGLShadowMap.js: "if ( shadow.mapPass === null )") and never resizes.
+    // Dropping `map` alone left the VSM blur running between a new 1024 map
+    // and a stale 3072 intermediate: the vertical pass divides gl_FragCoord
+    // by `resolution` = the NEW mapSize while rasterising the OLD one, the
+    // horizontal pass then reads the wrong corner of it, the moments come out
+    // garbage, and nothing casts a shadow at all.
+    //
+    // Terrain.js has carried a workaround for this since it was found at
+    // `low`, and its comment asks for exactly this line ("the real fix is one
+    // line in Environment.applyQuality"). Its _fixStaleShadowMapPass() is now
+    // a no-op -- it bails on `shadow.map !== null` and map is refilled on the
+    // next render -- and belongs to terrain to remove.
+    //
+    // It is not only a tier-change bug. Any probe that drives mapSize at
+    // runtime hits it, and it cost this agent an hour: an A/B of two shadow
+    // configurations came back with the SECOND arm's shadow missing entirely,
+    // whichever config was second, which reads exactly like a frustum too
+    // small to hold the caster.
+    if (sh.mapPass) { sh.mapPass.dispose(); sh.mapPass = null; }
     // `softShadow` no longer means soft: see the note at the light. It selects
     // how hard the caster's own silhouette is eroded, and the snow's penumbra
     // is unaffected by it. SnowMaterial._penTaps keys the receiver-side filter
@@ -172,6 +193,50 @@ export class Environment {
 
   onQuality(e, ctx) { if (e.type === 'tier') this.applyQuality(ctx); }
 
+  /**
+   * HALF-EXTENT OF THE SHADOW FRUSTUM, METRES. MEASURED, NOT CHOSEN.
+   *
+   * This was 1.55 -- a 3.1 m box for an animal 0.55 m long -- and the cost of
+   * that is not the empty texels, it is that three's VSM pre-blur is two FULL
+   * passes over the WHOLE map every frame. At `high` that was 302 M texel
+   * fetches to serve a caster occupying 1.34 % of the map.
+   *
+   * So: measure what actually has to fit. The caster's coverage bounding box
+   * was read out of sun.shadow.map over 240 samples -- 5 gait states x 8 sun
+   * rigs (elevation 2 to 60 deg, four azimuths) x 6 instants inside each
+   * gait -- as the distance from the map centre, which is the frustum centre,
+   * to the furthest covered texel:
+   *
+   *     worst   0.4824 m   (run, sun 8,90, t=0.33)
+   *     median  ~0.35 m,   peak coverage 2.08 % of the map
+   *     0 of 240 samples touched any map edge
+   *
+   * The fox is the ONLY thing in the map -- if grass or terrain were casting,
+   * reach would have pinned at 1.55 and it never exceeds 0.49.
+   *
+   * 1.00 m keeps 2.07x over the worst measured reach, and 1.66x over the
+   * radius at which snShadowMask()'s `edge` term starts fading (it fades from
+   * |uv-0.5| = 0.40, i.e. 0.80 m here). The remaining budget covers the PCSS
+   * corridor, which reaches at most uPenumbra.y = 30 mm past the silhouette,
+   * and the sastrugi's own centimetres of relief.
+   *
+   * WHAT THIS DOES NOT CHANGE, and the reason it is safe: every downstream
+   * consumer is already derived from the frustum at runtime.
+   * SnowMaterial._updatePenumbra() reads `cam.right - cam.left` for both the
+   * penumbra scale and its cap; uShadowTexel is 1/mapSize; the receiver-plane
+   * bias term is dz/du * texelU, and dz/du scales with the frustum width
+   * while texelU scales as 1/mapSize, so their product is METRES PER TEXEL
+   * and is invariant if half and mapSize move together. near/far are along
+   * the light axis and do not involve `half` at all.
+   *
+   * Paired with shadowMapSize 3072 -> 2048 at `high`, metres per texel goes
+   * 1.0091 -> 0.9766 mm -- 3 % FINER, not coarser -- so the +-4.5 TEXEL VSM
+   * kernel stays 4.5 mm wide, CoatShadow's 32 mm tuft and 28 mm pore lattices
+   * still land on the same number of texels, and SnowMaterial._penTaps still
+   * reads 8. Every other tier's shadow gets finer for free.
+   */
+  shadowHalf = 1.00;
+
   /** Shadow frustum follows the subject so we spend every texel on the fox. */
   _placeLights(ctx) {
     const d = ctx.sunDirection;
@@ -197,7 +262,7 @@ export class Environment {
     // Clamped because tan() runs away below the horizon, and because a
     // needlessly deep frustum spends depth precision it does not get back.
     const cam = this.sun.shadow.camera;
-    const half = 1.55;
+    const half = this.shadowHalf;
     cam.left = -half; cam.right = half;
     cam.top = half; cam.bottom = -half;
     const elev = Math.max(Math.asin(Math.max(d.y, 1e-3)), 0.5 * Math.PI / 180);
