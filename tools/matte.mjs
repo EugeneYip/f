@@ -126,6 +126,14 @@ const result = await page.evaluate(async ({ POSES, SETTLE }) => {
     ctx.time = 0; ctx.frame = 0; ctx.app._accum = 0;
     D.settle(SETTLE);
     D.setPose(pose);
+    // Resolve the fur LOD for THIS pose. render() does not run systems, and
+    // the fur LOD picks its shell count in a system update, so without this
+    // every frame is drawn at whatever count the settle camera chose. Fixed
+    // in shoot.mjs first (20791ea), where it had every pose reporting an
+    // identical 856k triangles while the live LOD wanted 18/10/9/18/17/18/16/4
+    // shells. step(0) runs the systems without advancing time, so it costs
+    // none of the cross-pose drift a settle would.
+    D.ctx().app.step(0);
 
     const shoot = (hex) => {
       renderer.setClearColor(hex, 1);

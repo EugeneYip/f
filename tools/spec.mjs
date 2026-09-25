@@ -227,6 +227,10 @@ const results = await page.evaluate(async () => {
   function renderPose(pose, post = true, settle = 0.3, frames = 36) {
     if (ctx.postfx) ctx.postfx.enabled = post;
     D.setPose(pose);
+    // A zero-dt tick resolves the fur LOD even when settle is 0. Calls with
+    // settle = 0 -- which I added for the matte/frame time alignment -- were
+    // otherwise freezing the shell count at whatever the settle camera chose.
+    ctx.app.step(0);
     if (settle > 0) D.settle(settle);
     for (let i = 0; i < frames; i++) D.render();
     return grab();

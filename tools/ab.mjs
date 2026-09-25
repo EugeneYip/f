@@ -27,6 +27,8 @@ const VARIANTS = flag('--variants', 'base,nopost,nodof').split(',');
 const APPLY = {
   base:     '() => () => {}',
   nopost:   '(c) => { c.postfx.enabled = false; return () => { c.postfx.enabled = true; }; }',
+  // Tuft-scale holes in the cheap deep shells. Ships at 0 (inert) until priced.
+  deeptuft: '(c) => { const u = c.fur?.uniforms?.uDeepTuft; if (!u) throw new Error("deeptuft: fur.uniforms.uDeepTuft not found"); const had = u.value; u.value = 0.35; return () => { u.value = had; }; }',
   // Skips the DoF PASSES, rather than zeroing their scale.
   //
   // Setting `scale = 0` left all six passes running and only removed the
@@ -104,6 +106,14 @@ for (const v of VARIANTS) {
     const undo = eval(src)(ctx);
     window.__undo = undo;
     window.FoxDebug.setPose(POSE);
+    // Resolve the fur LOD for THIS pose. render() does not run systems, and
+    // the fur LOD picks its shell count in a system update, so without this
+    // every frame is drawn at whatever count the settle camera chose. Fixed
+    // in shoot.mjs first (20791ea), where it had every pose reporting an
+    // identical 856k triangles while the live LOD wanted 18/10/9/18/17/18/16/4
+    // shells. step(0) runs the systems without advancing time, so it costs
+    // none of the cross-pose drift a settle would.
+    window.FoxDebug.ctx().app.step(0);
     // NO settle here. This used to be `settle(0.3)` INSIDE the per-variant
     // loop, so variant k rendered at 2.5 + 0.3(k+1) seconds and a four-arm
     // A/B compared four frames 0.3 s apart in animation. That is the same
