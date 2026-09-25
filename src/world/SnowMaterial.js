@@ -215,6 +215,23 @@ export function makePermTable(seed = 20260918) {
  */
 const SUN_TAN_DIAMETER = 0.0093096;
 
+/**
+ * How far the DRAWN animal reaches past the contact-occlusion spheres.
+ *
+ * Those spheres are fitted to bones for a different job, and the thing that
+ * casts the shadow is the coat: src/light/CoatShadow.js extrudes the skin
+ * along its own measured coat field and then draws an alpha-tested fringe out
+ * to the 1.42 L guard-hair tips on top of that. The skin's bounding box is
+ * 0.171 m wide and the drawn animal reads three to four times that, so the
+ * margin has to be generous -- it is a BOUND, and the only cost of it being
+ * too large is that a few more fragments take the penumbra taps.
+ *
+ * The cost of it being too SMALL is a hard edge where the corridor ends, so
+ * check it rather than trusting it: the plan probe's ramp-width table
+ * collapses at exactly the bands a too-small bound clips.
+ */
+const COAT_BOUND_MARGIN = 0.30;
+
 export class SnowMaterial {
   constructor(footUniforms) {
     this.footUniforms = footUniforms;
@@ -223,7 +240,6 @@ export class SnowMaterial {
     // the single-tap lookup bit for bit. Set it on ctx.terrain.snow.
     this.penumbraScale = 1;
     this._casterOk = false;
-    this._casterX = 0; this._casterZ = 0;
   }
 
   init(ctx, perm) {
@@ -265,12 +281,16 @@ export class SnowMaterial {
         uShadowBias: { value: new THREE.Vector2(0.0, 1.0) },
         // --- distance-dependent penumbra (see snShadowMask) ----------------
         // x: shadow-map UV filter radius per metre of caster-to-receiver
-        //    distance · y: ceiling on that radius, UV.
+        //    distance · y: ceiling on that radius, UV · z: the shadow
+        //    frustum's width in metres, i.e. metres per unit of UV.
         // Republished each frame in _updatePenumbra(), which is where the
         // arithmetic and the A/B null both live. x = 0 restores the old
         // single-tap lookup exactly.
-        uPenumbra: { value: new THREE.Vector2(0, 0) },
-        uCasterXZ: { value: new THREE.Vector2(0, 0) },
+        uPenumbra: { value: new THREE.Vector3(0, 0, 1) },
+        // World centre of the animal and a radius that BOUNDS it. The shader
+        // measures downsun distance from the centre and rejects taps outside
+        // the radius; see COAT_BOUND_MARGIN.
+        uCaster: { value: new THREE.Vector4(0, 0, 0, 0) },
         uBounce: { value: new THREE.Color(1, 1, 1) },
         uBounceInt: { value: 0.13 },
         uAlbedo: { value: new THREE.Color(0.90, 0.93, 0.965) },
@@ -559,9 +579,17 @@ export class SnowMaterial {
       reach = Math.max(reach, Math.hypot(s.x - cx, s.y - cy, s.z - cz) + s.w * 10.0);
     }
     u.uOcclBound.value.set(cx, cy, cz, reach);
-    // The same centroid is the penumbra's caster reference: it is where the
-    // animal stands, and the shader measures downsun distance from it.
-    this._casterX = cx; this._casterZ = cz;
+    // The same sweep gives the penumbra its caster reference: the centroid it
+    // measures downsun distance from, and a TRUE bounding radius (furthest
+    // sphere surface from the centroid, plus the coat the spheres do not
+    // cover) for the tap rejection.
+    let bound = 0;
+    for (let i = 0; i < OCCLUDERS.length; i++) {
+      const s = arr[i];
+      if (s.w <= 0) continue;
+      bound = Math.max(bound, Math.hypot(s.x - cx, s.y - cy, s.z - cz) + s.w);
+    }
+    u.uCaster.value.set(cx, cy, cz, bound + COAT_BOUND_MARGIN);
   }
 
   /**
@@ -601,7 +629,7 @@ export class SnowMaterial {
     const width = cam.right - cam.left;              // metres across the frustum
     p.x = this.penumbraScale * SUN_TAN_DIAMETER / (2 * width);
     p.y = 0.030 / width;
-    this.uniforms.uCasterXZ.value.set(this._casterX, this._casterZ);
+    p.z = width;
   }
 
   onQuality(ctx) {

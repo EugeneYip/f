@@ -572,8 +572,10 @@ uniform float uDetailAoDC;
 //      0 disables the filter entirely and restores the single-tap lookup
 //      exactly, which is the null arm of every A/B below.
 //   y  ceiling on that radius, UV. A COST limit, not a physical one.
-uniform vec2  uPenumbra;
-uniform vec2  uCasterXZ;   // world x,z the animal stands on
+//   z  width of the shadow frustum in metres, i.e. metres per unit of UV.
+uniform vec3  uPenumbra;
+// xyz: world centre of the animal. w: a radius that BOUNDS it, coat and all.
+uniform vec4  uCaster;
 vec4 gShadowDbg;   // c.xy, m.x, m.y — debug views 7/8
 
 #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
@@ -707,8 +709,33 @@ float snShadowMask(){
   if (uPenumbra.x > 0.0) {
     float cosE = length(uSunDir.xz);
     vec2  dsun = -uSunDir.xz / max(cosE, 1e-4);          // horizontal, downsun
-    float s    = dot(vWorld.xz - uCasterXZ, dsun);
+    float s    = dot(vWorld.xz - uCaster.xz, dsun);
     rad = min(max(s, 0.0) / max(cosE, 0.10) * uPenumbra.x, uPenumbra.y);
+
+    // WHERE THE TAPS ARE NOT PAID, AND WHY IT IS EXACT.
+    //
+    // The nine taps are already confined to the light frustum by the edge
+    // test above -- every other terrain fragment left this function three
+    // lines earlier -- but that frustum still covers a 3.1 x 9.6 m patch of
+    // snow at the default rig, and almost all of it is open ground that no
+    // part of the animal can reach.
+    //
+    // A sphere's shadow, cast by a distant source onto anything, stays inside
+    // the cylinder of the same radius drawn along the light ray: projection
+    // along the light does not change the component PERPENDICULAR to it. So
+    // if the receiver point is further than R + (filter radius) from the
+    // animal's bounding cylinder axis, every one of the taps lands on open
+    // snow, the average of nine lit samples is lit, and the loop cannot
+    // change the answer. Skipping it is not an approximation.
+    //
+    // R has to be a true bound on the DRAWN animal, not on its skeleton --
+    // uCaster.w carries the occluder spheres' own extent plus the coat margin
+    // SnowMaterial names -- and the plan probe is the check: an R that clips
+    // a real penumbra shows up immediately as a collapsed ramp width in the
+    // bands it clips, and as a hard edge where the corridor ends.
+    vec3 rel = vWorld - uCaster.xyz;
+    float lat = length(rel - uSunDir * dot(rel, uSunDir));
+    if (lat > uCaster.w + rad * uPenumbra.z) rad = 0.0;
   }
 #if SN_PEN_TAPS > 0
   if (rad > uShadowTexel.x) {
