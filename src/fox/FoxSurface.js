@@ -111,6 +111,29 @@ export const CELL = { low: 0.0076, medium: 0.0067, high: 0.0060, ultra: 0.0056 }
  * for +8.4 % instead of +50.6 %, and the flank goes from 4.85 to 7.10 deg at
  * p90 -- still far below anything visible on an 80 mm radius.
  *
+ * ## The legs cannot be bought at any base cell, and coarsening the base makes
+ * ## them WORSE — which is the catch in the row above
+ *
+ * REVIEW-7 lists "the staggered brick lattice on the legs" as the same defect.
+ * It is: at the 6 mm cell the leg/hock/paw regions measure 6.01 deg median and
+ * 18.89 p90. Priced with the zone opened to the whole animal (`refineZone:
+ * 'all'`), at every base cell that reaches the target:
+ *
+ *   cell lvl thr zone    tris     vs now   legs med/p90
+ *    9.0  3  10  head    30090     +8.4 %   8.97 / 29.21
+ *    9.0  3  10  all    103910   +274.4 %   3.69 /  8.35
+ *   11.0  4  10  all    109572   +294.8 %   3.64 /  8.20
+ *
+ * The legs are thin tubes with toes, so their high-curvature AREA is large and
+ * no reallocation pays for it — every variant lands near +280 %.
+ *
+ * And note the first row: coarsening the base to buy the head cheaply takes
+ * the LEGS from 18.89 to 29.21 at p90, worse than doing nothing. So the
+ * reallocation is not free after all; it trades the legs for the head. The
+ * shipped setting is the only one measured that fixes the filed defect without
+ * making anything else worse — the flank and the legs are bit-identical to the
+ * mesh before it.
+ *
  * It is not done here because it is not this change's to make: it moves every
  * vertex on the animal, so every landmark, every fur field, every silhouette
  * gate and `coatShadow`'s numbers all move with it, and CELL.low (7.6 mm) would
@@ -171,6 +194,14 @@ export async function buildFoxSurface(skeleton, {
   refine = true,
   /** Vertex-normal spread, in degrees, above which a triangle is split. */
   refineThresholdDeg = 12,
+  /**
+   * 'head' (the three capsules below) or 'all' (the whole animal). 'all' is
+   * for pricing the legs, hocks and paws, which carry the same defect —
+   * REVIEW-7 names it as "the staggered brick lattice on the legs" — and
+   * which the head zone deliberately leaves alone. It is not a shipping
+   * setting until someone has the budget for it.
+   */
+  refineZone = 'head',
 } = {}) {
   const t0 = now();
   const timings = {};
@@ -237,11 +268,12 @@ export async function buildFoxSurface(skeleton, {
     }
     return false;
   };
+  const all = () => true;
   const ref = refineCurvature(field, pos, normals, index, {
-    zone: (x, y, z) => inZone(x, y, z, 0),
+    zone: refineZone === 'all' ? all : (x, y, z) => inZone(x, y, z, 0),
     // One cell of dilation: enough for the closure to make clean 1:4 splits at
     // the patch boundary, and provably not enough to reach anything else.
-    edgeZone: (x, y, z) => inZone(x, y, z, h),
+    edgeZone: refineZone === 'all' ? all : (x, y, z) => inZone(x, y, z, h),
     // 12 deg of vertex-normal spread across one triangle. Swept 10/12/14/16/18
     // at two levels, reporting the p90 neighbour-normal step it actually
     // delivers at the muzzle tip and the upper pinna against the triangles it
