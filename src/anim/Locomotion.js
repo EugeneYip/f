@@ -247,11 +247,40 @@ export const GAITS = {
     // problem; the still was taken at the one instant of the cycle where the
     // limbs are all inside the animal's own silhouette.
     //
-    // 0.17 is the hindlimb drive: RL and RR both planted (u 0.70 / 0.30),
-    // both forelimbs mid-swing and protracting (u 0.53 / 0.67, the leading
-    // one 179 mm ahead of its shoulder), reach drop 0.000. Two feet on the
-    // snow with contact shadows, two reaching — a gallop anyone can read.
-    reviewPhase: 0.17,
+    // 0.17 WAS WRONG TOO, and for a reason the bone numbers could not see.
+    // "Both forelimbs mid-swing and protracting" is where a forelimb is
+    // FOLDED UNDER THE CHEST — carpus up, paw tucked against the sternum,
+    // entirely inside a coat that hangs to the snow. Rendered at `paws` and
+    // at `profile` it is the levitating pom-pom REVIEW-7 blocker 7 describes:
+    // "no legs at all above its shadow". The bone check that cleared it
+    // measured paw height above ground (13-138 mm over the cycle, healthy)
+    // and reach drop (0.000, healthy). Both were true and neither is a limb
+    // you can see.
+    //
+    // Chosen by rendering. Eight phases at one framing, same instant, same
+    // camera, the gait clock rewound per arm so every arm arrives on its mark
+    // (stepping the sim to reach another phase does not work — the poses are
+    // absolute and 1.8 m/s carries the animal out of frame in 0.3 s):
+    //
+    //   0.05  RL planted, three limbs folded              no
+    //   0.17  hindlimb drive, both forelimbs folded       no legs at all
+    //   0.30  one fore reaching, one hind driving         two limbs
+    //   0.42  extended suspension + FR touchdown          FOUR limbs
+    //   0.55  gathered, everything under the body         no legs at all
+    //   0.68  FL mid-stance, the rest folded              one limb
+    //   0.80  gathered suspension                         no
+    //   0.92  gathered suspension, deeper                 no
+    //
+    // 0.42 is the extended suspension at the instant the leading forefoot
+    // arrives: FR u = 0.00 (just planted, so there IS a contact and a contact
+    // shadow), FL u = 0.87 reaching forward, RL u = 0.23 and RR u = 0.09 both
+    // trailing. Limbs fore and aft of the body outline is the only condition
+    // under which this coat lets a leg read at all.
+    //
+    // Note this is NOT 0.353, which an earlier revision rejected for having
+    // "a ballistic rise of 0.4 mm" — a suspension with nothing off the
+    // ground. At 0.42 the leading forefoot is down.
+    reviewPhase: 0.42,
   },
 };
 
