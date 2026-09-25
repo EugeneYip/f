@@ -22,6 +22,32 @@ export class Environment {
     scene.fog = new THREE.FogExp2(0x9fbcdc, 0.0125);
 
     // --- sun ---------------------------------------------------------------
+    //
+    // THE PENUMBRA IS NOT SET HERE, AND CANNOT BE.
+    //
+    // shadow.radius is a fixed box blur of the shadow map in TEXELS, so it is
+    // the same width under the paw as it is at the far tip of a shadow the
+    // grazing sun has thrown 4.5 m downsun. Real penumbrae widen with distance
+    // from the caster -- the sun subtends 0.5334 degrees, which is 9.31 mm of
+    // penumbra per metre -- and no single number here can do that.
+    //
+    // Nor does this number buy the fixed penumbra it looks like it buys. three
+    // blurs the VSM moments with a BOX and then Chebyshev-remaps them, and the
+    // remap reads partial coverage as high variance and high variance as LIT,
+    // so the drawn transition happens entirely between 72% and 90% coverage.
+    // Measured on the snow in a plan view at 325.62 px/m with the per-fragment
+    // filter disabled, the lateral 0.92 -> 0.08 ramp is 7.25 mm at a caster
+    // distance of 0.25 m and 7.93 mm at 4.25 m -- flat, and sitting on the
+    // probe's own hard-edge floor of 7.25 mm at both ends. Raising radius
+    // widens the band the blur ERODES off the silhouette, not the penumbra.
+    //
+    // The distance-dependent penumbra therefore lives on the receiver, in
+    // snShadowMask() in src/shaders/snow.glsl.js, where the filter radius can
+    // be sized per fragment. 4.5 / 16 stay as the shadow agent calibrated
+    // them: they set how much of the alpha-tested guard-hair fringe survives
+    // into the shadow map and how much the silhouette is eroded, and both were
+    // measured against shadow AREA and an edge probe. Do not retune them for
+    // softness -- softness is not what they control.
     this.sun = new THREE.DirectionalLight(ctx.sunColor.clone(), ctx.sunIntensity);
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0006;
@@ -67,6 +93,11 @@ export class Environment {
     const size = ctx.quality.get('shadowMapSize');
     this.sun.shadow.mapSize.set(size, size);
     if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    // `softShadow` no longer means soft: see the note at the light. It selects
+    // how hard the caster's own silhouette is eroded, and the snow's penumbra
+    // is unaffected by it. SnowMaterial._penTaps keys the receiver-side filter
+    // off shadowMapSize instead, because THAT is what sets how many texels a
+    // 42 mm penumbra spans.
     this.sun.shadow.radius = ctx.quality.get('softShadow') ? 4.5 : 1;
   }
 
