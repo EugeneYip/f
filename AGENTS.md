@@ -284,11 +284,21 @@ The ones most likely to bite here, because they read as ordinary nouns:
     buffer    input     output    filter    resource
     active    common    partition superp    namespace
 
-`node --check` CANNOT catch these -- it only sees a string. The build error
-appears at runtime as a `THREE.WebGLProgram: Shader Error ... VALIDATE_STATUS
-false` in the page console, which `tools/spec.mjs`'s `no console errors`
-check will catch, and `tools/gate.mjs`'s render-health group will too. If you
-edit a shader, run one render and grep for `Shader Error` before you move on.
+`node --check` CANNOT catch these -- it only sees a string.
+
+**And some of them fail SILENTLY, which is worse.** `coherent` failed loudly:
+a `THREE.WebGLProgram: Shader Error ... VALIDATE_STATUS false` in the page
+console, caught by `tools/spec.mjs`'s `no console errors` and by
+`tools/gate.mjs`'s render-health group. But `patch` compiled the entire
+corneal overlay AWAY with no error at all, and the agent only noticed because
+an A/B it was running produced **six arms measuring identical**. There was
+nothing to grep for.
+
+So `grep 'Shader Error'` after a shader edit is necessary and NOT sufficient.
+The reliable guard is the one that caught `patch`: **if an A/B's arms come
+back identical, do not conclude the change had no effect -- first prove the
+code you edited is still running.** A same-state control tells you the
+harness is sound; it does not tell you your shader compiled.
 
 ## TAA accumulates ACROSS A/B arms unless something resets it
 
