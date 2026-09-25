@@ -14,6 +14,7 @@ export const TIERS = {
     // mesh edge against the sky an automatic <=4. 'low' must look good, not
     // merely cheap. 2500 cards is roughly a third of medium's budget.
     furShells: 6, furFins: true, furCards: 2500, furAniso: false,
+    foxRefineLevels: 0,
     terrainSegments: 160, terrainRadius: 90,
     snowParticles: 1500, snowLayers: 1,
     // TAA on at low, SMAA off. SMAA cannot resolve the fur's stochastic
@@ -29,6 +30,7 @@ export const TIERS = {
     dpr: 1.0, maxDpr: 1.5,
     shadowMapSize: 2048, shadowCascades: 2, softShadow: true,
     furShells: 11, furFins: true, furCards: 7000, furAniso: true,
+    foxRefineLevels: 0,
     terrainSegments: 256, terrainRadius: 130,
     snowParticles: 5000, snowLayers: 2,
     ao: true, bloom: true, dof: true, godRays: false, taa: true, smaa: false,
@@ -66,6 +68,28 @@ export const TIERS = {
     // cheap improvement and naming the deficit separately is the honest
     // order; sequential single-shot timing on this machine is not.
     furShells: 18, furFins: true, furCards: 26000, furAniso: true,
+    // Head curvature refinement. OFF below `ultra` until the budget exists.
+    //
+    // Measured at hero/high, drawn triangles: 0 levels 1023k, 1 level 1170k,
+    // 2 levels 1331k. Against the anatomy agent's measured ~22 ms per million
+    // drawn triangles, ONE level is already ~3 ms on a 16.37 ms frame against
+    // a 16.70 budget. There is no row of that table that fits in 0.3 ms.
+    //
+    // It was defaulting to 2 levels at EVERY tier -- `Fox.js` reads
+    // `ctx.quality.get('foxRefineLevels') ?? true` -- so `low` was paying for
+    // it too. That is the regression this line closes.
+    //
+    // The refinement itself is good and is not in question: neighbour
+    // face-normal step at the muzzle went median 13.57 -> 5.28 deg, p90
+    // 28.84 -> 9.48, over-10deg 54.5% -> 7.3%, with the flank and legs
+    // bit-identical. It fixes REVIEW-7's faceting. We simply cannot draw it
+    // yet at the tier the reviews grade.
+    //
+    // REVISIT when frame budget is reclaimed. The named candidate is the VSM
+    // pre-blur: two full passes over 3072^2 at blurSamples 16 = 302 M texel
+    // fetches per frame, which the penumbra agent measured as producing NO
+    // measurable penumbra on the snow now that PCSS does that job.
+    foxRefineLevels: 0,
     terrainSegments: 384, terrainRadius: 190,
     snowParticles: 12000, snowLayers: 3,
     ao: true, bloom: true, dof: true, godRays: true, taa: true, smaa: false,
@@ -92,6 +116,7 @@ export const TIERS = {
     // cannot differentiate itself with shells any more, and cards are the
     // measured-good lever: 0.21 ms per 13000 for a real gain in band fill.
     furShells: 26, furFins: true, furCards: 40000, furAniso: true,
+    foxRefineLevels: 2,
     terrainSegments: 512, terrainRadius: 240,
     snowParticles: 20000, snowLayers: 3,
     ao: true, bloom: true, dof: true, godRays: true, taa: true, smaa: false,
