@@ -63,8 +63,14 @@ const APPLY = {
   nosnow:   '(c) => { const g = c.snowParticles?.points || c.snowParticles?.mesh; const v = g && g.visible; if (g) g.visible = false; return () => { if (g) g.visible = v; }; }',
 };
 
+// HMR and file watching OFF. Several agents edit this tree at once, and
+// a save landing mid-run hot-reloads the page underneath the
+// measurement. The AO agent caught it here: two IDENTICAL arms read
+// flank 193.66 vs 180.32 and fine 0.921 vs 4.449, purely because
+// another agent's module reloaded between them. `shoot.mjs` and
+// `spec.mjs` already disable it; these two did not.
 const server = await createServer({ root: ROOT, logLevel: 'error',
-  server: { port: 5166, host: '127.0.0.1', strictPort: false } });
+  server: { port: 5166, host: '127.0.0.1', strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const url = `http://127.0.0.1:${server.httpServer.address().port}/`;
 
