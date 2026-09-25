@@ -1383,6 +1383,17 @@ const results = await page.evaluate(async () => {
       // REVIEW-5 measured the shaded coat at B-R +11.4 against §3's shaded
       // fur swatch #b9c7d8 (+31) and no instrument in this file could see it.
       //
+      // CORRECTION to what I wrote when I added this. It first read 23.0 and
+      // I recorded that REVIEW-5's +11.4 "does not reproduce with a
+      // matte-restricted probe". It reproduces exactly -- 11.5 -- the moment
+      // the SSAO pass stopped washing the animal in blue-grey. The AO tint
+      // had been SUPPLYING the shaded coat's colour, so my probe was
+      // measuring the wash, not the fur. The critic was right and I was
+      // wrong to imply its number was an artefact of its method.
+      //
+      // The lesson generalises: a check that passes because an unrelated
+      // defect happens to push it the right way is not passing.
+      //
       // Taken as the darkest 15% of coat pixels INSIDE the coverage matte,
       // so the probe cannot land off the animal, in a socket, or on snow --
       // which is how the macro fur probe spent three rounds grading eyelids.
