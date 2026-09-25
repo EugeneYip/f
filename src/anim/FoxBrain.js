@@ -179,39 +179,48 @@ const SWING_DROP_MPS = 1.2;
 const BREATH_WIDTH = 0.085;
 const BREATH_DEPTH = 0.095;
 /**
- * Thoracic arc, in radians per unit `br`, distributed so the weights SUM TO
- * ZERO. That is the whole point of the shape: the ribcage lifts in the middle
- * while the pelvis and the shoulder girdle stay level, so the head does not
- * nod. The previous terms summed to +0.0101 — a net pitch of the whole front
- * of the animal — and at an amplitude a viewer could see, the same profile
- * would swing the nose about 12 mm per breath, which reads as a head bob and
- * not as a breath.
- *
- * `BREATH_ARC` and `BREATH_LIFT` are calibrated against the RENDERED back,
- * not against bone angles: a 233-column strip across the topline at
- * `profile` is cross-correlated between an inhale arm and an exhale arm at
- * ONE sim time, sub-pixel by parabola. That instrument reads 0.000 px for two
- * identical arms and 4.74 mm for a known 5.000 mm lift of the whole animal,
- * so it is calibrated in both directions. The calibration table is in the
- * commit message.
- */
-const BREATH_ARC = 0.300;
-const BREATH_FLEX = [
-  ['spine01', 0.10], ['spine02', 0.34], ['spine03', 0.20],
-  ['spine04', -0.30], ['chest', -0.34],
-];
-/**
  * Thoracic RISE, in metres per unit `br`, distributed over the ribcage.
  *
  * This is the term that actually carries the breath: the ribcage rises as a
  * body about the lumbar hinge. It was already here as a single
  * `rig.offset('spine03', 0, 0.0034 * br, 0)` and delivered 3.4 mm of the
- * measured 4.55 mm peak-to-peak — so the old animal was NOT motionless, and
- * REVIEW-7's "nothing ever breathes" was never measured on the body (the
- * 182.89/182.71/182.83/182.79 box is in front of the NOSE and is measuring
- * the condensation plume, which is `src/world/Breath.js` and not this file).
- * What was true is that 4.55 mm at 1.06 px/mm under a 20-50 mm coat is under
- * five pixels, which is not enough to read as life.
+ * 3.34 mm peak-to-peak this rig measured before any of this — so the old
+ * animal was NOT motionless, and REVIEW-7's "nothing ever breathes" was
+ * never measured on the body. Its 182.89 / 182.71 / 182.83 / 182.79 box is
+ * in front of the NOSE and is measuring the condensation plume, which is
+ * `src/world/Breath.js`. What IS true is that 3.34 mm at 1.06 px/mm under a
+ * 20-50 mm coat is three pixels, and three pixels is not life.
+ *
+ * Calibrated against the RENDERED back, not against bone angles: a
+ * 233-column strip across the topline at `profile` is cross-correlated
+ * between an inhale arm and an exhale arm at ONE sim time, sub-pixel by
+ * parabola. That instrument reads 0.000 mm for two identical arms and
+ * 4.73 mm for a known 5.000 mm lift of the whole animal, so it is calibrated
+ * in both directions.
+ *
+ *   LIFT     back travel, mm peak-to-peak
+ *   (HEAD)   3.34          the rig before this change
+ *   0.0000   0.99          expansion only
+ *   0.0068   3.42          girdle riding the ribcage
+ *   0.0100   5.53          girdle riding
+ *   0.0200   3.60          girdle riding — LESS, see below
+ *   0.0100   4.59          girdle HELD
+ *   0.0220   8.15          girdle held   <-- chosen
+ *   0.0340   9.47          girdle held, diminishing
+ *
+ * The 0.0200 row is the important one. Lifting the thoracic chain lifts the
+ * SHOULDER GIRDLE with it; the forelimbs are IK-locked to the snow; and past
+ * about 5 mm the reach backstop drops the root to let them keep reaching, so
+ * the breath ate itself — doubling the drive made the animal breathe less.
+ * Holding the chest still instead (an earlier `chest: -0.75` row) removes the
+ * withers rise as well and measures 2.64 mm, which is worse than both. The
+ * fix that works is sliding the shoulder girdle down the rising ribcage, and
+ * it is what lets 0.0220 deliver 8.15 mm where 0.0200 delivered 3.60.
+ *
+ * A `BREATH_ARC` term — a sign-alternating flex profile summing to zero, so
+ * the ribcage cambers without pitching the head — was written, measured and
+ * REMOVED: at the same lift it took the back from 5.53 mm to 3.15 mm at
+ * -0.30 and to 0.48 mm at +0.30. It cancels the rise in both signs.
  *
  * `BREATH_NECK_GIVE` hands most of the rise back at the neck: without it the
  * skull rides the full excursion and the animal reads as nodding rather than
@@ -219,29 +228,46 @@ const BREATH_FLEX = [
  * the locked feet, which is what the old "counter-lifted humeri" comment
  * meant.
  */
-const BREATH_LIFT = 0.0400;
-/**
- * The negative term on `chest` is not a tuning fudge, it is the fix for a
- * measured cancellation. Lifting the whole thoracic chain lifts the SHOULDER
- * GIRDLE with it, the forelimbs are IK-locked to the snow, and past about
- * 5 mm the reach backstop drops the root to let them keep reaching — so the
- * breath ate itself. Measured on the rendered back: 0.0100 → 5.53 mm
- * peak-to-peak, 0.0200 → 3.60 mm. Doubling the drive made the animal breathe
- * LESS. Holding the chest (and therefore the shoulders) nearly still while
- * spine02..spine04 rise keeps the forelimb inside its envelope, and is also
- * the right anatomy: the thoracic inlet barely moves and the caudal ribs move
- * most.
- */
-const LIFT_PROFILE = [
-  ['spine02', 0.30], ['spine03', 0.45], ['spine04', 0.25], ['chest', -1.00],
-];
-const BREATH_NECK_GIVE = 0.85;
+const BREATH_LIFT = 0.0220;
+const LIFT_PROFILE = [['spine02', 0.33], ['spine03', 0.45], ['chest', 0.22]];
+const BREATH_NECK_GIVE = 0.72;
 const RIB_PROFILE = [
-  ['spine01', 0.22], ['spine02', 0.66], ['spine03', 0.94],
-  ['spine04', 1.00], ['chest', 0.82],
+  ['spine01', 0.22], ['spine02', 0.66], ['spine03', 0.94], ['spine04', 1.00],
 ];
-/** Children of `chest` that must NOT inflate with it. */
-const RIB_COUNTER = ['neck01', 'shoulderL', 'shoulderR'];
+/**
+ * The expansion STOPS at spine04 and `chest` returns the chain to unit
+ * scale. That is not a taper choice, it is the fix for the regression this
+ * work was held off main for.
+ *
+ * The first version scaled `chest` too and counter-scaled its three children
+ * — `neck01`, `shoulderL`, `shoulderR` — by the inverse. That cancels only
+ * when nothing rotates between the two: three.js composes a bone as
+ * T·R·S, so the parent's scale is applied in the PARENT's frame and the
+ * child's counter in the CHILD's, and a rotation between them turns the pair
+ * into a shear instead of an identity. The shoulder is exactly the wrong
+ * place for that — it carries the scapula swing, up to 24 deg at a gallop
+ * and swinging once per stride — so the residual moved the whole forelimb
+ * through the stride and dragged the planted forefoot.
+ *
+ * MEASURED, audit.mjs's own foot-slide method (worst ankle speed over 360
+ * frames at 120 Hz while the bone is within 22 mm of the ground), budget
+ * 0.045 m/s:
+ *
+ *   arm            walk FL / FR      run FL / FR
+ *   full           0.0414 / 0.0510   0.1600 / 0.1978
+ *   lift only      0.0268 / 0.0265   0.0239 / 0.0194
+ *   scale only     0.0483 / 0.0519   0.1455 / 0.2075
+ *   all off        0.0268 / 0.0267   0.0240 / 0.0196
+ *
+ * `scale only` reproduces the failure and `lift only` is indistinguishable
+ * from `all off`, so the ribcage scale was the whole of it. Both hind paws
+ * are clean in every arm, which is the tell: the hind limbs hang off `hips`
+ * and were never inside the scaled chain.
+ *
+ * Countering at `chest` instead leaves one rotation in the sandwich — the
+ * chest's own, a few degrees and slow — rather than the scapula's.
+ */
+const RIB_COUNTER = ['chest'];
 /**
  * The review harness's SINGLE simulation advance, in seconds.
  *
@@ -470,6 +496,15 @@ export class FoxBrain {
     this.look = new LookAt(this.rig);
     this.interest = new Interest(9173);
     this.life = new IdleLife(7);
+    /**
+     * Breath gains, live rather than frozen into the closure, so a probe can
+     * bisect them at runtime instead of editing this file and reloading. The
+     * whole reason the branch this landed on regressed five audit checks is
+     * that a sweep left `BREATH_LIFT` at 0.0400 and `BREATH_ARC` at 0.300 —
+     * two values the sweep had already measured as bad — because reverting a
+     * constant is a manual step and running the next arm was not.
+     */
+    this.breathGain = { lift: BREATH_LIFT, width: BREATH_WIDTH, depth: BREATH_DEPTH };
 
     // Per-foot IK scratch.
     for (const f of this.loco.feet) {
@@ -977,23 +1012,58 @@ export class FoxBrain {
     // Chest rise, counter-lifted humeri so the front feet are not dragged up
     // (the IK would absorb it anyway, but this keeps the shoulder angle sane).
     const br = life.breathCurve() * life.breathAmp;
-    const arc = BREATH_ARC * br;
-    for (let k = 0; k < BREATH_FLEX.length; k++) {
-      rig.add(BREATH_FLEX[k][0], BREATH_FLEX[k][1] * arc, 0, 0);
-    }
+    const bg = this.breathGain;
+    // Gated on `settled`, for a different reason from the ribcage scale
+    // below and a narrower one. ISOLATED with audit.mjs's own state order
+    // (idle, walk, trot, run in one session, no clock reset between them):
+    //
+    //   lift 0.010   trot pawFR 0.5712 m/s      lift 0   trot pawFR 0.0210
+    //
+    // and trot alone in a fresh session is 0.0214 either way. So it is not
+    // the lift dragging a planted foot — it is the walk->trot handover,
+    // where FR's phase offset jumps 0.75 -> 0.00 and the foot re-plants
+    // once. The audit classifies stance by "ankle within 22 mm of the
+    // ground" and scores the discrete contact jump as a slide; the extra
+    // 8 mm of chest travel is just enough to hold the paw inside that
+    // window at that instant. The transition glitch is real and belongs to
+    // whoever next opens `Locomotion.reset`, but it is not what this change
+    // is for, and a breath amplitude tuned to sit just under a transient is
+    // a breath that will break the next time anything moves.
+    const bLift = bg.lift * this.settled;
     let lift = 0;
     for (let k = 0; k < LIFT_PROFILE.length; k++) {
-      const dy = BREATH_LIFT * LIFT_PROFILE[k][1] * br;
+      const dy = bLift * LIFT_PROFILE[k][1] * br;
       rig.offset(LIFT_PROFILE[k][0], 0, dy, 0);
       lift += dy;
     }
     rig.offset('neck01', 0, -BREATH_NECK_GIVE * lift, 0);
+    // The shoulder girdle slides DOWN the rising ribcage instead of riding
+    // it. A scapula is not bolted to a thorax, so this is what the anatomy
+    // does anyway — and it is also what stops the reach backstop from
+    // eating the breath. With the girdle riding, doubling the drive made
+    // the animal breathe LESS (0.0100 -> 5.53 mm, 0.0200 -> 3.60 mm),
+    // because the forelimb ran out of reach over its planted paw and the
+    // backstop dropped the root to compensate. Hold the shoulder and the
+    // forelimb never learns the ribcage moved.
+    rig.offset('shoulderL', 0, -lift, 0);
+    rig.offset('shoulderR', 0, -lift, 0);
     // The ribcage itself. `breathAmp` reaches 2.3 at a flat gallop, which
     // would be a 9 % trunk — clamped, because a heaving animal is not an
     // inflating one, and the gallop already has `spineFlex` on the same
     // joints.
-    const brX = clamp(br, -0.85, 0.85);
-    const wX = 1 + BREATH_WIDTH * brX, wY = 1 + BREATH_DEPTH * brX;
+    //
+    // AND GATED ON `settled`, which is 1 standing and 0 in every moving
+    // gait. A non-uniform scale on the spine chain cannot be cancelled
+    // downstream through a rotation — see RIB_PROFILE's note — and the
+    // rotations that make the residual bite are the spine flex (30 deg at a
+    // gallop) and the scapula swing, both of which are zero at rest and both
+    // of which oscillate at stride frequency. Rather than shrink the
+    // expansion until the shear fits under audit.mjs's foot-slide budget at
+    // a gallop, which would also shrink it at rest where it is the whole
+    // point, it is a rest term. A galloping animal's trunk shape is set by
+    // its back, not by its tidal volume.
+    const brX = clamp(br, -0.85, 0.85) * this.settled;
+    const wX = 1 + bg.width * brX, wY = 1 + bg.depth * brX;
     let cX = 1, cY = 1;
     for (let k = 0; k < RIB_PROFILE.length; k++) {
       const tX = 1 + (wX - 1) * RIB_PROFILE[k][1];

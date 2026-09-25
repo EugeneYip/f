@@ -64,7 +64,24 @@ export class IdleLife {
     this._blinkT = -1;
     this._blinkDur = 0.12;
     this._blinkDouble = 0;
-    this.schedBlink = new Sched(seed * 13 + 1, 3.6, 1.3);
+    /**
+     * MEAN 2.35 s, not 3.6, and the first one 0.55 s in rather than 1.3.
+     *
+     * This file's own header says "the fox blinks about 28 times a minute".
+     * A 3.6 s mean is 16.7 a minute, so the code contradicted its own
+     * comment by a factor of two, and REVIEW-7 filed "nothing blinks" off
+     * four stills at 2.50 / 2.90 / 3.30 / 4.10 s. MEASURED on the old
+     * schedule, stepping at 30 Hz from the harness's 2.5 s settle: episodes
+     * at 5.93, 6.57, 9.63, 9.83 — a 3.43 s hole starting exactly where the
+     * review samples, and each episode only 0.10-0.16 s long, so the critic
+     * had roughly a one-in-eight chance of catching one and did not. The
+     * blink was never broken; it was too rare and too brief to survive
+     * sampling.
+     *
+     * 2.35 s is 25.5 blinks a minute, which is inside the range the header
+     * claims and inside what a resting canid does.
+     */
+    this.schedBlink = new Sched(seed * 13 + 1, 2.35, 0.55);
 
     // --- ear flicks -------------------------------------------------------
     this.earFlickL = 0;
