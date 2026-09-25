@@ -571,10 +571,8 @@ uniform float uDetailAoDC;
 //   x  shadow-map UV filter RADIUS per metre of caster-to-receiver distance.
 //      0 disables the filter entirely and restores the single-tap lookup
 //      exactly, which is the null arm of every A/B below.
-//   y  ceiling on that radius, UV.
-//   z  height of the top of the animal above the snow, metres.
-//   w  spare.
-uniform vec4  uPenumbra;
+//   y  ceiling on that radius, UV. A COST limit, not a physical one.
+uniform vec2  uPenumbra;
 uniform vec2  uCasterXZ;   // world x,z the animal stands on
 vec4 gShadowDbg;   // c.xy, m.x, m.y — debug views 7/8
 
@@ -686,9 +684,19 @@ float snShadowMask(){
   //     up to +-0.3 m of caster distance, i.e. +-2.8 mm of penumbra;
   //   * the receiver is sastrugi, not a plane, but its relief is centimetres
   //     against metres of s.
-  // The uPenumbra.z / sin(e) ceiling is the physical one: nothing on this
-  // animal is higher than the top of its head, so no part of its shadow can
-  // have been cast from further away than that.
+  //
+  // THERE IS DELIBERATELY NO "nothing is higher than the animal" CEILING.
+  // The obvious one -- clamp the caster distance at casterTop / sin(elev) --
+  // was here, sized off the contact-occlusion spheres, and it cost the far
+  // end of the shadow its penumbra: those spheres stop at the head and the
+  // drawn animal has ears and a guard-hair fringe above them, so the clamp
+  // read 0.352 m, capped the caster distance at 3.06 m, and the measured ramp
+  // plateaued at 24.9 mm from 3 m outward instead of reaching 42 mm at the
+  // tip. It also bought nothing: past the shadow's tip every tap is lit, so
+  // an over-large radius there averages nine lit samples and returns lit, and
+  // the tap count does not change with the radius. uPenumbra.y bounds the
+  // radius for COST. Do not re-add a physical ceiling without measuring the
+  // far bands first.
   //
   // The taps average the OCCLUSION, not the moments. Averaging moments over a
   // wide kernel is a wider VSM blur, and a wider VSM blur is exactly what
@@ -698,11 +706,9 @@ float snShadowMask(){
   float rad = 0.0;
   if (uPenumbra.x > 0.0) {
     float cosE = length(uSunDir.xz);
-    float sinE = max(uSunDir.y, 1e-3);
     vec2  dsun = -uSunDir.xz / max(cosE, 1e-4);          // horizontal, downsun
     float s    = dot(vWorld.xz - uCasterXZ, dsun);
-    float cd   = min(max(s, 0.0) / max(cosE, 0.10), uPenumbra.z / sinE);
-    rad = min(cd * uPenumbra.x, uPenumbra.y);
+    rad = min(max(s, 0.0) / max(cosE, 0.10) * uPenumbra.x, uPenumbra.y);
   }
 #if SN_PEN_TAPS > 0
   if (rad > uShadowTexel.x) {

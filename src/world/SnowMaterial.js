@@ -223,7 +223,7 @@ export class SnowMaterial {
     // the single-tap lookup bit for bit. Set it on ctx.terrain.snow.
     this.penumbraScale = 1;
     this._casterOk = false;
-    this._casterX = 0; this._casterZ = 0; this._casterTop = 0;
+    this._casterX = 0; this._casterZ = 0;
   }
 
   init(ctx, perm) {
@@ -265,12 +265,11 @@ export class SnowMaterial {
         uShadowBias: { value: new THREE.Vector2(0.0, 1.0) },
         // --- distance-dependent penumbra (see snShadowMask) ----------------
         // x: shadow-map UV filter radius per metre of caster-to-receiver
-        //    distance · y: ceiling on that radius, UV · z: the animal's own
-        //    height above the snow, metres · w: spare.
+        //    distance · y: ceiling on that radius, UV.
         // Republished each frame in _updatePenumbra(), which is where the
         // arithmetic and the A/B null both live. x = 0 restores the old
         // single-tap lookup exactly.
-        uPenumbra: { value: new THREE.Vector4(0, 0, 0.62, 0) },
+        uPenumbra: { value: new THREE.Vector2(0, 0) },
         uCasterXZ: { value: new THREE.Vector2(0, 0) },
         uBounce: { value: new THREE.Color(1, 1, 1) },
         uBounceInt: { value: 0.13 },
@@ -560,15 +559,9 @@ export class SnowMaterial {
       reach = Math.max(reach, Math.hypot(s.x - cx, s.y - cy, s.z - cz) + s.w * 10.0);
     }
     u.uOcclBound.value.set(cx, cy, cz, reach);
-    // Reuse the same sweep for the penumbra's caster reference: the centroid
-    // is where the animal stands, and the highest sphere's top is how far
-    // above the snow anything of it gets.
-    let top = 0;
-    for (let i = 0; i < OCCLUDERS.length; i++) {
-      const s = arr[i];
-      if (s.w > 0) top = Math.max(top, s.y + s.w);
-    }
-    this._casterX = cx; this._casterZ = cz; this._casterTop = top;
+    // The same centroid is the penumbra's caster reference: it is where the
+    // animal stands, and the shader measures downsun distance from it.
+    this._casterX = cx; this._casterZ = cz;
   }
 
   /**
@@ -585,11 +578,18 @@ export class SnowMaterial {
    * Environment._placeLights() re-derives the frustum's depth from the sun's
    * elevation on every sun change.
    *
-   * The ceiling is a cost limit, not a physical one: SN_PEN_TAPS samples
-   * spread over a disk start to band once the disk is much wider than the
-   * penumbra the default rig asks for (50 mm at 6.6 degrees), and a sun at 2
-   * degrees would ask for 165 mm. 30 mm of radius = 60 mm of penumbra covers
-   * the whole review set and clamps the pathological low-sun case.
+   * The ceiling is a COST limit and nothing else: SN_PEN_TAPS samples spread
+   * over a disk start to band once the disk is much wider than the penumbra
+   * the default rig asks for (42 mm at the tip of the shadow at 6.6 degrees),
+   * and a sun at 2 degrees would ask for 165 mm. 30 mm of radius = 60 mm of
+   * penumbra covers the whole review set with room over it.
+   *
+   * There is no physical ceiling here any more -- see the long note in
+   * snShadowMask(). Clamping the caster distance at casterTop / sin(elev)
+   * looks right and is not: the height it needs is the top of the DRAWN
+   * animal, the cheap sources for it (contact spheres, skin bounds) all stop
+   * below the ears and the fringe, and an underestimate flattens the far end
+   * of the shadow, which is the defect this whole change exists to fix.
    */
   _updatePenumbra(ctx) {
     const cam = ctx.environment?.sun?.shadow?.camera;
@@ -601,8 +601,6 @@ export class SnowMaterial {
     const width = cam.right - cam.left;              // metres across the frustum
     p.x = this.penumbraScale * SUN_TAN_DIAMETER / (2 * width);
     p.y = 0.030 / width;
-    const gy = ctx.terrain?.heightAt ? ctx.terrain.heightAt(this._casterX, this._casterZ) : 0;
-    p.z = Math.max(0.05, this._casterTop - gy);
     this.uniforms.uCasterXZ.value.set(this._casterX, this._casterZ);
   }
 
