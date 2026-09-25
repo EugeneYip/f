@@ -581,27 +581,69 @@ export function refineCurvature(field, pos, nor, index, opts = {}) {
     index: idx,
     gradH: Float64Array.from(GH),
     nv,
+    nvBase: pos.length / 3,
     added: nv - pos.length / 3,
     perLevel,
   };
 }
 
-/** Vertex adjacency (CSR) built from TRIANGLE edges. See buildAdjacency. */
-export function buildAdjacencyTri(nv, index) {
-  const deg = new Int32Array(nv);
+/**
+ * Vertex adjacency (CSR) for a REFINED mesh, built so that the unrefined part
+ * of the animal keeps EXACTLY the connectivity it had before.
+ *
+ * This is not fussiness. `smoothField` runs a Laplacian over this graph for
+ * furLength, furStiffness and furFlow, and `computeWeights` reads it too — so
+ * the graph is an input to the coat and to the skinning, not just a helper.
+ * Simply rebuilding it from the triangles adds every quad DIAGONAL as a
+ * neighbour, which changes the smoothing everywhere: measured against the
+ * shipped mesher with the refinement switched OFF, 11134 of 12087 off-head
+ * vertices moved their furLength (max 4.00 mm), all 12087 moved furFlow, and
+ * all 12087 moved a skin weight. None of that is anything this change is for.
+ *
+ * So the edge set is: every QUAD edge that still exists in the refined mesh,
+ * plus every refined-triangle edge that touches a vertex the refinement added.
+ * Where nothing was refined that is the quad edge set, bit for bit.
+ */
+export function buildAdjacencyRefined(nv, quads, index, nvBase) {
   const nt = index.length / 3;
-  const seen = new Set();
-  const ea = [], eb = [];
+  const KEY = nv;
+  const live = new Set();
   for (let t = 0; t < nt; t++) {
     for (let s = 0; s < 3; s++) {
       let u = index[t * 3 + s], v = index[t * 3 + ((s + 1) % 3)];
       if (u === v) continue;
       if (u > v) { const q = u; u = v; v = q; }
-      const key = u * nv + v;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      ea.push(u); eb.push(v);
-      deg[u]++; deg[v]++;
+      live.add(u * KEY + v);
+    }
+  }
+
+  const deg = new Int32Array(nv);
+  const seen = new Set();
+  const ea = [], eb = [];
+  const add = (u0, v0) => {
+    if (u0 === v0) return;
+    const u = u0 < v0 ? u0 : v0, v = u0 < v0 ? v0 : u0;
+    const key = u * KEY + v;
+    if (seen.has(key)) return;
+    seen.add(key);
+    ea.push(u); eb.push(v);
+    deg[u]++; deg[v]++;
+  };
+  // Quad edges that survived the refinement.
+  const nq = quads.length / 4;
+  for (let q = 0; q < nq; q++) {
+    for (let s = 0; s < 4; s++) {
+      let u = quads[q * 4 + s], v = quads[q * 4 + ((s + 1) & 3)];
+      if (u === v) continue;
+      if (u > v) { const t2 = u; u = v; v = t2; }
+      if (live.has(u * KEY + v)) add(u, v);
+    }
+  }
+  // Every edge the refinement introduced.
+  for (let t = 0; t < nt; t++) {
+    for (let s = 0; s < 3; s++) {
+      const u = index[t * 3 + s], v = index[t * 3 + ((s + 1) % 3)];
+      if (u >= nvBase || v >= nvBase) add(u, v);
     }
   }
   const start = new Int32Array(nv + 1);

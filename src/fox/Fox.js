@@ -91,7 +91,15 @@ export class Fox {
       lastYield = performance.now();
     };
 
-    const built = await buildFoxSurface(this.rig, { cell, onYield });
+    // MEASUREMENT HOOK, not a product knob. The head refinement changes the
+    // vertex COUNT, so it cannot be toggled in-page the way ab.mjs toggles a
+    // material — the arms have to be separate page loads. A harness sets this
+    // with `addInitScript` before load; nothing in the product ever writes it,
+    // and an absent global leaves the refinement on. See FoxSurface's
+    // SKULL_ZONE_R block for what it controls.
+    const refine = (typeof window !== 'undefined' && window.__FOX_REFINE !== undefined)
+      ? window.__FOX_REFINE : true;
+    const built = await buildFoxSurface(this.rig, { cell, onYield, refine });
     this.geometry = built.geometry;
     this.field = built.field;
     this.eyes = built.eyes;

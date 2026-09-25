@@ -28,7 +28,7 @@ import {
 } from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
-  sampleGrid, surfaceNets, buildAdjacency, buildAdjacencyTri, relax,
+  sampleGrid, surfaceNets, buildAdjacency, buildAdjacencyRefined, relax,
   analyticNormals, triangulate, smoothField, refineCurvature,
 } from './AnatMesher.js';
 
@@ -219,7 +219,9 @@ export async function buildFoxSurface(skeleton, {
   // Refined vertices get a central-difference step scaled to their own edge
   // length; base vertices keep h * 0.30 and their normals are bit-identical.
   normals = analyticNormals(field, pos, h, ref.gradH);
-  adj = buildAdjacencyTri(nv, index);
+  // Off the refined zone this is the quad adjacency, bit for bit — see
+  // buildAdjacencyRefined for why that has to be true.
+  if (ref.added) adj = buildAdjacencyRefined(nv, quads, index, ref.nvBase);
   timings.refine = now() - t;
   await yieldNow();
 
