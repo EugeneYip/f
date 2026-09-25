@@ -983,6 +983,7 @@ export const FUR_DEFAULTS = {
    * is no way to have the dark half of a plush surface for free.
    */
   tuftLit: 0.90,
+  deepTuft: 0.0,
   tuftCav: [1.0, 0.32],
   tuftSurf: [0.30, 1.0],
   // How much of the undercoat felt's opacity the strand layer modulates.
@@ -1936,6 +1937,7 @@ export function buildFurUniforms(ctx) {
     uCoatSigmaFloor: { value: d.coatSigmaFloor },
     uCoatLock: { value: d.coatLock },
     uTuftLit: { value: d.tuftLit },
+    uDeepTuft: { value: d.deepTuft },
     uTuftCav: { value: new THREE.Vector2(d.tuftCav[0], d.tuftCav[1]) },
     uTuftSurf: { value: new THREE.Vector2(d.tuftSurf[0], d.tuftSurf[1]) },
     uAniso: { value: 1 },

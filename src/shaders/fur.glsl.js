@@ -231,6 +231,7 @@ uniform float uCoatLock;       // metres of coat a metre of lateral lock offset
 // camera actually looks at. These two are the surface's own relief. See the
 // long note where they are applied.
 uniform float uTuftLit;        // directional gain, lit face vs shaded face
+uniform float uDeepTuft;       // tuft-scale holes in the cheap deep shells
 uniform vec2  uTuftCav;        // x gain, y the crest field's own mean, so
                                // the cavity is zero-mean. See FUR_DEFAULTS.tuftCav.
 uniform vec2  uTuftSurf;       // depth band the relief ramps in over
@@ -1400,6 +1401,40 @@ ${isShell ? /* glsl */ `
   float crest = uTuftCav.y;
   if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail,
                               normalize(vAxis), vShellMod.x, site, lockSite, crest);
+  else if (uDeepTuft > 0.001){
+    /*
+     * THE CHEAP PATH DRAWS A SOLID SHEET, AND YOU CAN SEE IT.
+     *
+     * Shells below shellFill * uShellDeep skip the hair field entirely and
+     * return a constant alpha, on the reasoning that they are solid felt with
+     * the whole coat stacked above them and nothing they compute can reach
+     * the eye. The reasoning is right about the SHADING and wrong about the
+     * ALPHA: a constant alpha near 1 means the composite STOPS at the first
+     * deep shell, so wherever the coat above is locally sparse the camera
+     * sees one opaque untextured surface. That is the pale angular plate low
+     * in the 'nape' frame.
+     *
+     * Attributed in one session at one instant, over a 200x180 box on the
+     * plate, base repeated and matching to four decimals: cards hidden and
+     * body hidden are both IDENTICAL to base, shells hidden removes it, and
+     * uShellDeep 0.55 -> 0 removes the plate outright (mean 173.98 -> 162.43,
+     * and the rendered crop goes from angular plates to a continuous pile).
+     *
+     * But 0 is not affordable -- it is the whole hair field on 45% of the
+     * stack, and it also costs 11.6 levels of mean on that box. The plate is
+     * not a shading problem, it is a HOLE problem: the deep shells need gaps
+     * at tuft scale so the composite can reach past the first of them. That
+     * is one cell8 and a smoothstep, not the strand octave, not the micro
+     * octave, and not the felt.
+     */
+    float fcD = uClumpFreq * vP1.x;
+    vec3  sD;
+    float cdD = cell8(vRoot * fcD, sD);
+    float rD  = mix(1.15, 0.34, tJ * tJ) * (0.72 + 0.56 * hash13(sD * 1.913));
+    float aaD = max(px * fcD * 1.6, 0.045);
+    float tD  = 1.0 - smoothstep(rD - aaD, rD + aaD, cdD);
+    hair.x *= mix(1.0, tD, uDeepTuft * octaveFade(px, fcD));
+  }
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
