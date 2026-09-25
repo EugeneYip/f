@@ -43,17 +43,19 @@ export class Environment {
     //
     // The distance-dependent penumbra therefore lives on the receiver, in
     // snShadowMask() in src/shaders/snow.glsl.js, where the filter radius can
-    // be sized per fragment. 4.5 / 16 stay as the shadow agent calibrated
-    // them: they set how much of the alpha-tested guard-hair fringe survives
-    // into the shadow map and how much the silhouette is eroded, and both were
-    // measured against shadow AREA and an edge probe. Do not retune them for
-    // softness -- softness is not what they control.
+    // be sized per fragment. The RADIUS stays where the shadow agent
+    // calibrated it: it sets how much of the alpha-tested guard-hair fringe
+    // survives into the shadow map and how much the silhouette is eroded, and
+    // both were measured against shadow AREA and an edge probe. Do not retune
+    // it for softness -- softness is not what it controls.
+    //
+    // blurSamples is a different quantity and was NOT calibrated: see
+    // _blurSamples() below.
     this.sun = new THREE.DirectionalLight(ctx.sunColor.clone(), ctx.sunIntensity);
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.022;
     this.sun.shadow.radius = 4.5;
-    this.sun.shadow.blurSamples = 16;
     scene.add(this.sun);
     this.sunTarget = new THREE.Object3D();
     scene.add(this.sunTarget);
@@ -99,6 +101,73 @@ export class Environment {
     // off shadowMapSize instead, because THAT is what sets how many texels a
     // 42 mm penumbra spans.
     this.sun.shadow.radius = ctx.quality.get('softShadow') ? 4.5 : 1;
+    this.sun.shadow.blurSamples = Environment._blurSamples(this.sun.shadow.radius);
+  }
+
+  /**
+   * TAP COUNT OF THE VSM PRE-BLUR. NOT A LOOK KNOB -- A SAMPLING RATE.
+   *
+   * `radius` sets the blur's WIDTH; `blurSamples` sets how densely that fixed
+   * width is sampled. three spreads `n` taps evenly over [-radius, +radius]
+   * texels, so the stride is 2 * radius / (n - 1), and the VSM target is
+   * created with the default LinearFilter -- every tap is bilinear and
+   * therefore already covers a full texel. A stride of 1.0 texel is exactly
+   * continuous coverage; anything finer is resampling the same texels twice.
+   *
+   *     n = 2 * radius + 1   ->   stride 1.0
+   *
+   * At radius 4.5 that is 10. We were paying 16, a 0.60-texel stride, i.e.
+   * 1.67x oversampled -- and the blur is two FULL passes over the whole
+   * shadow map, so those six extra taps were 38 M texel fetches per frame
+   * each at `high`.
+   *
+   * MEASURED, both halves.
+   *
+   * Cost, one page session at `high`/`hero`, 40 frames per arm behind a
+   * readPixels drain, arms swept 1..128 in one quiet window (frame time at
+   * n=16 read 15.98 ms against the orchestrator's 15.92 ms idle, so this
+   * window was uncontended):
+   *
+   *     n     1      2      4      6      8     10     12     16     32     64    128
+   *     ms  14.45  14.48  14.35  14.58  14.94  14.99  15.23  15.98  19.16  26.57  41.49
+   *
+   * Linear from n=6 up at 0.20-0.23 ms per tap, flat below n=4 where the two
+   * full-screen passes' own fill dominates. 16 -> 10 is 0.99 ms; the whole
+   * tap cost above the floor is only 1.5 ms, so there is no 3 ms here.
+   * Error bar +-0.15 ms, from the 1/2/4 plateau's own spread.
+   *
+   * Fidelity, read straight out of sun.shadow.map and decoded back to three's
+   * packed (mean, stddev) moments, referenced to n=64 (a 0.14-texel stride,
+   * i.e. the converged box), over the caster's own bounding rect. Time is NOT
+   * advanced between arms -- an earlier version stepped 10 frames per arm and
+   * its same-arm control read rms 1.5e-2 with 1388 boundary flips, all of it
+   * idle-life animation. With no time advance identical arms are bit
+   * identical, which is what makes the rest of the row meaningful:
+   *
+   *     n      rms(mean)   max(mean)   silhouette area   boundary wiggle L/R
+   *     16      1.89e-3     2.08e-2         1.00011           0.099 / 0.085
+   *     12      2.74e-3     2.98e-2         1.00204           0.121 / 0.085
+   *     10      3.61e-3     3.98e-2         1.00377           0.121 / 0.085
+   *      8      4.55e-3     4.92e-2         1.00377           0.121 / 0.085
+   *      4      1.12e-2     1.24e-1         1.00351           0.121 / 0.197
+   *      1      4.70e-2     5.60e-1         0.91408           0.554 / 0.269
+   *
+   * The two things the brief protects both hold at 10. Silhouette AREA does
+   * not fall -- it rises 0.4%, and the CoatShadow sweep that chose
+   * `uHullFrac` 0.90 was scored on area not falling. Boundary wiggle, the
+   * per-row high-passed silhouette position that is the fringe stipple
+   * surviving into the map, does not fall either: 0.099 -> 0.121 and 0.085 ->
+   * 0.085. A coarser sampling of a fixed-width box passes slightly MORE high
+   * frequency, not less, so cutting taps cannot erase the fringe -- only
+   * cutting `radius` could, and that is untouched.
+   *
+   * n=1 is where it actually breaks, and it breaks the way the theory says:
+   * area collapses to 0.914 (the blur stops eroding the silhouette at all)
+   * and the stddev channel goes to zero everywhere, so Chebyshev has no
+   * variance to work with.
+   */
+  static _blurSamples(radius) {
+    return Math.max(2, Math.round(2 * radius) + 1);
   }
 
   onQuality(e, ctx) { if (e.type === 'tier') this.applyQuality(ctx); }
