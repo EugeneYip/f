@@ -51,6 +51,32 @@ const POSES = flag('--poses', 'frontal,profile').split(',');
 const OUT = flag('--out', 'shots/matte');
 const SIZE = flag('--size', '1280x800').split('x').map(Number);
 const SETTLE = parseFloat(flag('--settle', '2.5'));
+// --quality: without it this tool could only ever measure the DEFAULT tier,
+// so an `ultra` arm could not be checked on the coverage matte at all. The
+// coat agent named that as the single gap blocking a card-budget decision.
+const QUALITY = flag('--quality', '');
+
+/* WHAT THIS TOOL CAN AND CANNOT SETTLE.
+ *
+ * It renders with POST OFF, and it has to: the matte recovers coverage from
+ * two clear colours, and post is not linear in the clear colour. But TAA is
+ * what resolves the coat's stochastic alpha, so with post off a comb and a
+ * dense pile can measure the same, and a change that a viewer sees as
+ * plusher can measure as worse here.
+ *
+ * That is not a bug to fix, it is the tool's domain. The matte answers
+ * "what does the coverage GEOMETRY do" -- contour, fill, run length, the
+ * silhouette. It does not answer "what does a viewer SEE", which is a
+ * post-on question and belongs to a render.
+ *
+ * It bit a real decision. Measuring 26k against 40k cards, the resolved
+ * lattice arms read band 133.7 -> 138.4, fill 0.114 -> 0.122, runs/col
+ * 3.97 -> 4.11 and peaks/100px 6.74 -> 7.43 on a post-on column scan --
+ * 40k better throughout -- while this tool read fill DOWN 10.5% and the
+ * right contour 0.7% -> 21.5% bad for the same arms. Both numbers are
+ * correct about different things. Do not average them, and do not pick the
+ * one that agrees with you.
+ */
 
 // HMR and file watching OFF. Several agents edit this tree at once, and
 // a save landing mid-run hot-reloads the page underneath the
@@ -82,9 +108,13 @@ await page.goto(url, { waitUntil: 'load', timeout: 120000 });
 await page.waitForFunction(() => window.__FOX_READY === true, null,
   { timeout: 120000, polling: 100 });
 
-const result = await page.evaluate(async ({ POSES, SETTLE }) => {
+const result = await page.evaluate(async ({ POSES, SETTLE, QUALITY }) => {
   const D = window.FoxDebug, ctx = D.ctx();
   D.setAdaptive(false); D.setUI(false); D.pause();
+  if (QUALITY) {
+    const got = D.setQuality(QUALITY);
+    if (got !== QUALITY) throw new Error(`matte: asked for quality ${QUALITY}, got ${got}`);
+  }
 
   const cv = document.createElement('canvas');
   const c2 = cv.getContext('2d', { willReadFrequently: true });
@@ -279,7 +309,7 @@ const result = await page.evaluate(async ({ POSES, SETTLE }) => {
   renderer.setClearColor(prevClear, prevAlpha);
   if (ctx.postfx) ctx.postfx.enabled = prevPost;
   return out;
-}, { POSES, SETTLE });
+}, { POSES, SETTLE, QUALITY });
 
 await mkdir(path.resolve(ROOT, OUT), { recursive: true });
 for (const [pose, d] of Object.entries(result.poses)) {
