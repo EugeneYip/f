@@ -495,6 +495,15 @@ const LASH_N = 14;                 // per eye, upper lid
 const LASH_U = 0.84;               // spread over |u| <= this, off the canthi
 const LASH_LEN = [0.0028, 0.0046]; // shortest at the canthi, longest mid-lid
 const LASH_CURL = 0.34;            // share of length spent curling off the globe
+const LASH_CURL_N = 1.00;          // curl direction: along the lid's normal...
+const LASH_CURL_R = 0.00;          // ...and radially outward, both invisible here
+// Swept against the on-screen sagitta: 0 / 0.8 / 1.6 / 3.0 / 5.0 gives
+// 0.87 / 1.29 / 2.60 / 3.86 / 5.22 px of bow on a 120 px strand, with the
+// strand length unchanged, so it is a genuine curve and not a shortening.
+// 3.0 is a definite curve that is still restrained. Note it is scaled by the
+// strand's own aSkew, so the mid-lid cilia stay nearly straight and the ones
+// toward the canthi curve most -- which is how a lash line actually fans.
+const LASH_CURL_S = 3.00;          // ...and laterally, which is the one that reads
 const LASH_THICK = 0.000078;       // shaft at the follicle
 const LASH_TIP = 0.000013;
 const LASH_MIN_PX = 1.05;          // screen-space width floor
@@ -2412,6 +2421,9 @@ void main(){
         uMinPx: { value: LASH_MIN_PX },
         uViewportH: { value: 800 },
         uLashRootArc: { value: LASH_ROOT_ARC },
+        uLashCurlN: { value: LASH_CURL_N },
+        uLashCurlR: { value: LASH_CURL_R },
+        uLashCurlS: { value: LASH_CURL_S },
         // DARK, not white. An arctic fox's cilia are pale in the hand, but a
         // pale lash on a pale lid on a white animal is invisible at every
         // framing in `shots/` -- and "no eyelashes" is the review's
@@ -2433,6 +2445,7 @@ void main(){
         EYE_UNIFORMS + APERTURE_GLSL + GLOBE_GLSL + /* glsl */ `
 uniform float uMinPx, uViewportH;
 uniform float uLashRootArc;
+uniform float uLashCurlN, uLashCurlR, uLashCurlS;
 
 void main(){
   vT = aT; vAcross = aSide;
@@ -2470,7 +2483,27 @@ void main(){
   // the fan: lashes near a canthus lean toward it.
   vec3 side = normalize(cross(vec3(0.0, 0.0, 1.0), feRad) + vec3(1e-5));
   vec3 grow = normalize(feRad * 0.62 + feDir * 0.78 + side * aSkew * 0.42);
-  vec3 curl = normalize(feDir);
+  // WHICH WAY THE STRAND BENDS, and it has to bend where the camera can see
+  // it. This was normalize(feDir) -- purely along the lid's outward surface
+  // normal -- and at the upper lid that normal points up and TOWARD the
+  // camera, so the whole curl foreshortened away. Measured on the cilia
+  // matte at macro_eye by fitting each strand's principal axis and taking
+  // the quadratic sagitta (ribbon WIDTH is divided out, so a 3 px straight
+  // strand does not score): 14 strands, median length 120.4 px, median
+  // sagitta 0.90 px -- 0.75 % of its own length, which is the antialiasing
+  // floor. Review 6's "dead-straight ... no curve" is exactly right.
+  //
+  // AND IT IS NOT feRad EITHER, which was the obvious candidate. Swept, curl aimed at
+  // (feDir, feRad) = (1,0) / (0.6,1) / (0.2,1) / (-0.4,1) / (-1,1), the
+  // median sagitta moves only 0.87 -> 1.67 px on a 120 px strand: at this
+  // framing feDir and feRad BOTH project to roughly the same screen
+  // direction as the growth axis itself, so a bend in either is a bend along
+  // the strand, which is not a bend. The lateral axis is the lid's tangent,
+  // across the screen, and the only one with anywhere to bend to. Scaled by
+  // aSkew so each strand curves toward its own canthus, which is the way a
+  // real lash line fans.
+  vec3 curl = normalize(feDir * uLashCurlN + feRad * uLashCurlR
+                        + side * aSkew * uLashCurlS);
   float t = aT;
   vec3 p = root + grow * (aLen * t) + curl * (aLen * aCurl * t * t);
   vec3 tang = normalize(grow * aLen + curl * (2.0 * aLen * aCurl * t));
