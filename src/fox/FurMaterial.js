@@ -700,7 +700,7 @@ export const FUR_DEFAULTS = {
    * agent does not have to rediscover why.
    */
   depthFlatCard: 0.0,
-  fillTop: 1.12,
+  fillTop: 0.70,
   fillJitter: 0.30,
   cardTip: 0.45,
   coatVarFreq: 15,
