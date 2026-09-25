@@ -223,6 +223,17 @@ uniform float uCoatSigmaFloor; // multiple-scattering floor on the transmittance
 uniform float uCoatLock;       // metres of coat a metre of lateral lock offset
                                // is worth, along the light. See furLockShadow.
 
+// --- tuft relief at the coat's SURFACE ------------------------------------
+// Everything above shades the INSIDE of the pile: furSelfShadow() is a
+// function of the hair above a point, and both it and the lock term are
+// multiplied by (1 - t), so they are identically zero on the layer the
+// camera actually looks at. These two are the surface's own relief. See the
+// long note where they are applied.
+uniform float uTuftLit;        // directional gain, lit face vs shaded face
+uniform vec2  uTuftCav;        // x gain, y the crest field's own mean, so
+                               // the cavity is zero-mean. See FUR_DEFAULTS.tuftCav.
+uniform vec2  uTuftSurf;       // depth band the relief ramps in over
+
 // --- stochastic / TAA ------------------------------------------------------
 uniform float uStochastic;     // 0 = smooth alpha · 1 = IGN dithered cut-out
 uniform float uFrameSeed;
@@ -515,7 +526,8 @@ export const FUR_FIELD = /* glsl */ `
  */
 vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
              float freqScale, float shellFill, float pathK, float detail, vec3 axis,
-             float hairLenScale, out vec3 site, out vec3 lockSite)
+             float hairLenScale, out vec3 site, out vec3 lockSite,
+             out float crestOut)
 {
   // Large-scale variation: real fur is not uniformly dense.
   float coatVar = snoise(p * uCoatVarFreq) * octaveFade(px, uCoatVarFreq);
@@ -752,9 +764,59 @@ vec4 furHair(vec3 p, float t, float px, float densityScale, float clumpScale,
   // stacked above it gets darkened, so there is nothing left to tint the
   // visible outer coat cell by cell.
   float lockDepth = (1.0 - t) * (1.0 - t);
-  float clumpAO = 1.0 - 0.40 * uClumpAO * lockDepth * smoothstep(0.58, 0.08, cd.x);
+  float crest = smoothstep(0.58, 0.08, cd.x);
+  float clumpAO = 1.0 - 0.40 * uClumpAO * lockDepth * crest;
 
-  return vec4(clamp(a, 0.0, 1.0), clamp(ds / max(r, 1e-4), 0.0, 1.0), sRand, clumpAO);
+  /*
+   * AND THE OTHER HALF OF IT, WHICH IS WHAT PLUSH ACTUALLY LOOKS LIKE.
+   *
+   * The term above is occlusion from INSIDE the pile: near the lock axis
+   * there is more cone stacked overhead, so it darkens the axis and it is
+   * weighted by (1 - t)^2 to vanish at the tips. Correct, and deliberately
+   * dead on the one layer the camera sees -- its own note records that a
+   * per-cell tint that survived to the surface "painted the flank and
+   * shoulder with grey patches that read as a dirty, moulting coat".
+   *
+   * But a tuft is a CONE (see tuftR above: radius 1.15 of a cell at the skin
+   * narrowing to 0.34 at the tip), so at the SURFACE the sign is the other
+   * way round and it is not a tint at all, it is a cavity. cd.x near 0 is the
+   * crest of a cone, standing clear with the whole sky dome over it; cd.x
+   * near 1 is the floor of the gap between three cones, seeing a slot. A
+   * plush pile is a field of those gaps and they are the dark half of every
+   * plush photograph. Ours had none: measured over an interior flank box at
+   * hero, the tuft-scale band (3-13 px, i.e. 2.5-10 mm, against a 7.4 mm
+   * clump cell) carries sd 2.89 on a mean of 168 with the cards hidden --
+   * 1.7% contrast, which is a wash.
+   *
+   * It is gated on the clump octave's own on-screen cell size exactly as the
+   * tuft ALPHA is twenty lines above: this is a per-fragment signal read off
+   * a 7.4 mm lattice and at the wide framing that lattice is sub-pixel.
+   */
+  // Exported rather than folded into clumpAO because clumpAO reaches the
+  // sun through mix(ao, 1.0, 0.62) -- 62% of any AO is handed straight back
+  // on the direct term, by design, because an AO is not a shadow. A cavity
+  // between two cones IS a shadow, so it belongs on the transmittance beside
+  // furSelfShadow's. Measured through clumpAO first: uTuftCav 0.30 bought 5%
+  // of interior tuft contrast for 4.9 levels of mean luminance, which is the
+  // worst trade of anything in this file.
+  //
+  // AND IT IS ITS OWN PROFILE, not the AO's. clumpAO's crest above is
+  // smoothstep(0.58, 0.08, cd.x), which reaches 1 only inside cd.x < 0.08 --
+  // 0.6% of a cell's area. As an occlusion weight that is fine; as a height
+  // field it is a dot on a flat plane, so subtracting its mean darkened the
+  // whole cell uniformly and produced no structure at all. Measured: gain 1.3
+  // bought 7% of interior tuft contrast for 0.95 levels of mean, and the
+  // mean-neutral setting bought 1.4%.
+  //
+  // tuftR above says what the cone actually is: radius 1.15 of a cell at the
+  // skin narrowing to 0.34 at the tip. A height that falls off over most of
+  // the cell is the matching profile, and it is what makes the gap between
+  // three cones a broad basin rather than a ring.
+  float cone = 1.0 - smoothstep(0.05, 0.72, cd.x);
+  crestOut = cone * octaveFade(px, fc) * detail;
+
+  return vec4(clamp(a, 0.0, 1.0), clamp(ds / max(r, 1e-4), 0.0, 1.0), sRand,
+              clamp(clumpAO, 0.02, 1.0));
 }
 `;
 
@@ -1285,8 +1347,11 @@ ${isShell ? /* glsl */ `
   // on its own": the shells collapse onto the skin and keep drawing). Visible
   // at macro_eye as a cuff of opaque undercoat lapping over the iris.
   vec4 hair = vec4(clamp(vP0.w * uDensity, 0.0, 1.0), 0.45, hash13(vRoot * 131.7), 1.0);
+  // Neutral for the cheap path: those shells are solid felt under the whole
+  // coat and have no surface for a cavity to sit in.
+  float crest = uTuftCav.y;
   if (!deep) hair = furHair(vRoot, tJ, px, vP0.w, vP1.x, vP1.y, shellFill, pathK, detail,
-                              normalize(vAxis), vShellMod.x, site, lockSite);
+                              normalize(vAxis), vShellMod.x, site, lockSite, crest);
   alpha = hair.x;
   if (alpha < 0.004) discard;
 
@@ -1346,11 +1411,114 @@ ${isShell ? /* glsl */ `
   // same curve as the COVERAGE also keeps the two from disagreeing about
   // whether a tuft exists at a given distance.
   float lockLod = octaveFade(px, uClumpFreq * vP1.x);
-  float lockMod = clamp(uCoatLock * lockLod
-                        * furLockShadow(vRoot, lockSite, vAxis, vSunB)
+  float lockRaw = furLockShadow(vRoot, lockSite, vAxis, vSunB);
+  float lockMod = clamp(uCoatLock * lockLod * lockRaw
                         / max(vP1.w, 1e-4), -0.9, 0.9);
-  float above = vP1.w * (1.0 - tJ) * (1.0 + lockMod);
+  /*
+   * MINUS, NOT PLUS, AND THIS WAS A SIGN BUG.
+   *
+   * furLockShadow returns dot(hair - lockSite, sunDir) with sunDir pointing
+   * TOWARDS the sun, so a positive lockMod means this hair sits on the cone's
+   * sun-facing flank. The path from there to the sun leaves the cone almost
+   * at once; the path from the far flank crosses the whole cone. So positive
+   * lockMod is LESS optical depth, not more, and the term's own docstring
+   * says so in as many words -- "the half of a tuft facing away from the sun
+   * is behind the tuft". The code did the opposite and lit the shadowed half.
+   *
+   * It is invisible in any luminance statistic, because the term is a dot
+   * product about an axis and is as often positive as negative around it:
+   * measured over an interior flank box at hero, flipping uCoatLock 12 to -12
+   * moves the mean by 1.1 levels and the tuft-scale contrast by 0.9%. What it
+   * changes is the DIRECTION of the relief, and an inverted relief is read as
+   * dents rather than bumps -- which is one half of why a coat with a working
+   * tuft term still read as wax. The other half is that the term is dead at
+   * the surface; see uTuftLit below.
+   *
+   * Caught by adding the surface term with the physically correct sign and
+   * finding that it REDUCED contrast (interior fine grain 3.47 -> 2.92 at
+   * uTuftLit 1.2) instead of adding it. Two terms that cancel are two terms
+   * that disagree about which way the light is coming from.
+   */
+  float above = vP1.w * (1.0 - tJ) * (1.0 - lockMod);
   vec2 sh = furSelfShadow(above, dot(normalize(vNrm), uSunDir));
+
+  /*
+   * DIRECTIONAL TUFT RELIEF, ON THE LAYER THE CAMERA ACTUALLY SEES.
+   *
+   * lockMod is the hair's lateral offset from its own cone's axis resolved
+   * along the sun, normalised by the coat depth and LOD-faded -- i.e. it is
+   * already exactly the "which face of this tuft am I on" signal, and it is
+   * already computed. But the only thing it drives is a multiplier on the
+   * optical depth above, and that depth carries a factor of (1 - tJ). So at
+   * tJ = 1 the whole term is identically zero, and tJ = 1 is the surface.
+   *
+   * Measured, one page session, one instant, hero/high/1920x1200, interior
+   * flank box: uCoatLock 12 -> 0 costs the interior 27% of its fine grain and
+   * 12% of its tuft-scale contrast, so the term is doing real work in the
+   * MIDDLE of the stack -- and 12 -> 30 buys only another 10% of tuft
+   * contrast, because the clamp is already at +/-0.9 and what is left to
+   * multiply is (1 - tJ), which is small everywhere the eye is looking. The
+   * gain was never the limit; the (1 - tJ) was.
+   *
+   * So apply it a second time, additively in the transmittance, ramped IN
+   * over the outer band -- the exact complement of the depth term, which
+   * ramps out. A cone lit from one side is brighter on that side and darker
+   * on the other, and unlike every other contrast term in this file it costs
+   * no mean luminance at all: lockMod is a dot product about an axis and is
+   * as often positive as negative around it, and ART_DIRECTION 4b's "only
+   * slightly brighter than its background" is already spending the coat's
+   * whole headroom.
+   *
+   * The sky path gets a fraction of it rather than the same number: a cone's
+   * far face is fully behind it from a point source and only partly behind it
+   * from a hemisphere.
+   */
+  /*
+   * NORMALISED BY THE TUFT CELL, NOT BY THE COAT DEPTH, which is why this
+   * does not read as the corrugation the additive form did.
+   *
+   * lockMod above divides the lateral offset by the coat's own depth and
+   * then clamps: on the flank a 7.4 mm cell over a 47 mm coat at uCoatLock 12
+   * gives +/-0.94 before the clamp, so the field is SATURATED almost
+   * everywhere and what survives the clamp is a signed step function with the
+   * Voronoi boundary as its edge. A step function at tuft scale is
+   * corrugation. That is correct for an optical DEPTH, which genuinely
+   * saturates, and wrong for a surface's slope.
+   *
+   * A cone's slope is a property of the cone, so the honest normaliser is the
+   * cell: lockRaw in half-cells runs smoothly from -1 on one flank to +1 on
+   * the other and crosses zero on the axis. It is also scale-free, so a 3 mm
+   * face tuft and a 16 mm ruff tuft get the same relief instead of the face
+   * getting sixteen times as much.
+   */
+  float relief = clamp(lockRaw * 2.0 * uClumpFreq * vP1.x, -1.0, 1.0) * lockLod;
+  float surfW  = smoothstep(uTuftSurf.x, uTuftSurf.y, tJ);
+  /*
+   * AND THE CAVITY, which is the half of plush that the SKY does.
+   *
+   * The directional term above rides sh.x, and on this animal sh.x is worth
+   * very little over most of the body: the sun is at 6 degrees behind and to
+   * the left, so the belly, the near flank and the whole shaded side are
+   * ambient-dominated and the sun term is near zero there. Measured, interior
+   * belly box at hero: uTuftLit 0 -> 1.3 moves tuft-scale contrast 11% on the
+   * shaded belly against 10% on the lit shoulder, and both are limited by the
+   * same thing -- the light that is actually falling on the coat comes from
+   * the dome, and the dome had no tuft-scale response at all.
+   *
+   * A cone's crest sees the whole dome. The floor of the gap between three
+   * cones sees a slot. That is an ambient occlusion in the literal sense and
+   * it is the dark structure in every photograph of a plush pile.
+   *
+   * ZERO MEAN BY CONSTRUCTION: uTuftCav.y is subtracted so the term brightens
+   * the crests exactly as much as it darkens the gaps. ART_DIRECTION 4b puts
+   * the coat "only slightly brighter than its background" and spec.mjs holds
+   * the coat/snow ratio, so a term that spends mean luminance cannot be paid
+   * for. The mid is the mean of the crest field over a cell, measured rather
+   * than derived: see FUR_DEFAULTS.tuftCav.
+   */
+  float cavR = uTuftCav.x * surfW * (crest - uTuftCav.y);
+  sh.x *= clamp(1.0 + uTuftLit * surfW * relief + cavR * 0.5, 0.04, 2.0);
+  sh.y *= clamp(1.0 + uTuftLit * 0.35 * surfW * relief + cavR, 0.04, 2.0);
 ` : /* glsl */ `
   // Base layer: skin under the coat — dark, occluded, faintly cool.
   ao = max(ao * mix(uAOInner, 1.0, 0.58), uAOFloor);
@@ -1643,7 +1811,9 @@ void main(){
   float lockMod = clamp(uCoatLock
         * furLockShadow(position + offB, aClump.xyz, hdir, uSunDir * (m3 * sk3))
         / max(coat, 1e-4), -0.9, 0.9);
-  float aboveCoat = max(0.0, coat - L * vn * rise) * (1.0 + lockMod);
+  // MINUS: see the sign note on the shell path's own optical depth. A card
+  // is a guard hair rooted in the same lock lattice; the same argument holds.
+  float aboveCoat = max(0.0, coat - L * vn * rise) * (1.0 - lockMod);
 
   // sk / sk3 / m3 / rootO / rootW / wn are already computed above, for the
   // interior-vs-outline split; they are the same quantities.

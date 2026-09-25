@@ -924,6 +924,30 @@ export const FUR_DEFAULTS = {
    * bug, but it means an A/B that zeroes sigma silently zeroes this too.
    */
   coatLock: 12.0,
+
+  /*
+   * TUFT RELIEF AT THE COAT'S SURFACE -- the plush terms. See the long notes
+   * in fur.glsl.js (furHair's cavity block and the shell fragment's
+   * directional block) for the model; these are the numbers.
+   *
+   * Every other contrast term in this coat shades the INSIDE of the pile and
+   * is multiplied by (1 - t) so that it vanishes at the tips -- which is the
+   * one layer the camera looks at. Measured over an interior flank box at
+   * hero, 1920x1200, cards hidden so this is the shells alone: mean 168.2,
+   * sd 16.5, and tuft-scale (3-13 px) contrast 2.89, i.e. 1.7%. That is the
+   * waxy interior, and no existing knob reaches it -- uCoatLock 12 -> 30
+   * moves it 10%, uClumpAO 0.75 -> 2.0 moves it 2%, uCoatSigma 14 -> 22 moves
+   * it 23% and pays 6.4 levels of mean luminance for it.
+   *
+   * uTuftLit is directional and costs NO mean: lockMod is a dot product about
+   * a cone's axis and is as often positive as negative around it.
+   * uTuftCav is a cavity and does cost mean, which is why it is the smaller
+   * of the two -- the gap between three cones is genuinely darker and there
+   * is no way to have the dark half of a plush surface for free.
+   */
+  tuftLit: 0.90,
+  tuftCav: [1.0, 0.32],
+  tuftSurf: [0.30, 1.0],
   // How much of the undercoat felt's opacity the strand layer modulates.
   // See furHair(): the felt is the one layer with no hair in it, and wherever
   // max(a, under) picks it the coat renders as a flat plate the width of a
@@ -1849,6 +1873,9 @@ export function buildFurUniforms(ctx) {
     uCoatSigmaCard: { value: d.coatSigmaCard },
     uCoatSigmaFloor: { value: d.coatSigmaFloor },
     uCoatLock: { value: d.coatLock },
+    uTuftLit: { value: d.tuftLit },
+    uTuftCav: { value: new THREE.Vector2(d.tuftCav[0], d.tuftCav[1]) },
+    uTuftSurf: { value: new THREE.Vector2(d.tuftSurf[0], d.tuftSurf[1]) },
     uAniso: { value: 1 },
     uStrandRound: { value: d.strandRound },
     uStrandAniso: { value: d.strandAniso },
