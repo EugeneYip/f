@@ -1541,10 +1541,78 @@ export function buildField() {
    * shorter. §4c: "The nose pad sits at a defined apex, not on a blunt dome."
    * k rises 6 -> 9 mm because a smaller primitive needs a wider fillet to
    * reach the muzzle cone behind it without a step.
+   *
+   * ## AND SHRINKING IT WAS NOT ENOUGH, because the bare zone is the REGION
+   *
+   * REVIEW-7 blocker 1 measured the pale globe at 142 px against a 62 px
+   * rhinarium AFTER the shrink above had shipped (it is an ancestor of the
+   * reviewed commit). So the 10.6 mm pad is still authoring a bare disc
+   * 1.7x the width of the nose, and the reason is not the pad's SIZE.
+   *
+   * `region` is "whose primitive is nearest", and every per-region table the
+   * fur agent keys off it treats region 0 as nose leather: REGION_TABLE[0]
+   * scales the coat to 0.30 (1.2 mm of shell) and CARD_INTERIOR_MIX/
+   * cardWeight give it no hair cards AT ALL. So the bare zone is not the
+   * rhinarium, it is `nosePad`'s whole VORONOI CELL -- and a cell cannot be
+   * smaller than the primitive that owns it. Measured on the built mesh,
+   * region 0's bind-space extent: 21.7 x 19.2 x 15.7 mm, 460 vertices,
+   * against ART_DIRECTION §4b's 13 mm rhinarium and FaceDetail's 14.2 mm
+   * drawn pad. Projected at `frontal` that cell is 109 x 97 px, which is
+   * most of the review's 142 px globe (the rest is uNoseFade's own ramp on
+   * the muzzle side of the boundary).
+   *
+   * Taking the pad below 10.6 mm to fix it is not available: 10.6 mm is
+   * 1.77 cells of the 6 mm `high` grid and the comment above records that as
+   * the floor for a primitive that has to round over. A 13 mm cell would need
+   * a 6.5 mm primitive at 1.08 cells, which is the ear-apex chamfer again.
+   *
+   * So the SHAPE and the REGION are split into two primitives. `nosePad`
+   * keeps its size, its squash and its fillet and becomes ordinary muzzle --
+   * §4h's 8 mm coat, `R.muzzle`'s card weight, neutral tint -- and a small
+   * `rhinarium` sits proud at its apex carrying `R.nose` and TINT_SKIN. The
+   * region boundary is then the crossing of the two ellipsoids rather than
+   * the pad's full width, which is what puts it at the nose leather.
+   *
+   * It has to be PROUD, not inset: `primDistance` is signed, so `argmin`
+   * picks the primitive the vertex is deepest inside. An inset sphere is
+   * nearest nowhere and would own no vertices at all; a proud one owns
+   * exactly the cap it stands above. 1.0 mm of proudness is also what §4c
+   * asks for -- "the nose pad sits at a defined apex" -- and it is far under
+   * the cell size, so the mesher rounds it rather than faceting it.
+   *
+   * Two things downstream depend on region 0 continuing to EXIST, and both
+   * still work because it does:
+   *   - FurSystem sets `uNose` from `regionCentroid(src, 0)` and falls back
+   *     to the nose anchor's WORLD matrix, which its own comment records as
+   *     22.8 mm out of frame. Emptying region 0 would have silently taken
+   *     that fallback.
+   *   - FaceDetail sizes its drawn pad off region 0's extent, with a 0.80
+   *     factor that existed only to survive this cell being oversized.
    */
+  const NOSE_PAD_C = H(rostral([0, 0.2930, 0.2585]));
   f.add({
-    name: 'nosePad', a: H(rostral([0, 0.2930, 0.2585])), ra: sr(0.0090),
-    squash: [1.0, 0.86, 0.78], k: 0.009, ...furOf(R.nose),
+    name: 'nosePad', a: NOSE_PAD_C, ra: sr(0.0090),
+    squash: [1.0, 0.86, 0.78], k: 0.009, ...furOf(R.muzzle),
+    flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_FUR,
+  });
+  // The rhinarium proper. Offset along the rostral axis in BIND metres --
+  // NOSE_PAD_C is already through rostral() and skullXf(), so an authored
+  // offset would have been stretched by 1.60 and scaled by 1.18 on top.
+  // `squash` is axis-aligned (AnatField only builds a primitive frame when
+  // a != b, and this is a sphere), which is the same basis nosePad uses, so
+  // the two ellipsoids cross cleanly.
+  //
+  // 7.3 x 6.3 x 5.9 mm at 3.6 mm forward puts the crossing with nosePad at
+  // ~6.5 mm off the axis -- a 13 mm cell, §4b's rhinarium -- and leaves the
+  // apex 1.0 mm proud. k is 2.5 mm rather than nosePad's 9: the junction is
+  // meant to be the rim of a piece of leather, not a fillet.
+  const RHINARIUM_FWD = 0.0036;
+  f.add({
+    name: 'rhinarium',
+    a: [NOSE_PAD_C[0],
+        NOSE_PAD_C[1] + ROSTRUM.axis[1] * RHINARIUM_FWD,
+        NOSE_PAD_C[2] + ROSTRUM.axis[2] * RHINARIUM_FWD],
+    ra: sr(0.0062), squash: [1.0, 0.86, 0.80], k: 0.0025, ...furOf(R.nose),
     flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_SKIN,
   });
   f.add({

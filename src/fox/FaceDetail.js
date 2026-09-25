@@ -404,18 +404,18 @@ export class FaceDetail {
     ctx.faceDetail = this;
     const ns = this.noseSize;
     // The measured footprint is printed NEXT TO the drawn size because the
-    // clamp on it is a §4b judgement, not a measurement: the anatomy agent's
-    // nose REGION is wider than the rhinarium it stands for, so 0.8 x fit is
-    // an upper bound. Printing both is the only way to see whether the clamp
-    // is still saturated -- and it is the question that was asked when
-    // `nosePad` went 30.7 -> 21 mm, which a drawn-size-only line cannot
-    // answer.
+    // clamp on it is a §4b judgement, not a measurement. Printing both is the
+    // only way to see whether the clamp is still saturated -- and it is the
+    // question that was asked when `nosePad` went 30.7 -> 21 mm, which a
+    // drawn-size-only line cannot answer. It is also the line that says
+    // whether FoxAnatomy's `rhinarium` split is still landing: a footprint
+    // back up near 23 mm means region 0 has gone back to owning the whole
+    // muzzle tip, whatever the render looks like at a glance.
     console.info(`[faceDetail] ${this.parts.length} parts · nose drawn ` +
       (ns ? `${(ns.w * 1000).toFixed(1)}x${(ns.h * 1000).toFixed(1)} mm, ` +
             `${(ns.d * 1000).toFixed(1)} mm proud · footprint ` +
-            (ns.fitW ? `${(ns.fitW * 1000).toFixed(1)}x${(ns.fitH * 1000).toFixed(1)} mm ` +
-              `-> 0.8x = ${(ns.fitW * 800).toFixed(1)}x${(ns.fitH * 800).toFixed(1)} mm` +
-              `${ns.fitW * 0.8 > 0.01419 || ns.fitW * 0.8 < 0.01001 ? ' (CLAMPED)' : ''}`
+            (ns.fitW ? `${(ns.fitW * 1000).toFixed(1)}x${(ns.fitH * 1000).toFixed(1)} mm` +
+              `${ns.fitW > 0.01419 || ns.fitW < 0.01001 ? ' (CLAMPED)' : ''}`
               : 'UNMEASURED')
         : 'MISSING'));
   }
@@ -483,20 +483,37 @@ export class FaceDetail {
     // `nose` region coat, measured by FurSystem at 1.6 mm, under uNoseFade's
     // bare-to-4mm / full-by-7mm ramp.
     //
-    // NOT FIXED HERE ON PURPOSE. Growing the rhinarium to 19 mm to cover the
-    // blob is how §4b's "nose: small, black" gets lost, and it is the move
-    // §4h says this file was already making defensively. It needs the SDF
-    // blob to come down to a 13 mm rhinarium (anatomy) or uNoseFade to be cut
-    // to the DRAWN pad rather than the region centroid (fur). Ownership rule
-    // 1: reported, not patched.
+    // The first of those two has now happened, in FoxAnatomy's `nosePad`
+    // block: the SDF splits the muzzle tip's SHAPE from the nose REGION, so
+    // `nosePad` is ordinary muzzle and a small proud `rhinarium` owns region
+    // 0. Measured on the built mesh, region 0's bind-space extent, before
+    // and after: 21.7 x 19.2 mm -> 12.9 x 10.7 mm.
+    //
+    // WHICH MAKES THE 0.80 FACTOR BELOW WRONG, and it is worth being explicit
+    // about why, because a factor that was right for years is the easiest
+    // thing to leave in place. 0.80 was never a judgement about how big a
+    // rhinarium should be -- it was a correction for measuring the wrong
+    // object. The footprint read the whole `nosePad` Voronoi cell, so it came
+    // back at 23.4 x 20.6 mm for a 13 mm feature and had to be scaled down
+    // and then clamped, saturating the clamp at 14.2 x 11.2. Now the
+    // footprint reads the rhinarium's own cell, 14.2 x 11.8 mm after
+    // `_measureNoseFootprint`'s 1.10 margin, and scaling THAT by 0.80 would
+    // draw a 11.4 mm pad inside a 12.9 mm bare cell -- reinstating the pale
+    // annulus this change exists to remove, at a smaller radius.
+    //
+    // So the factor goes to 1.00 and the drawn pad covers its own region with
+    // the margin to spare. The clamp stays, unchanged and now slack rather
+    // than saturated, because it is the thing that keeps §4b's "small, black"
+    // true if the SDF ever grows again.
 
     const fit = this._measureNoseFootprint(fox, pA, tx, ty);
-    // §4b is explicit that the nose is SMALL. The anatomy agent's nose region
-    // is considerably wider than the rhinarium it represents, so the measured
-    // footprint is an upper bound to be clamped, not a target: 17.5 mm across
-    // and 9.5 mm proud read as a bulbous snout knob on a 102 mm head.
-    const w = fit ? clamp(fit.w * 0.80, 0.0100, 0.0142) : NOSE_W;
-    const h = fit ? clamp(fit.h * 0.80, 0.0078, 0.0112) : NOSE_H;
+    // §4b is explicit that the nose is SMALL: ~13 mm across on this skull.
+    // The clamp is the guard on that, not the sizing -- `fit` is now the
+    // rhinarium's own region and is meant to be followed, not discounted.
+    // 17.5 mm across and 9.5 mm proud read as a bulbous snout knob on a
+    // 102 mm head, and that is what the upper bound is protecting against.
+    const w = fit ? clamp(fit.w * 1.00, 0.0100, 0.0142) : NOSE_W;
+    const h = fit ? clamp(fit.h * 1.00, 0.0078, 0.0112) : NOSE_H;
     const d = clamp(NOSE_D * (w / NOSE_W), 0.0038, 0.0058);
 
     // --- measure the muzzle surface under the pad -------------------------
