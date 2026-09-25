@@ -2049,13 +2049,25 @@ for (const [region, v] of Object.entries(sbr)) {
     // What this must still catch is the defect that shipped: 44-79 px, up to
     // **48 mm**, which is the ankle under the snow and the leg amputated by
     // the ground plane, certified green by all 76 bone-space checks.
-    const CEILING_MM = 25;
+    // 17.5, not 25, per ART_DIRECTION.md §6b. The old figure double-counted:
+    // it read 9.5 mm of paw coat plus 15 mm of "legitimate sink", but this
+    // check takes its snow line from `ctx.terrain.heightAt`, and the terrain
+    // under a planted paw is PRESSED -- so the sink's displacement is
+    // already in the reference. The honest budget is coat 9.5 plus the
+    // commanded sink 8.0.
+    //
+    // The measured transfer proves the double-count: taking 9 mm off the
+    // commanded sink bought only 5.2 mm of burial, about 0.58 mm per mm,
+    // because the press gives the rest back. Worst foot is now 15.3 mm
+    // against 17.5, so 2.2 mm of margin.
+    const CEILING_MM = 17.5;
     const worst = seen.reduce((a, b) => (b[1].belowSnowMm > a[1].belowSnowMm ? b : a));
     record('the drawn foot meets the drawn snow', worst[1].belowSnowMm <= CEILING_MM,
       seen.map(([k, v]) => `${k} ${v.belowSnowMm}mm`).join(', ') +
       ` — worst ${worst[0]} at ${worst[1].belowSnowMm}mm below the projected ` +
-      `snow line (max ${CEILING_MM}mm = 9.5mm of paw coat + 15mm of ` +
-      `legitimate sink). Measured on the coverage matte against ` +
+      `snow line (max ${CEILING_MM}mm = 9.5mm of paw coat + 8mm of ` +
+      `commanded sink; the press is already in the reference, see §6b). ` +
+      `Measured on the coverage matte against ` +
       `ctx.terrain.heightAt; no bone consulted`);
   }
 }
