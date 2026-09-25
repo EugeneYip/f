@@ -145,6 +145,104 @@ const FLEX_W = [0.16, 0.26, 0.18, -0.12, -0.26, -0.22];
  */
 const SWING_DROP_MPS = 1.2;
 /**
+ * RIBCAGE EXPANSION per unit of `breathCurve()` — the thing that makes the
+ * animal read as alive rather than as a still with noise on it.
+ *
+ * REVIEW-7 blocker 7: "Nothing ever breathes." That was correct, and the
+ * reason is that the breath had no axis a viewer can see. Measured at t=2.5,
+ * with the breath curve forced to -0.5 and +0.5 and nothing else changed,
+ * over 10,276 trunk vertices of the skinned surface:
+ *
+ *   dorsal silhouette (topline)   3.385 mm peak-to-peak
+ *   ventral silhouette (belly)    0.024 mm
+ *   lateral silhouette (width)    0.032 mm
+ *   mean travel over the trunk    1.755 mm
+ *
+ * i.e. the whole breath was 3.4 mm of one line on the top of the animal,
+ * under 20-50 mm of coat, at ~1.5 px/mm. The belly and the flanks — the two
+ * places a person actually watches an animal breathe — were doing nothing at
+ * all, because rotating and translating a spine chain cannot expand a
+ * ribcage. `Rig.mul` was added for this.
+ *
+ * The numbers are fractions of the trunk's own dimensions per unit `br`, and
+ * `br` has a peak-to-peak of 1.0 at rest. The trunk is 171 mm across and the
+ * belly sits ~150 mm below the spine bones, so these land near 4 mm of width
+ * and 5 mm of belly travel — around 2 % of the body's dimensions, which is
+ * what quiet breathing in a 3.5 kg canid is. Skinning spreads each bone's
+ * scale over the vertices it shares, so the delivered figure is smaller than
+ * the naive product; the measured result is in the commit message.
+ *
+ * The profile is CUMULATIVE along the chain, peaking at spine04 (the deepest
+ * part of the ribcage) and tapering at both ends so the pelvis stays put and
+ * the neck does not balloon.
+ */
+const BREATH_WIDTH = 0.085;
+const BREATH_DEPTH = 0.095;
+/**
+ * Thoracic arc, in radians per unit `br`, distributed so the weights SUM TO
+ * ZERO. That is the whole point of the shape: the ribcage lifts in the middle
+ * while the pelvis and the shoulder girdle stay level, so the head does not
+ * nod. The previous terms summed to +0.0101 — a net pitch of the whole front
+ * of the animal — and at an amplitude a viewer could see, the same profile
+ * would swing the nose about 12 mm per breath, which reads as a head bob and
+ * not as a breath.
+ *
+ * `BREATH_ARC` and `BREATH_LIFT` are calibrated against the RENDERED back,
+ * not against bone angles: a 233-column strip across the topline at
+ * `profile` is cross-correlated between an inhale arm and an exhale arm at
+ * ONE sim time, sub-pixel by parabola. That instrument reads 0.000 px for two
+ * identical arms and 4.74 mm for a known 5.000 mm lift of the whole animal,
+ * so it is calibrated in both directions. The calibration table is in the
+ * commit message.
+ */
+const BREATH_ARC = 0.300;
+const BREATH_FLEX = [
+  ['spine01', 0.10], ['spine02', 0.34], ['spine03', 0.20],
+  ['spine04', -0.30], ['chest', -0.34],
+];
+/**
+ * Thoracic RISE, in metres per unit `br`, distributed over the ribcage.
+ *
+ * This is the term that actually carries the breath: the ribcage rises as a
+ * body about the lumbar hinge. It was already here as a single
+ * `rig.offset('spine03', 0, 0.0034 * br, 0)` and delivered 3.4 mm of the
+ * measured 4.55 mm peak-to-peak — so the old animal was NOT motionless, and
+ * REVIEW-7's "nothing ever breathes" was never measured on the body (the
+ * 182.89/182.71/182.83/182.79 box is in front of the NOSE and is measuring
+ * the condensation plume, which is `src/world/Breath.js` and not this file).
+ * What was true is that 4.55 mm at 1.06 px/mm under a 20-50 mm coat is under
+ * five pixels, which is not enough to read as life.
+ *
+ * `BREATH_NECK_GIVE` hands most of the rise back at the neck: without it the
+ * skull rides the full excursion and the animal reads as nodding rather than
+ * breathing. The forelimbs ride it too, and there the IK absorbs it against
+ * the locked feet, which is what the old "counter-lifted humeri" comment
+ * meant.
+ */
+const BREATH_LIFT = 0.0400;
+/**
+ * The negative term on `chest` is not a tuning fudge, it is the fix for a
+ * measured cancellation. Lifting the whole thoracic chain lifts the SHOULDER
+ * GIRDLE with it, the forelimbs are IK-locked to the snow, and past about
+ * 5 mm the reach backstop drops the root to let them keep reaching — so the
+ * breath ate itself. Measured on the rendered back: 0.0100 → 5.53 mm
+ * peak-to-peak, 0.0200 → 3.60 mm. Doubling the drive made the animal breathe
+ * LESS. Holding the chest (and therefore the shoulders) nearly still while
+ * spine02..spine04 rise keeps the forelimb inside its envelope, and is also
+ * the right anatomy: the thoracic inlet barely moves and the caudal ribs move
+ * most.
+ */
+const LIFT_PROFILE = [
+  ['spine02', 0.30], ['spine03', 0.45], ['spine04', 0.25], ['chest', -1.00],
+];
+const BREATH_NECK_GIVE = 0.85;
+const RIB_PROFILE = [
+  ['spine01', 0.22], ['spine02', 0.66], ['spine03', 0.94],
+  ['spine04', 1.00], ['chest', 0.82],
+];
+/** Children of `chest` that must NOT inflate with it. */
+const RIB_COUNTER = ['neck01', 'shoulderL', 'shoulderR'];
+/**
  * The review harness's SINGLE simulation advance, in seconds.
  *
  * `shoot.mjs` settles once before the pose loop and never again; `spec.mjs`
@@ -879,12 +977,31 @@ export class FoxBrain {
     // Chest rise, counter-lifted humeri so the front feet are not dragged up
     // (the IK would absorb it anyway, but this keeps the shoulder angle sane).
     const br = life.breathCurve() * life.breathAmp;
-    rig.add('spine03', 0.0079 * br, 0, 0);
-    rig.add('spine04', -0.0058 * br, 0, 0);
-    rig.add('spine02', 0.0034 * br, 0, 0);
-    rig.add('chest', 0.0046 * br, 0, 0);
-    rig.offset('spine03', 0, 0.0034 * br, 0);
-    rig.offset('chest', 0, 0.0016 * br, 0);
+    const arc = BREATH_ARC * br;
+    for (let k = 0; k < BREATH_FLEX.length; k++) {
+      rig.add(BREATH_FLEX[k][0], BREATH_FLEX[k][1] * arc, 0, 0);
+    }
+    let lift = 0;
+    for (let k = 0; k < LIFT_PROFILE.length; k++) {
+      const dy = BREATH_LIFT * LIFT_PROFILE[k][1] * br;
+      rig.offset(LIFT_PROFILE[k][0], 0, dy, 0);
+      lift += dy;
+    }
+    rig.offset('neck01', 0, -BREATH_NECK_GIVE * lift, 0);
+    // The ribcage itself. `breathAmp` reaches 2.3 at a flat gallop, which
+    // would be a 9 % trunk — clamped, because a heaving animal is not an
+    // inflating one, and the gallop already has `spineFlex` on the same
+    // joints.
+    const brX = clamp(br, -0.85, 0.85);
+    const wX = 1 + BREATH_WIDTH * brX, wY = 1 + BREATH_DEPTH * brX;
+    let cX = 1, cY = 1;
+    for (let k = 0; k < RIB_PROFILE.length; k++) {
+      const tX = 1 + (wX - 1) * RIB_PROFILE[k][1];
+      const tY = 1 + (wY - 1) * RIB_PROFILE[k][1];
+      rig.mul(RIB_PROFILE[k][0], tX / cX, tY / cY, 1);
+      cX = tX; cY = tY;
+    }
+    for (let k = 0; k < RIB_COUNTER.length; k++) rig.mul(RIB_COUNTER[k], 1 / cX, 1 / cY, 1);
     // Nostril flare / jaw float on the breath, plus the yawn.
     const yawn = life.yawn;
     rig.add('jaw', 0.012 * Math.max(0, br) + yawn * 0.62, 0, 0);
