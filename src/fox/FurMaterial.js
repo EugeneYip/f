@@ -986,7 +986,10 @@ export const FUR_DEFAULTS = {
   coatRuffle: 0.055,
 
   // cards
-  cardWidth: 0.115,
+  cardWidth: 0.075,
+  // 0.115 x the old 0.0045 coat-depth clamp: the width a minimum-coat card
+  // had before cardWidth came down. See the sweep in fur.glsl.js.
+  cardWFloor: 0.000518,
   cardLength: 1.20,
   /*
    * Minimum guard-hair stand-off past the coat, METRES. See the card vertex
@@ -1672,6 +1675,27 @@ export const FUR_DEFAULTS = {
   cardHairFade: 0.10,
 
   cardCut: 0.004,
+  cardProf: 0.55,
+  // 0: with the lattice no longer dissolving (uCardHairLod) the align
+  // guarantee holds again and the quad edge is already at alpha 0, so the
+  // feather is redundant. Kept because it is the only lever if a future
+  // tier ever has to run the fixed lattice.
+  cardProfMix: 0.0,
+  /*
+   * PIXELS PER HAIR CELL. 2.2 is one TAA jitter either side of a 1 px
+   * hair: below about 2 the lattice is what the card LOD used to dissolve
+   * and the coat crawls; far above it the card gives up hairs it could
+   * have drawn.
+   */
+  cardCellPx: 2.2,
+  cardHairLod: 0.0,
+  // The lock's dense core, as a share of the half-width, and the duty it
+  // falls to at the outermost hair. See the note in the card fragment
+  // shader: a global duty cut thins the pile and trips spec.mjs's fill
+  // floor; a margin cut costs a small share of the area and is the part
+  // whose straight edge reads as a blade.
+  cardCore: 0.45,
+  cardEdgeDuty: 1.0,
 };
 
 /**
@@ -1914,6 +1938,13 @@ export function buildFurUniforms(ctx) {
     uCardEdgeLen: { value: new THREE.Vector2(d.cardEdgeLen[0], d.cardEdgeLen[1]) },
     uCardIntMix: { value: intMix },
     uCardCut: { value: d.cardCut },
+    uCardWFloor: { value: d.cardWFloor },
+    uCardProf: { value: d.cardProf },
+    uCardProfMix: { value: d.cardProfMix },
+    uCardCellPx: { value: d.cardCellPx },
+    uCardHairLod: { value: d.cardHairLod },
+    uCardCore: { value: d.cardCore },
+    uCardEdgeDuty: { value: d.cardEdgeDuty },
   };
 }
 

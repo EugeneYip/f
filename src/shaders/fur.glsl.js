@@ -1586,6 +1586,7 @@ ${SKIN_FN}
 ${FUR_LOCK}
 
 uniform float uCardWidth;
+uniform float uCardWFloor;  // absolute half-width floor, metres; see the note
 uniform float uCardLength;
 uniform float uCardFloor;   // PEAK guard-hair stand-off past the coat, metres
 uniform float uCardFloorLow; // what the shortest lock gets, as a fraction of it
@@ -1892,8 +1893,40 @@ void main(){
   // thrown away downstream, which is why the flank (7.5 px hairs) broke up
   // beautifully while the ears stayed a hard mesh curve. The floor keeps thin-
   // coat regions above the clamp's reach; thick-coat regions never hit it.
-  float w = uCardWidth * clamp(furLength * uCoatScale, 0.0045, 0.06)
-          * (0.55 + 0.9 * rnd) * pow(max(1.0 - v, 0.0), 0.5);
+  /*
+   * AND AN ABSOLUTE FLOOR, so narrowing the card does not narrow the ear.
+   *
+   * uCardWidth came down 0.115 -> 0.075 because on deep coat the card is the
+   * blade: 2 * 0.115 * 44 mm * (0.55..1.45) is 5.6-14.6 mm, which carries
+   * 10-25 drawn hairs against a real guard hair of 0.05-0.10 mm, and at body
+   * range the whole quad pre-filters to one ribbon. Measured on a true
+   * coverage matte at profile, 1920x1200 (same-state control agrees to 0.1%):
+   *
+   *     uCardWidth   coverage   fringe fill   mean run px   peaks/100px   band
+   *       0.115       394 634      0.350         3.33          17.1      140 010
+   *       0.095       392 088      0.341         3.20          17.3      143 337
+   *       0.085       389 428      0.335         3.13          17.4      143 005
+   *       0.070       386 254      0.325         2.99          17.6      145 696
+   *       0.055       381 777      0.312         2.83          17.8      154 054
+   *
+   * The fringe gets FINER (shorter covered runs, more separate maxima) and
+   * DEEPER (band up 4% at 0.070), for 2% of coverage and 7% of fill. That is
+   * not the thinning trade four previous attempts ran into -- the contour
+   * badFrac is flat across the whole sweep, 3.4-4.1% against a base of
+   * 3.9/3.4. What pays for it is overlap: 26 000 cards on ~10 mm centres are
+   * wall-to-wall, so union coverage saturates and the width above that is
+   * spent entirely on making each lump wider.
+   *
+   * But the same multiplier reaches the thin-coat regions, where the card is
+   * already sub-pixel and the note below is about TAA erasing it. Those are
+   * the regions the 0.0045 clamp exists for, so hold their ABSOLUTE width
+   * instead: uCardWFloor is uCardWidth x that clamp at the value it had
+   * before, and it makes the ear, muzzle and paw cards bit-identical while
+   * the flank, ruff and tail narrow.
+   */
+  float wRnd = 0.55 + 0.9 * rnd;
+  float w = max(uCardWidth * clamp(furLength * uCoatScale, 0.0045, 0.06),
+                uCardWFloor) * wRnd * pow(max(1.0 - v, 0.0), 0.5);
   wp.xyz += B * (side * w);
 
   vRoot = position;
@@ -1990,6 +2023,12 @@ uniform float uCardDuty;       // share of a card's AREA that is hair; see below
 uniform float uCardDutyMax;    // ceiling on one hair's half-width in its cell
 uniform float uCardHairLen;    // shortest per-hair length, in card lengths
 uniform float uCardHairFade;   // per-hair tip ramp, in card lengths
+uniform float uCardProf;       // cross-card profile power once the lattice
+uniform float uCardProfMix;    // dissolves; see the note at the lod mix
+uniform float uCardCellPx;     // pixels one hair cell is held to on screen
+uniform float uCardHairLod;    // 0 disables that cap (the old fixed lattice)
+uniform float uCardCore;       // share of the half-width at full duty
+uniform float uCardEdgeDuty;   // duty multiplier at the card's outermost hair
 
 varying vec4  vCard;
 varying float vEdge;
@@ -2034,6 +2073,33 @@ void main(){
    * visible except as this edge.
    */
   float n  = mix(nRaw, max(1.0, floor(nRaw + 0.5)), uCardHairAlign);
+  /*
+   * HAIRS PER CARD IS A SCREEN-SPACE QUANTITY, and treating it as a constant
+   * is what turns a card into a plate.
+   *
+   * n is fixed in card space, so the on-screen width of one hair cell is the
+   * card's width divided by n -- which means the lattice is resolved at macro
+   * and far under a pixel at body range, where fwidth(s) reaches ~1.4 against
+   * a dissolve that completes at 0.85. Past that the branch below replaces
+   * every hair with the card's mean and the card renders as one ribbon. The
+   * cap at uCardHairs 5.0 exists for the same reason from the other side:
+   * raising it "drives fwidth(s) past the lattice's LOD dissolve".
+   *
+   * Both are the same missing idea. Choose n per fragment so a cell lands on
+   * uCardCellPx pixels: the card keeps every hair it can actually resolve and
+   * gives up only the ones it could not have drawn, the lattice never
+   * dissolves, and uCardHairs stops being a compromise between two framings
+   * -- it is now the macro count, with body range deriving its own.
+   *
+   * Integral, because uCardHairAlign's guarantee needs it: with n an integer
+   * the lattice starts and ends on the card's own edges, alpha is 0 there by
+   * construction, and the card's silhouette is the outermost HAIR's rather
+   * than the quad's. A fractional cap would put a cut hair back on the quad
+   * boundary, which is the straight hard side this is trying to remove.
+   */
+  float cellX = max(fwidth(vCard.x), 1e-6);
+  float nLod  = max(1.0, floor(1.0 / (uCardCellPx * cellX)));
+  n = mix(n, min(n, nLod), uCardHairLod);
   float s  = vCard.x * n + rnd * 7.31 * (1.0 - uCardHairAlign);
   float fi = floor(s);
   float fr = fract(s);
@@ -2065,6 +2131,24 @@ void main(){
    * alpha is still 0 at vCard.x 0 and 1. It costs ~6% of the mean duty.
    */
   float rad = min(uCardDuty * (0.50 + 1.00 * hr), uCardDutyMax);
+  /*
+   * AND THE DUTY FALLS TOWARD THE CARD'S MARGINS.
+   *
+   * A card is a lock, and a lock is dense in its core with individual hairs
+   * escaping at its edges -- not a rectangle of uniform hair density with two
+   * straight sides. Holding the duty flat across the width is what makes the
+   * card's own boundary legible, and at 0.85 duty the gaps between hairs are
+   * 15% of a cell, so even a fully resolved card is a near-solid ribbon with
+   * thin dark lines scored in it.
+   *
+   * Taking the duty down globally is not available: coverage in the fringe is
+   * exactly E[rad], so it thins the pile, and spec.mjs guards a fill floor
+   * against precisely that. Taking it down only at the margins costs a small
+   * fraction of the area -- the core, which is most of it, is untouched --
+   * and it is the part of the card whose edge is the blade.
+   */
+  float xc = abs(vCard.x * 2.0 - 1.0);
+  rad *= mix(1.0, uCardEdgeDuty, smoothstep(uCardCore, 1.0, xc));
   float aa  = clamp(fwidth(s) * 1.6, 0.02, 1.2);
   float a   = 1.0 - smoothstep(rad - aa, rad + aa, d);
 
@@ -2113,7 +2197,50 @@ void main(){
   // fwidth(s) along the lower contour is already far below 0.30, so this term
   // is not running there at all. See FUR_DEFAULTS.cardCut for what is.
   float lod = 1.0 - smoothstep(0.30, 0.85, fwidth(s));
-  a = mix(clamp(rad * 0.70, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
+  /*
+   * AND THIS IS THE WIDE FLAT TRANSLUCENT BLADE.
+   *
+   * When the hair lattice goes sub-pixel the honest answer is its mean, and
+   * that is what this line computes. But it lays that mean FLAT across the
+   * whole quad -- constant alpha from vCard.x 0 to 1 -- so the card's
+   * silhouette becomes the QUAD's silhouette: a ribbon 6-16 mm wide with two
+   * dead-straight full-strength sides. That is what a blade is, and it is
+   * precisely the guarantee uCardHairAlign exists to provide and that this
+   * branch silently voids ("since rad <= 0.6 the alpha there is 0 by
+   * construction" -- true of the resolved path, false here).
+   *
+   * AND IT IS THE REGIME EVERY BODY FRAMING RUNS IN. At hero the flank card
+   * is ~10 mm over ~12 px with n ~ 17 hairs, so fwidth(s) ~ 1.4 against a
+   * dissolve that completes at 0.85. Proved rather than computed: in one page
+   * session at one instant, uCardHairs 5 -> 14 moves the interior flank mean
+   * by 0.018 levels of 182 and the tuft contrast by 1.2%. A knob whose whole
+   * job is the hair lattice doing nothing at all is the lattice not being
+   * evaluated. That also retires the reason uCardHairs was capped at 5.0
+   * ("raising it drives fwidth past the LOD dissolve") -- at body range it is
+   * already past it, and the cap was only ever protecting the framings where
+   * lod is 1 and the lattice is resolved anyway.
+   *
+   * So give the pre-filtered card a profile instead of a plate. Area is
+   * preserved (uCardProf / (uCardProf + 1) is the mean of the profile over
+   * the quad, and it is divided back out), so this moves coverage from the
+   * card's two edges into its middle rather than removing any: the outermost
+   * hairs of a real bundle are individual and faint, its core is solid.
+   */
+  //
+  // FEATHER THE SIDES, DO NOT TAPER THE WHOLE CARD. A full cross-card taper
+  // (1 - xc^k, area divided back out) was tried first: it narrows the runs
+  // in the fringe by 19% -- the right direction -- but concentrating the same
+  // mean alpha into a narrower core loses union coverage over the overlapping
+  // cards, and on a true coverage matte at profile the fringe fill went
+  // 0.350 -> 0.301 and the band 24% shallower. spec.mjs guards a fill floor
+  // precisely because thinning the pile is how this metric gets gamed. The
+  // hard EDGE is the blade tell, not the flat core, so feather only the outer
+  // uCardProf of the half-width and keep the middle at full strength.
+  float prof  = 1.0 - smoothstep(uCardProf, 1.0, xc);
+  float pArea = 0.5 * (1.0 + uCardProf);
+  float flatA = clamp(rad * 0.70, 0.0, 1.0)
+              * mix(1.0, prof / max(pArea, 1e-3), uCardProfMix);
+  a = mix(clamp(flatA, 0.0, 1.0) * tipFade * smoothstep(0.0, 0.12, v), a, lod);
 
   // Strongest exactly where the surface turns away — the silhouette.
   // Interior opacity floor, per region.
