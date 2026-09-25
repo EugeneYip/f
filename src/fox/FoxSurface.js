@@ -24,11 +24,12 @@ import * as THREE from 'three';
 import { smoothstep, saturate } from '../util/math.js';
 import {
   buildField, REGION as R, FUR, NECK_CREST, TORSO_REGIONS, CRANIUM, EAR, EAR_NORMAL, EAR_SPAN,
+  LANDMARKS, skullXf, rostral,
 } from './FoxAnatomy.js';
 import { Field } from './AnatField.js';
 import {
-  sampleGrid, surfaceNets, buildAdjacency, relax,
-  analyticNormals, triangulate, smoothField,
+  sampleGrid, surfaceNets, buildAdjacency, buildAdjacencyTri, relax,
+  analyticNormals, triangulate, smoothField, refineCurvature,
 } from './AnatMesher.js';
 
 /**
@@ -41,6 +42,66 @@ import {
  */
 export const CELL = { low: 0.0076, medium: 0.0067, high: 0.0060, ultra: 0.0056 };
 
+/**
+ * WHERE THE UNIFORM CELL IS TOO COARSE, AND WHY THE ANSWER IS A ZONE.
+ *
+ * The cell is uniform and the curvature is not. Measured on the shipped mesh,
+ * neighbour-normal step between adjacent faces:
+ *
+ *   flank / back      median  1.7 deg   p90  4.9   — invisible, 80 mm radius
+ *   muzzle tip <30mm  median 13.3 deg   p90 29.1   — the reviewers' "decagon"
+ *   upper pinna       median  8.6 deg   p90 24.2   — the ear stair-step
+ *
+ * A uniform 3 mm cell fixes both (muzzle median 6.7 / p90 14.0) at 4x the
+ * triangles, which we cannot spend: `buildShellGeometry` hands the fur an
+ * InstancedBufferGeometry over THESE buffers, so a skin triangle is drawn once
+ * per shell (18 at `high`) plus once more by the coat's shadow caster.
+ *
+ * Refining by curvature ALONE is also unaffordable — it selects 39 % of the
+ * whole mesh at a 12 deg threshold, because the legs, hocks and paws are thin
+ * tubes and are just as curved as the muzzle (hock 1238, pawFront 1041,
+ * legFrontLower 1764 triangles). They are also under 9-20 mm of coat and are
+ * not what any review pose is pointed at. So the zone is the HEAD, and the
+ * leg/hock/paw curvature is recorded here for whoever gets the budget for it.
+ *
+ * ## The zone is three capsules, not a sphere
+ *
+ * A single ball around the head cannot separate the ear tips from the armpit:
+ * measured off the runtime rig, the ear tip is 99.8 mm from the skull axis and
+ * the axilla is 99.3 mm. The first version of this used one sphere and put 90
+ * refined vertices and a 145 degree fold into the chest and belly, 30 mm
+ * outside anything the selection had asked for.
+ *
+ * So the zone follows the anatomy: one capsule down the skull's own axis
+ * (braincase centre -> the nose-pad point `Fox.js` marches its nose anchor
+ * from, so a rostrum change moves both together) and one down each pinna
+ * (ear base -> ear tip). Every endpoint is a live rig anchor, so a proportion
+ * change carries the zone with it instead of leaving it behind. NOTE that
+ * `LANDMARKS` is REWRITTEN at module load by `skullXf` — the literals in
+ * FoxAnatomy are authored-space and are not what you get at runtime.
+ */
+const SKULL_ZONE_R = 0.050;     // covers muzzle tip 27.6 mm, skull top 31.2, neck02 34.0
+const EAR_ZONE_R = 0.035;       // pinna base half-width is ~26 mm plus the blade
+
+function headZone() {
+  CRANIUM.refresh();
+  return [
+    { a: CRANIUM.braincase.c, b: skullXf(rostral([0, 0.2930, 0.2480])), r: SKULL_ZONE_R },
+    { a: LANDMARKS.earR01, b: LANDMARKS.earR_tip, r: EAR_ZONE_R },
+    { a: LANDMARKS.earL01, b: LANDMARKS.earL_tip, r: EAR_ZONE_R },
+  ];
+}
+
+/** Squared distance from a point to a segment. */
+function segDist2(x, y, z, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+  const l2 = dx * dx + dy * dy + dz * dz;
+  let t = l2 > 1e-12 ? ((x - a[0]) * dx + (y - a[1]) * dy + (z - a[2]) * dz) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const px = x - (a[0] + dx * t), py = y - (a[1] + dy * t), pz = z - (a[2] + dz * t);
+  return px * px + py * py + pz * pz;
+}
+
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export async function buildFoxSurface(skeleton, {
@@ -49,6 +110,13 @@ export async function buildFoxSurface(skeleton, {
   fieldSmooth = 3,
   flowSmooth = 5,
   onYield = null,
+  /**
+   * Head refinement: `false` (positive control — the pre-refinement mesh, and
+   * the base vertices are bit-identical either way), `true`, or a level count.
+   */
+  refine = true,
+  /** Vertex-normal spread, in degrees, above which a triangle is split. */
+  refineThresholdDeg = 12,
 } = {}) {
   const t0 = now();
   const timings = {};
@@ -77,13 +145,16 @@ export async function buildFoxSurface(skeleton, {
   await yieldNow();
 
   t = now();
-  const { pos, quads, nv } = surfaceNets(g, min, h, dims);
+  const nets = surfaceNets(g, min, h, dims);
+  const quads = nets.quads;
+  let pos = nets.pos;
+  let nv = nets.nv;
   timings.nets = now() - t;
   if (!nv) throw new Error('FoxSurface: empty isosurface');
   await yieldNow();
 
   t = now();
-  const adj = buildAdjacency(nv, quads);
+  let adj = buildAdjacency(nv, quads);
   timings.adjacency = now() - t;
   await yieldNow();
 
@@ -93,9 +164,63 @@ export async function buildFoxSurface(skeleton, {
   await yieldNow();
 
   t = now();
-  const normals = analyticNormals(field, pos, h);
-  const index = triangulate(pos, normals, quads);
+  let normals = analyticNormals(field, pos, h);
+  let index = triangulate(pos, normals, quads);
   timings.normals = now() - t;
+  await yieldNow();
+
+  // ------------------------------------------------------------- refinement --
+  // See SKULL_ZONE_R above for why the zone exists and why it is the head.
+  // Everything after this point — the fur fields, the log-space smoothing, the
+  // skin weights — runs over the REFINED vertex set, so no downstream system
+  // has to know this happened.
+  t = now();
+  const caps = headZone();
+  const inZone = (x, y, z, grow) => {
+    for (const c of caps) {
+      const r = c.r + grow;
+      if (segDist2(x, y, z, c.a, c.b) < r * r) return true;
+    }
+    return false;
+  };
+  const ref = refineCurvature(field, pos, normals, index, {
+    zone: (x, y, z) => inZone(x, y, z, 0),
+    // One cell of dilation: enough for the closure to make clean 1:4 splits at
+    // the patch boundary, and provably not enough to reach anything else.
+    edgeZone: (x, y, z) => inZone(x, y, z, h),
+    // 12 deg of vertex-normal spread across one triangle. Swept 10/12/14/16/18
+    // at two levels, reporting the p90 neighbour-normal step it actually
+    // delivers at the muzzle tip and the upper pinna against the triangles it
+    // costs:
+    //
+    //   thr   tris    nose p90   ear p90
+    //    10   44366     9.23       8.77
+    //    12   41782     9.28       9.19     <- here
+    //    14   39668    10.02       9.54
+    //    16   37440    10.93      10.18
+    //    18   35570    12.51      10.96
+    //
+    // 12 is the loosest threshold that puts BOTH under 10 deg; 10 buys 0.05 deg
+    // for another 2584 triangles, which is 46 000 more fur triangles for
+    // nothing.
+    thresholdDeg: refineThresholdDeg,
+    levels: typeof refine === 'number' ? refine : (refine ? 2 : 0),
+    // Floor on a splittable edge. One level takes the 5.6 mm muzzle edge to
+    // 2.8 mm, which is the 2-3 mm the target asks for; a second level is only
+    // wanted where the FIRST one did not get there, so the floor sits just
+    // under a level-0 edge and the second level lands on the pinna rim and the
+    // rhinarium and nowhere else.
+    minEdge: 0.0013,
+    baseGradH: h * 0.30,
+  });
+  pos = ref.pos;
+  index = ref.index;
+  nv = ref.nv;
+  // Refined vertices get a central-difference step scaled to their own edge
+  // length; base vertices keep h * 0.30 and their normals are bit-identical.
+  normals = analyticNormals(field, pos, h, ref.gradH);
+  adj = buildAdjacencyTri(nv, index);
+  timings.refine = now() - t;
   await yieldNow();
 
   // --------------------------------------------------------- per-vertex data --
@@ -434,6 +559,8 @@ export async function buildFoxSurface(skeleton, {
     vertices: nv,
     triangles: index.length / 3,
     quads: quads.length / 4,
+    refineAdded: ref.added,
+    refineLevels: ref.perLevel,
     gridDims: dims,
     cell: h,
     gridEvals: evals,
