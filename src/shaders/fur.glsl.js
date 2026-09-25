@@ -118,6 +118,7 @@ uniform float uAmbientSat;
 // around the horizon. uSkyColor is the zenith swatch, and a surface does not
 // see the zenith -- see the ambient block in furShade().
 uniform float uSkyHorizon;
+uniform float uSkyAperture;   // how far the sky's HUE follows sh.y; see furShade
 uniform float uSunSat;
 uniform float uTransSat;
 
@@ -1011,9 +1012,56 @@ vec3 furShade(vec3 N, vec3 T, vec3 V, float t, float ao, float rnd,
   // this scene IS that band: sunlit snow and the glow above it are the same
   // pale blue-white. No new colour enters the palette, and the term still
   // degrades correctly if the sky agent changes either swatch.
-  vec3 skyDome = mix(uSkyColor, uGroundBounce, uSkyHorizon);
-  float up = N.y * 0.5 + 0.5;
-  vec3 amb = mix(uGroundBounce, skyDome, up);
+  /*
+   * AND THE SKY'S COLOUR MUST FOLLOW THE SAME APERTURE ITS INTENSITY DOES.
+   *
+   * uSkyHorizon is a CONSTANT mix, so every hair in the coat is told it sees
+   * the same share of the pale horizon band -- the hair standing clear on the
+   * crest of a lock and the hair 30 mm down inside the pile alike. That is
+   * the flat-hemisphere error the lighting agent found next door in the
+   * snow's skyVis, in a different costume: a visibility function with no
+   * response to what is actually in the way.
+   *
+   * A slot sees the zenith and nothing else. The horizon band is the FIRST
+   * thing an aperture occludes, because it is the part of the dome nearest
+   * the walls, and the zenith is the last. So as the sky's intensity falls
+   * the light that is left is BLUER, not merely dimmer -- and sh.y is
+   * already exactly that aperture: the Beer-Lambert transmittance of the
+   * hair above this point toward the dome, plus (since uTuftCav) the cavity
+   * between locks.
+   *
+   * This is what the SSAO pass had been standing in for. The shaded coat
+   * measured B-R 26.46 with the blue-grey wash over it and 16.18 without, so
+   * a post-process paint was supplying the coat's shadow colour; with the
+   * wash correctly gone the check reads 11.5 against a floor of 18.6 and
+   * ART_DIRECTION 3's own shaded-fur swatch at +31.
+   *
+   * MEAN-PRESERVING IN LUMINANCE, deliberately. uSkyColor is both the bluest
+   * and by far the darkest part of the dome, so leaning the interior toward
+   * it would otherwise darken the coat -- and the coat has no luminance
+   * headroom at all (4b: "only slightly brighter than its background", and
+   * spec.mjs holds coat/snow at 0.80). Renormalising to the reference mix's
+   * own luma leaves this a pure hue rotation: the intensity is still sh.y's
+   * job and nothing here touches it.
+   */
+  float up  = N.y * 0.5 + 0.5;
+  vec3 skyRef = mix(uSkyColor, uGroundBounce, uSkyHorizon);
+  vec3 ambRef = mix(uGroundBounce, skyRef, up);
+  // The rim below reads the OPEN dome: a rim hair is on the silhouette with
+  // nothing over it, so it is the reference mix by construction.
+  vec3 skyDome = skyRef;
+  // How CLOSED the aperture over this hair is. sh.y is the transmittance of
+  // the pile toward the dome, so 1 - sh.y is how much of the dome the coat
+  // itself has taken away.
+  float cl = clamp(uSkyAperture * (1.0 - clamp(sh.y, 0.0, 1.0)), 0.0, 1.0);
+  // Two things close in order. The pale horizon band goes first, because it
+  // is the part of the dome nearest the walls of the slot; the snow bounce
+  // goes with it, because it arrives from below and a hair inside the coat
+  // has coat below it too. What is left at the bottom is a shaft of zenith,
+  // which is the bluest and darkest swatch in the palette.
+  vec3 skyRaw = mix(uSkyColor, uGroundBounce, uSkyHorizon * (1.0 - cl));
+  vec3 ambRaw = mix(uGroundBounce, skyRaw, mix(up, 1.0, cl));
+  vec3 amb = ambRaw * (luma(ambRef) / max(luma(ambRaw), 1e-4));
   amb = mix(vec3(luma(amb)), amb, uAmbientSat);
   // sh.y goes here rather than into ao because ao is clamped from below
   // by uAOFloor (0.54) and the clamp is what has been holding the interior

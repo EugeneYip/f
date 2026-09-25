@@ -769,7 +769,13 @@ export const FUR_DEFAULTS = {
    * blue-grey, never pink" still binds: at 0.70 the coat is 31 levels bluer
    * than it is red, which is blue-grey.
    */
-  ambientSat: 0.70,
+  // 0.70 -> 1.00. The sweep in the block above chose 0.70 by landing the coat
+  // on the shaded swatch's B-R +31 -- and it was reading +34 at 1.00 because
+  // the SSAO wash was adding 10.3 points of blue on top of the fur. With the
+  // wash gone the same calibration lands the coat at +11.5, i.e. the number
+  // this knob was tuned against was never the fur's. At 1.00 it is the
+  // ambient's own chromaticity, undamped, which is what the term should be.
+  ambientSat: 1.00,
   // See furShade(): uSkyColor is the ZENITH, which is the darkest and bluest
   // patch of a polar sky, and using it as the whole upward irradiance is the
   // single largest contributor to the blue cast. 0.65 was chosen by measuring
@@ -777,6 +783,37 @@ export const FUR_DEFAULTS = {
   // -31): at 0.65 the shaded coat lands on -29/-31 at `frontal`/`profile`,
   // against -54/-53 before.
   skyHorizon: 0.65,
+  /*
+   * HOW FAR THE SKY'S HUE FOLLOWS ITS OWN APERTURE. See furShade.
+   *
+   * The shaded coat had gone dead grey: B-R 11.5 against spec.mjs's floor of
+   * 18.6 and ART_DIRECTION 3's shaded-fur swatch #b9c7d8 at +31. The SSAO
+   * pass had been supplying it -- measured in one session at portrait, the
+   * shaded coat reads 26.46 with the blue-grey wash and 16.18 without -- so
+   * removing the wash exposed a coat with no shadow colour of its own.
+   *
+   * It cannot be paid for from post: both grade levers are already additive
+   * on shadows and doubling each buys a quarter of the gap (shadowSat
+   * 0.35 -> 0.80 gives 18.89, shadowTint.b 0.018 -> 0.040 gives 17.77,
+   * against the 10.3 points the wash supplied), and closing it there needs a
+   * global shadow saturation near 2.0, which drags snow already at B-R +51
+   * into ice-carving.
+   *
+   * Measured here, portrait, one session, one instant, base arm repeated and
+   * matching to 0.01, on a shaded cheek box sampled the way spec.mjs samples
+   * (darkest 15%):
+   *
+   *     arm                        cheek B-R   cheek mean L
+   *       base                       16.96        191.05
+   *       skyAperture 1.0            20.69        191.14
+   *       ambientSat 1.0             ~22          191.33
+   *       SHIPPED (both)             27.24        191.33
+   *       + skyHorizon 0.55          28.36        190.81
+   *
+   * +10.3 points of blue for +0.28 of a level. skyHorizon is left alone: it
+   * moves the LIT coat's hue too, and the defect is specifically in shadow.
+   */
+  skyAperture: 2.2,
   sunSat: 0.30,
   transSat: 0.16,     // scattered light keeps almost none of the sun's hue       // how much of the sun's chromaticity survives scattering
   wrap: 0.40,
@@ -986,7 +1023,7 @@ export const FUR_DEFAULTS = {
   coatRuffle: 0.055,
 
   // cards
-  cardWidth: 0.075,
+  cardWidth: 0.085,
   // 0.115 x the old 0.0045 coat-depth clamp: the width a minimum-coat card
   // had before cardWidth came down. See the sweep in fur.glsl.js.
   cardWFloor: 0.000518,
@@ -1672,7 +1709,7 @@ export const FUR_DEFAULTS = {
    */
   cardDutyMax: 0.85,
   cardHairLen: 0.85,
-  cardHairFade: 0.10,
+  cardHairFade: 0.055,
 
   cardCut: 0.004,
   cardProf: 0.55,
@@ -1756,6 +1793,7 @@ export function buildFurUniforms(ctx) {
     uAmbient: { value: d.ambient },
     uAmbientSat: { value: d.ambientSat },
     uSkyHorizon: { value: d.skyHorizon },
+    uSkyAperture: { value: d.skyAperture },
     uSunSat: { value: d.sunSat },
     uTransSat: { value: d.transSat },
 
