@@ -4,6 +4,60 @@
 //
 // Doing these as one pass rather than four saves three full-res read/write
 // round trips of a half-float buffer, which at 1920x1200 is most of the cost.
+//
+// ------------------------------------------------------------------------
+// uAOColor: THREE THINGS MEASURED ABOUT IT, SO NOBODY RE-DERIVES THEM.
+//
+// `c *= mix(uAOColor, vec3(1.0), k)` means uAOColor is the multiplier at FULL
+// occlusion -- the colour an entirely closed pixel keeps. It ships at
+// 0x46597d, linear (0.061, 0.102, 0.205): a saturated navy that removes 90%%
+// of the light and multiplies blue 3.3x harder than red.
+//
+// 1. THE HUE IS BACKWARDS, AND FIXING IT IS A MEASURED NO-OP. Occlusion
+//    attenuates INDIRECT light. Here the indirect is a blue sky and the
+//    direct is a warm sun, so occluding it should make a surface LESS blue,
+//    not more. But swapping 0x46597d for a grey of identical linear
+//    luminance (0x595959) is worth 0.5 levels on the near snow at `profile`
+//    and 0.4 points of coat B-R -- the modulation is luminance, not hue.
+//    Arms in one session, TAA reset each, control identical to every digit:
+//
+//      profile     far-snow L   contact L   coat shade B-R
+//      navy 46597d    145.38      174.37        60.89
+//      grey 595959    144.86      174.27        60.37
+//      pale b9c7d8    170.29      179.17        59.71
+//      intensity 0    181.14      181.92        58.51
+//
+//    Only the PALE floor moves anything, and it does so by giving up the
+//    contact darkening (+4.8 levels at profile, +1.2 at hero) that the
+//    lighting agent earned deliberately. So: leave it alone. "Make the AO
+//    neutral" is a correct-sounding change that buys nothing and costs
+//    contact.
+//
+// 2. THIS MULTIPLY WAS SUPPLYING THE COAT'S SHADED COLOUR, and that is why
+//    `the coat keeps its colour in shadow` began failing when a778006 took
+//    the AO wash off the fur. Same box, same instant, portrait: shaded-coat
+//    B-R 26.46 with the wash, 16.18 without (spec's own matte reads 23.0
+//    then, 11.5 now, floor 18.6). REVIEW-5 measured +11.4 and it "did not
+//    reproduce" -- it did not reproduce because a post-process paint was
+//    covering it.
+//
+// 3. IT IS NOT RECOVERABLE FROM POST. Both grade levers are ADDITIVE on
+//    shadows already (gradeContrastSat's s = sat + shadowSat*(1-l)^2 is a
+//    boost, and shadowTint adds blue), so post cannot be what removed the
+//    colour. More than doubling each of them buys a quarter of the gap:
+//    shadowSat 0.35 -> 0.80 gives B-R 16.18 -> 18.89, shadowTint blue
+//    0.018 -> 0.040 gives 17.77, against the 10.3 points the wash supplied.
+//    Closing it from here would need a global shadow saturation near 2.0,
+//    which drags the snow -- already B-R +51 -- into the ice-carving that
+//    SS3 and this file's own comments spent rounds getting out of. The blue
+//    belongs in the coat's SKY response, which is fur's, not here.
+//
+// Separately, and unrelated to the coat: at `profile` this pass takes 36
+// levels out of the near foreground snow (far-snow L 181.14 -> 145.38, AO
+// buffer 0.645). That is the pass working on an input that genuinely IS a
+// surface at grazing incidence, so it is not the coat's defect -- but it is
+// large, it reads as navy smearing at 1:1, and nobody has judged it.
+// ------------------------------------------------------------------------
 import * as THREE from 'three';
 import { FxPass } from './Pass.js';
 
