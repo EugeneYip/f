@@ -1604,15 +1604,48 @@ export function buildField() {
   //
   // 7.3 x 6.3 x 5.9 mm at 3.6 mm forward puts the crossing with nosePad at
   // ~6.5 mm off the axis -- a 13 mm cell, §4b's rhinarium -- and leaves the
-  // apex 1.0 mm proud. k is 2.5 mm rather than nosePad's 9: the junction is
-  // meant to be the rim of a piece of leather, not a fillet.
+  // apex 1.0 mm proud.
+  //
+  // ## THE CAP MUST BE WIDER THAN IT IS TALL, OR FACEDETAIL CANNOT COVER IT
+  //
+  // The first version offset the rhinarium along ROSTRUM.axis, which carries
+  // -0.26 of y, and kept nosePad's own 0.86 y-squash. That put the cap low
+  // and made it TALLER than it was wide -- measured on the built mesh, bind
+  // extent 11.5 x 13.0 mm. FaceDetail's drawn pad is clamped to 11.2 mm of
+  // height, so ~2 mm of bare cap stood proud of the leather all the way
+  // round the top, and at `frontal` that rendered as a hard-edged GREY
+  // PLATE about 75 x 67 px sitting directly behind the nose.
+  //
+  // Attributed rather than guessed, one page session, one instant, TAA reset
+  // per arm, in-page canvas capture, and a same-state control arm that agreed
+  // with itself to a mean delta of 0.01 levels (max 4, 0.0 % of the box over
+  // 6). Mean |delta| over the plate's own box with each system hidden:
+  //
+  //     cards off   10.17      FaceDetail off    7.01
+  //     shells off  21.84      whiskers off      0.20
+  //     SKIN off     3.29 mean, max 169 -- and the plate is GONE
+  //
+  // So it is the SDF surface. Two things it is NOT, both checked because
+  // both are the obvious answer: it is not a fur card (REVIEW-7 blocker 2
+  // looks exactly like this and has a different owner -- the plate survives
+  // `cards off`), and it is not the mesher's cell (it is PIXEL-IDENTICAL at
+  // `--quality ultra` with the head refinement on). Raising this primitive's
+  // `k` from 2.5 to 9 mm did not touch it either; that was tried first on
+  // the theory that a 0.4-cell crease cannot be sampled, and it is kept
+  // because a crisp crease at the leather's rim buys nothing, but it was not
+  // the cause and the render says so.
+  //
+  // The cause is coverage: bare skin is only allowed where §4f rule 3 allows
+  // it, and rule 3's exemption is the rhinarium -- meaning the part of it
+  // that is actually drawn as nose leather. The invariant is therefore
+  // DRAWN PAD contains BARE CAP, and the cap has to be shaped so that a pad
+  // of a rhinarium's proportions can contain it. Hence a pure +z offset (no
+  // y drop) and a 0.66 y-squash against nosePad's 0.86.
   const RHINARIUM_FWD = 0.0036;
   f.add({
     name: 'rhinarium',
-    a: [NOSE_PAD_C[0],
-        NOSE_PAD_C[1] + ROSTRUM.axis[1] * RHINARIUM_FWD,
-        NOSE_PAD_C[2] + ROSTRUM.axis[2] * RHINARIUM_FWD],
-    ra: sr(0.0062), squash: [1.0, 0.86, 0.80], k: 0.0025, ...furOf(R.nose),
+    a: [NOSE_PAD_C[0], NOSE_PAD_C[1], NOSE_PAD_C[2] + RHINARIUM_FWD],
+    ra: sr(0.0062), squash: [1.0, 0.66, 0.80], k: 0.009, ...furOf(R.nose),
     flowDir: [0, -0.2, -1], flowRadial: 0.35, tint: TINT_SKIN,
   });
   f.add({
